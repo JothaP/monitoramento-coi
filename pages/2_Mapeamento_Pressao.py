@@ -96,12 +96,22 @@ def conectar_google_sheets():
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(SPREADSHEET_ID)
     try:
-        return sh.worksheet("mapeamento_pressao")
+        ws = sh.worksheet("mapeamento_pressao")
     except Exception:
         try:
-            return sh.add_worksheet(title="mapeamento_pressao", rows="1000", cols="20")
+            ws = sh.add_worksheet(title="mapeamento_pressao", rows="1000", cols="20")
         except Exception:
-            return sh.sheet1
+            ws = sh.sheet1
+            
+    # Garante que a planilha tenha cabeçalho se estiver vazia
+    try:
+        dados_iniciais = ws.get_all_values()
+        if not dados_iniciais or len(dados_iniciais) == 0:
+            ws.append_row(COLUNAS_PADRAO)
+    except Exception:
+        pass
+        
+    return ws
 
 try:
     worksheet = conectar_google_sheets()
@@ -401,7 +411,8 @@ with st.sidebar:
     else:
         st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
 
-    arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"])
+    # UPLOAD AUTOMÁTICO (Sem botão extra)
+    arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
             if arquivo_upload.name.endswith('.csv'):
@@ -409,48 +420,53 @@ with st.sidebar:
             else:
                 df_up = pd.read_excel(arquivo_upload)
             
-            if st.button("🔄 Importar Dados para o Sheets", use_container_width=True):
-                contador = 0
-                for _, row in df_up.iterrows():
-                    muni = str(row.get("Municipio", row.get("Município", "Teresina")))
-                    bair = str(row.get("Bairro", ""))
-                    lat_val = parse_float(row.get("Latitude", row.get("Lat")))
-                    lon_val = parse_float(row.get("Longitude", row.get("Lon")))
-                    pres_val = parse_float(row.get("Pressao_MCA", row.get("Pressão_MCA", 0.0)), 0.0)
-                    
-                    if bair.strip() and lat_val and lon_val:
-                        adicionar_ponto(muni, bair, lat_val, lon_val, pres_val, data_para_str(hoje))
-                        contador += 1
-                st.success(f"{contador} registros importados com sucesso!")
+            contador = 0
+            for _, row in df_up.iterrows():
+                muni = str(row.get("Municipio", row.get("Município", "Teresina")))
+                bair = str(row.get("Bairro", ""))
+                lat_val = parse_float(row.get("Latitude", row.get("Lat")))
+                lon_val = parse_float(row.get("Longitude", row.get("Lon")))
+                pres_val = parse_float(row.get("Pressao_MCA", row.get("Pressão_MCA", 0.0)), 0.0)
+                
+                if bair.strip() and lat_val and lon_val:
+                    adicionar_ponto(muni, bair, lat_val, lon_val, pres_val, data_para_str(hoje))
+                    contador += 1
+            if contador > 0:
+                st.success(f"✅ {contador} registros importados com sucesso!")
                 st.rerun()
+            else:
+                st.warning("⚠️ Nenhum registro válido encontrado com Bairro e Coordenadas.")
         except Exception as e:
-            st.error(f"Erro ao processar arquivo: {e}")
+            st.error(f"❌ Erro ao processar arquivo: {e}")
 
     st.divider()
 
+    # EXPORTAÇÃO (Sempre visível se houver conexão)
     st.markdown("#### 📥 Exportar Dados")
-    if not df_all.empty:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        if not df_all.empty:
             df_all.to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
-        excel_data = output.getvalue()
-        
-        st.download_button(
-            label="📊 Baixar em Excel (XLSX)",
-            data=excel_data,
-            file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        else:
+            pd.DataFrame(columns=COLUNAS_PADRAO).to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
+    excel_data = output.getvalue()
+    
+    st.download_button(
+        label="📊 Baixar em Excel (XLSX)",
+        data=excel_data,
+        file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
-        kml_string = gerar_kml(df_all)
-        st.download_button(
-            label="🗺️ Baixar Mapa (KML/KMZ)",
-            data=kml_string,
-            file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.kml",
-            mime="application/vnd.google-earth.kml+xml",
-            use_container_width=True
-        )
+    kml_string = gerar_kml(df_all) if not df_all.empty else simplekml.Kml().kml()
+    st.download_button(
+        label="🗺️ Baixar Mapa (KML/KMZ)",
+        data=kml_string,
+        file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.kml",
+        mime="application/vnd.google-earth.kml+xml",
+        use_container_width=True
+    )
 
     st.divider()
     st.markdown("#### ⏱️ Atualização")
@@ -554,7 +570,6 @@ else:
     centro_lat, centro_lon = LAT_BASE, LON_BASE
     zoom = 12
 
-# Criar o mapa com o tile selecionado
 if attr:
     m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=tiles_url, attr=attr)
 else:
@@ -636,3 +651,5 @@ if not df_filtrado.empty:
                 if excluir_ponto(id_sel):
                     st.success("Excluído com sucesso.")
                     st.rerun()
+else:
+    st.info("Nenhum dado cadastrado ou filtrado para exibir na tabela.")
