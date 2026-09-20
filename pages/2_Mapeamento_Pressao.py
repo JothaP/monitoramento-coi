@@ -102,7 +102,6 @@ def conectar_google_sheets():
         if not dados_iniciais or len(dados_iniciais) == 0:
             ws.append_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"])
         else:
-            # Migração automática caso a planilha antiga tenha 6 colunas sem Município
             cabecalho_atual = dados_iniciais[0]
             if len(cabecalho_atual) >= 6 and "Município" not in [str(c).strip() for c in cabecalho_atual]:
                 ws.insert_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"], index=1)
@@ -323,7 +322,7 @@ def modal_novo_ponto():
     lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
     with st.form("form_novo_ponto_modal", clear_on_submit=True):
-        data_cadastro = st.date_input("Data do Registro", value=hoje, format="DD/MM/YYYY")
+        data_cadastro = st.date_input("Data do Registro", value=st.session_state.data_selecionada, format="DD/MM/YYYY")
         municipio = st.text_input("Município *", placeholder="Ex: Teresina")
         pontos = st.text_input("Pontos / Local *", placeholder="Ex: Ponto A-01")
 
@@ -479,6 +478,29 @@ with st.sidebar:
 
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     
+    # Botão para baixar a planilha modelo de exemplo
+    df_modelo = pd.DataFrame([{
+        "Data": datetime.now().strftime("%d/%m/%Y"),
+        "Município": "Teresina",
+        "Pontos": "Ponto Exemplo 01",
+        "Latitude": -5.0892,
+        "Longitude": -42.8019,
+        "MCA": 12.5,
+        "Observacao": "Exemplo de preenchimento"
+    }], columns=COLUNAS_PADRAO)
+    
+    output_modelo = io.BytesIO()
+    with pd.ExcelWriter(output_modelo, engine='openpyxl') as writer:
+        df_modelo.to_excel(writer, index=False, sheet_name='Modelo')
+    
+    st.download_button(
+        label="📥 Baixar Planilha Modelo",
+        data=output_modelo.getvalue(),
+        file_name="modelo_importacao_pressao.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+    
     if arquivo_upload is not None:
         if st.session_state.nome_arquivo_pendente != arquivo_upload.name:
             try:
@@ -595,7 +617,7 @@ else:
 st.divider()
 
 # ============================================================
-# MAPA COM SELETOR DE TIPO DE MAPA (APENAS OS 3 FUNCIONAIS)
+# MAPA COM SELETOR DE TIPO DE MAPA
 # ============================================================
 st.subheader("🗺️ Mapa de Mapeamento de Pressão")
 
