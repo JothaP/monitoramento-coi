@@ -220,11 +220,30 @@ def adicionar_ponto(data_str: str, pontos: str, lat: float, lon: float, mca: flo
 def adicionar_lote_seguro(linhas_dados: list):
     if not linhas_dados:
         return 0
+    
+    # Carrega os dados atuais para evitar duplicidade exata (Data + Ponto + Lat + Lon)
+df_atual = carregar_dados()
+chaves_existentes = set()
+if not df_atual.empty:
+    for _, r in df_atual.iterrows():
+        chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip(), str(round(float(r["Latitude"]), 6)), str(round(float(r["Longitude"]), 6)))
+        chaves_existentes.add(chave)
+
+    linhas_novas = []
     for linha in linhas_dados:
-        worksheet.append_row(linha)
-        time.sleep(0.4)
-    limpar_cache()
-    return len(linhas_dados)
+        d_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
+        chave_nova = (str(d_val).strip(), str(p_val).strip(), str(round(float(lat_val), 6)), str(round(float(lon_val), 6)))
+        if chave_nova not in chaves_existentes:
+            linhas_novas.append(linha)
+            chaves_existentes.add(chave_nova) # Evita duplicidade dentro do próprio lote
+
+    if linhas_novas:
+        for linha in linhas_novas:
+            worksheet.append_row(linha)
+            time.sleep(0.4)
+        limpar_cache()
+        return len(linhas_novas)
+    return 0
 
 def atualizar_ponto(linha_idx: int, data_str: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
     try:
@@ -401,7 +420,7 @@ with st.sidebar:
     if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
         modal_novo_ponto()
 
-    # UPLOAD COM SUPORTE A VÍRGULA E CONVERSÃO AUTOMÁTICA
+    # UPLOAD COM BLOQUEIO DE DUPLICIDADE
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
@@ -426,8 +445,11 @@ with st.sidebar:
 
             if lote_para_enviar:
                 with st.spinner("Enviando registros com segurança para o Google Sheets..."):
-                    adicionar_lote_seguro(lote_para_enviar)
-                st.success(f"✅ {len(lote_para_enviar)} registros importados com sucesso!")
+                    qtd_inserida = adicionar_lote_seguro(lote_para_enviar)
+                if qtd_inserida > 0:
+                    st.success(f"✅ {qtd_inserida} novos registros importados com sucesso!")
+                else:
+                    st.info("ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita.")
                 st.rerun()
             else:
                 st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Pontos, Latitude, Longitude, MCA, Observação.")
@@ -640,4 +662,4 @@ if not df_filtrado.empty:
                     st.success("Excluído com sucesso.")
                     st.rerun()
 else:
-    st.info("Nenhum dado cadastrado ou filtrado para exibir na tabela.")
+    st.info(f"Nenhum ponto registrado para a data {data_str_selecionada} com os filtros selecionados.")
