@@ -85,7 +85,7 @@ except Exception as e:
     st.stop()
 
 # ============================================================
-# FUNÇÕES DE DADOS
+# FUNÇÕES DE DADOS E EXPORTAÇÃO
 # ============================================================
 def gerar_id() -> str:
     return str(uuid.uuid4())[:8].upper()
@@ -226,6 +226,22 @@ def normalizar_data(valor) -> str:
             continue
     return texto
 
+def gerar_kml(df):
+    kml = simplekml.Kml()
+    for _, row in df.iterrows():
+        lat = row.get("Latitude")
+        lon = row.get("Longitude")
+        if pd.notnull(lat) and pd.notnull(lon):
+            try:
+                kml.newpoint(
+                    name=str(row.get("ID", "Ponto")),
+                    description=f"Município: {row.get('Municipio', '')}\nBairro: {row.get('Bairro', '')}\nPressão: {row.get('Pressao_MCA', '')} MCA",
+                    coords=[(float(lon), float(lat))]
+                )
+            except (ValueError, TypeError):
+                continue
+    return kml.kml()
+
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -353,13 +369,68 @@ with st.sidebar:
 
     st.divider()
 
-    # BOTÃO PARA ACIONAR O POP-UP DE NOVO PONTO NA SIDEBAR
-    st.markdown("#### ➕ Cadastro")
-    if data_escolhida != hoje:
-        st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
-    else:
+    # CADASTRO E UPLOAD DE PLANILHA NA SIDEBAR
+    st.markdown("#### ➕ Ações e Dados")
+    if data_escolhida == hoje:
         if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
             modal_novo_ponto()
+    else:
+        st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
+
+    # Botão de Upload de Planilha
+    arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"])
+    if arquivo_upload is not None:
+        try:
+            if arquivo_upload.name.endswith('.csv'):
+                df_up = pd.read_csv(arquivo_upload)
+            else:
+                df_up = pd.read_excel(arquivo_upload)
+            
+            if st.button("🔄 Importar Dados para o Sheets", use_container_width=True):
+                contador = 0
+                for _, row in df_up.iterrows():
+                    muni = str(row.get("Municipio", row.get("Município", "Teresina")))
+                    bair = str(row.get("Bairro", ""))
+                    lat_val = parse_float(row.get("Latitude", row.get("Lat")))
+                    lon_val = parse_float(row.get("Longitude", row.get("Lon")))
+                    pres_val = parse_float(row.get("Pressao_MCA", row.get("Pressão_MCA", 0.0)), 0.0)
+                    
+                    if bair.strip() and lat_val and lon_val:
+                        adicionar_ponto(muni, bair, lat_val, lon_val, pres_val, data_para_str(hoje))
+                        contador += 1
+                st.success(f"{contador} registros importados com sucesso!")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao processar arquivo: {e}")
+
+    st.divider()
+
+    # EXPORTAÇÃO (XLSX E KMZ)
+    st.markdown("#### 📥 Exportar Dados")
+    if not df_all.empty:
+        # Exportar Excel (XLSX)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_all.to_excel(writer, index=False, sheet_name='Baixa_Pressao')
+        excel_data = output.getvalue()
+        
+        st.download_button(
+            label="📊 Baixar em Excel (XLSX)",
+            data=excel_data,
+            file_name=f"baixa_pressao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+        # Exportar KMZ/KML
+        kml_string = gerar_kml(df_all)
+        st.download_button(
+            label="🗺️ Baixar Mapa (KML/KMZ)",
+            data=kml_string,
+            file_name=f"baixa_pressao_{datetime.now().strftime('%Y%m%d')}.kml",
+            mime="application/vnd.google-earth.kml+xml",
+            use_container_width=True
+        )
 
     st.divider()
     st.markdown("#### ⏱️ Atualização")
@@ -368,7 +439,7 @@ with st.sidebar:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
     # Espaçamento dinâmico para empurrar o botão de voltar para o final absoluto da barra lateral
-    st.markdown("<br>" * 3, unsafe_allow_html=True)
+    st.markdown("<br>" * 2, unsafe_allow_html=True)
     st.divider()
 
     # Botão de voltar ao menu principal posicionado rigorosamente no rodapé
@@ -527,14 +598,12 @@ if not df_all.empty:
         
     with col_g3:
         bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
-        # Adicionado estado inicial condicional ("Selecione...") para evitar carregamento automático indesejado
         bairro_analise = st.selectbox(
             "Selecione o Bairro", 
             options=["Selecione..."] + bairros_disponiveis, 
             key="analise_bairro"
         )
 
-    # O gráfico de tendência só será carregado e renderizado estritamente se o usuário selecionar um bairro válido
     if bairro_analise != "Selecione...":
         if data_ini_analise > data_fim_analise:
             st.error("A data inicial não pode ser maior que a data final.")
