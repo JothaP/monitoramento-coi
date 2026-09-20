@@ -24,6 +24,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Oculta qualquer navegação automática remanescente das versões novas do Streamlit
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+        section[data-testid="stSidebar"] div.stButton {
+            margin-top: 0rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ============================================================
 # TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
