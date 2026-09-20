@@ -7,11 +7,12 @@ import folium
 from streamlit_folium import st_folium
 import os
 import simplekml
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from streamlit_autorefresh import st_autorefresh
 import io
 import uuid
 from typing import Optional
+import plotly.express as px
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA (Com ocultação da barra lateral padrão)
@@ -23,7 +24,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Oculta a barra lateral automática de páginas do Streamlit
 st.markdown(
     """
     <style>
@@ -323,6 +323,7 @@ with st.sidebar:
             lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
             with st.form("form_novo_ponto", clear_on_submit=True):
+                # [2026-03-18] Structure should include an extra tabulation after 'Município'
                 municipio = st.text_input("Município *\t", value="Teresina")
                 bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
 
@@ -492,3 +493,67 @@ if not df_filtrado.empty:
                 if excluir_ponto(id_sel):
                     st.success("Excluído com sucesso.")
                     st.rerun()
+
+# ============================================================
+# ANALÍTICO: VARIAÇÃO DE PRESSÃO POR PERÍODO E BAIRRO
+# ============================================================
+st.divider()
+st.subheader("📈 Análise de Tendência e Variação por Bairro")
+st.markdown("Selecione um período e um bairro para acompanhar o histórico e a variação da pressão ao longo do tempo.")
+
+if not df_all.empty:
+    col_g1, col_g2, col_g3 = st.columns([2, 2, 2])
+    
+    with col_g1:
+        # Padrão: últimos 30 dias até hoje
+        data_inicio_padrao = hoje - timedelta(days=30)
+        data_ini_analise = st.date_input("Data Inicial", value=data_inicio_padrao, format="DD/MM/YYYY", key="analise_ini")
+    
+    with col_g2:
+        data_fim_analise = st.date_input("Data Final", value=hoje, format="DD/MM/YYYY", key="analise_fim")
+        
+    with col_g3:
+        bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
+        bairro_analise = st.selectbox("Selecione o Bairro", bairros_disponiveis, key="analise_bairro")
+
+    if data_ini_analise > data_fim_analise:
+        st.error("A data inicial não pode ser maior que a data final.")
+    else:
+        # Prepara o dataframe para análise temporal
+        df_tendencia = df_all[df_all["Bairro"] == bairro_analise].copy()
+        
+        if not df_tendencia.empty:
+            # Converte coluna de data string para objeto datetime para ordenação e filtro corretos
+            df_tendencia["DataObj"] = pd.to_datetime(df_tendencia["Data"], format="%d/%m/%Y", errors="coerce")
+            df_tendencia = df_tendencia.dropna(subset=["DataObj"])
+            
+            # Filtra pelo período selecionado
+            mask = (df_tendencia["DataObj"].dt.date >= data_ini_analise) & (df_tendencia["DataObj"].dt.date <= data_fim_analise)
+            df_tendencia = df_tendencia.loc[mask].sort_values("DataObj")
+
+            if not df_tendencia.empty:
+                # Gráfico de linha com Plotly
+                fig = px.line(
+                    df_tendencia,
+                    x="Data",
+                    y="Pressao_MCA",
+                    markers=True,
+                    title=f"Evolução da Pressão (MCA) — {bairro_analise}",
+                    labels={"Data": "Data do Registro", "Pressao_MCA": "Pressão (MCA)"},
+                )
+                
+                # Linha de referência de atenção (5 MCA)
+                fig.add_hline(y=5, line_dash="dash", line_color="orange", annotation_text="Limite de Atenção (5 MCA)", annotation_position="top left")
+                # Linha de referência crítica (0 MCA)
+                fig.add_hline(y=0, line_dash="solid", line_color="red", annotation_text="Crítico (0 MCA)", annotation_position="bottom left")
+                
+                fig.update_traces(line_color="#0284c7", line_width=3, marker_size=8)
+                fig.update_layout(xaxis_title="Data", yaxis_title="Pressão (MCA)", hovermode="x unified")
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(f"Nenhum registro encontrado para o bairro **{bairro_analise}** no período selecionado.")
+        else:
+            st.warning("Não há dados históricos suficientes para este bairro.")
+else:
+    st.info("Aguardando dados para gerar o gráfico de tendência.")
