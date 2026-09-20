@@ -12,7 +12,6 @@ from streamlit_autorefresh import st_autorefresh
 import io
 import uuid
 from typing import Optional
-import plotly.express as px
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -24,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS para ocultar navegação padrão e fixar rodapé na sidebar
+# Estilização CSS para ocultar navegação padrão
 st.markdown(
     """
     <style>
@@ -41,7 +40,7 @@ st.markdown(
 )
 
 # ============================================================
-# TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
+# TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO
 # ============================================================
 if "autenticado" not in st.session_state or not st.session_state.autenticado:
     st.warning("Sessão não iniciada ou expirada.")
@@ -71,7 +70,7 @@ if not eh_admin:
         Em breve, novas ferramentas de mapeamento de pressão estarão disponíveis por aqui. 
         Utilize o menu principal para acessar os módulos liberados.
     """)
-    st.stop()  # Interrompe a execução para não carregar o restante do painel
+    st.stop()
 
 # ============================================================
 # A PARTIR daqui, roda APENAS PARA O ADMIN (Painel Completo)
@@ -503,15 +502,49 @@ else:
 
 st.divider()
 
+# ============================================================
+# MAPA COM SELETOR DE TIPO DE MAPA (ESTILO MY MAPS)
+# ============================================================
 st.subheader("🗺️ Mapa de Mapeamento de Pressão")
-c_map1, c_map2 = st.columns([1, 4])
+
+c_map1, c_map2, c_map3 = st.columns([2, 2, 2])
 with c_map1:
+    tipo_mapa = st.selectbox(
+        "🗺️ Tipo de Mapa",
+        options=[
+            "Mapa Padrão (OpenStreetMap)",
+            "Satélite (Esri World Imagery)",
+            "Claro / Minimalista (CartoDB Positron)",
+            "Escuro / Noturno (CartoDB Dark Matter)",
+            "Terreno (Stamen Terrain)"
+        ],
+        key="seletor_tipo_mapa"
+    )
+with c_map2:
     mostrar_rotulos = st.checkbox("Exibir rótulos", value=False)
+with c_map3:
     if data_escolhida == hoje:
         st.session_state.modo_adicionar_mapa = st.checkbox(
             "📍 Modo adicionar ponto",
             value=st.session_state.modo_adicionar_mapa
         )
+
+# Configuração da camada base do Folium baseada na escolha
+if "Satélite" in tipo_mapa:
+    tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+    attr = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+elif "Claro" in tipo_mapa:
+    tiles_url = 'CartoDB positron'
+    attr = None
+elif "Escuro" in tipo_mapa:
+    tiles_url = 'CartoDB dark_matter'
+    attr = None
+elif "Terreno" in tipo_mapa:
+    tiles_url = 'Stamen Terrain'
+    attr = None
+else:
+    tiles_url = 'OpenStreetMap'
+    attr = None
 
 if not df_filtrado.empty and df_filtrado["Latitude"].notna().any():
     centro_lat = float(df_filtrado["Latitude"].mean())
@@ -521,7 +554,11 @@ else:
     centro_lat, centro_lon = LAT_BASE, LON_BASE
     zoom = 12
 
-m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles="OpenStreetMap")
+# Criar o mapa com o tile selecionado
+if attr:
+    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=tiles_url, attr=attr)
+else:
+    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=tiles_url)
 
 if not df_filtrado.empty:
     validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
@@ -576,6 +613,9 @@ if st.session_state.modo_adicionar_mapa and data_escolhida == hoje and map_data 
 
 st.divider()
 
+# ============================================================
+# TABELA
+# ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 if not df_filtrado.empty:
     df_show = df_filtrado[["ID", "Data", "Municipio", "Bairro", "Latitude", "Longitude", "Pressao_MCA"]].reset_index(drop=True)
@@ -596,64 +636,3 @@ if not df_filtrado.empty:
                 if excluir_ponto(id_sel):
                     st.success("Excluído com sucesso.")
                     st.rerun()
-
-st.divider()
-st.subheader("📈 Análise de Tendência e Variação por Bairro")
-st.markdown("Selecione um período e um bairro para acompanhar o histórico e a variação da pressão ao longo do tempo.")
-
-if not df_all.empty:
-    col_g1, col_g2, col_g3 = st.columns([2, 2, 2])
-    
-    with col_g1:
-        data_inicio_padrao = hoje - timedelta(days=30)
-        data_ini_analise = st.date_input("Data Inicial", value=data_inicio_padrao, format="DD/MM/YYYY", key="analise_ini_map")
-    
-    with col_g2:
-        data_fim_analise = st.date_input("Data Final", value=hoje, format="DD/MM/YYYY", key="analise_fim_map")
-        
-    with col_g3:
-        bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
-        bairro_analise = st.selectbox(
-            "Selecione o Bairro", 
-            options=["Selecione..."] + bairros_disponiveis, 
-            key="analise_bairro_map"
-        )
-
-    if bairro_analise != "Selecione...":
-        if data_ini_analise > data_fim_analise:
-            st.error("A data inicial não pode ser maior que a data final.")
-        else:
-            df_tendencia = df_all[df_all["Bairro"] == bairro_analise].copy()
-            
-            if not df_tendencia.empty:
-                df_tendencia["DataObj"] = pd.to_datetime(df_tendencia["Data"], format="%d/%m/%Y", errors="coerce")
-                df_tendencia = df_tendencia.dropna(subset=["DataObj"])
-                
-                mask = (df_tendencia["DataObj"].dt.date >= data_ini_analise) & (df_tendencia["DataObj"].dt.date <= data_fim_analise)
-                df_tendencia = df_tendencia.loc[mask].sort_values("DataObj")
-
-                if not df_tendencia.empty:
-                    fig = px.line(
-                        df_tendencia,
-                        x="Data",
-                        y="Pressao_MCA",
-                        markers=True,
-                        title=f"Evolução da Pressão (MCA) — {bairro_analise}",
-                        labels={"Data": "Data do Registro", "Pressao_MCA": "Pressão (MCA)"},
-                    )
-                    
-                    fig.add_hline(y=5, line_dash="dash", line_color="orange", annotation_text="Limite de Atenção (5 MCA)", annotation_position="top left")
-                    fig.add_hline(y=0, line_dash="solid", line_color="red", annotation_text="Crítico (0 MCA)", annotation_position="bottom left")
-                    
-                    fig.update_traces(line_color="#0284c7", line_width=3, marker_size=8)
-                    fig.update_layout(xaxis_title="Data", yaxis_title="Pressão (MCA)", hovermode="x unified")
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info(f"Nenhum registro encontrado para o bairro **{bairro_analise}** no período selecionado.")
-            else:
-                st.warning("Não há dados históricos suficientes para este bairro.")
-    else:
-        st.info("👆 Selecione um **Bairro** acima para carregar a análise de tendência temporal.")
-else:
-    st.info("Aguardando dados para gerar o gráfico de tendência.")
