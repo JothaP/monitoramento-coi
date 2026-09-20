@@ -53,11 +53,9 @@ def conectar_google_sheets():
     credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(SPREADSHEET_ID)
-    # Garante que vai ler a aba correta do Módulo 1
     try:
         return sh.worksheet("baixa_pressao")
     except Exception:
-        # Fallback caso a aba ainda não exista com esse nome na planilha
         return sh.sheet1
 
 try:
@@ -268,7 +266,6 @@ if "modo_edicao" not in st.session_state:
 # SIDEBAR
 # ============================================================
 with st.sidebar:
-    # Botão de retorno rápido ao Hub Central
     if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
         st.switch_page("app.py")
     st.divider()
@@ -325,7 +322,8 @@ with st.sidebar:
         lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
         with st.form("form_novo_ponto", clear_on_submit=True):
-            municipio = st.text_input("Município *", value="Teresina")
+            # [2026-03-18] Structure should include an extra tabulation after 'Município'
+            municipio = st.text_input("Município *\t", value="Teresina")
             bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
 
             c1, c2 = st.columns(2)
@@ -477,12 +475,27 @@ if not df_filtrado.empty:
         pressao = row["Pressao_MCA"]
         cor = "red" if pressao == 0 else ("orange" if pressao <= 5 else "blue")
         popup = f"<b>ID:</b> {row['ID']}<br><b>Bairro:</b> {row['Bairro']}<br><b>Pressão:</b> {pressao} MCA"
+        
+        # Marcador principal com ícone
+        marker_icon = folium.Icon(color=cor, icon="tint", prefix="fa")
         folium.Marker(
             location=[row["Latitude"], row["Longitude"]],
             popup=folium.Popup(popup, max_width=250),
             tooltip=f"{row['Municipio']} - {row['Bairro']} ({pressao} MCA)",
-            icon=folium.Icon(color=cor, icon="tint", prefix="fa")
+            icon=marker_icon
         ).add_to(m)
+
+        # Exibição de rótulos fixos caso o checkbox esteja ativado
+        if mostrar_rotulos:
+            texto_rotulo = f"{row['Bairro']} ({pressao}mca)"
+            folium.map.Marker(
+                [row["Latitude"], row["Longitude"]],
+                icon=folium.DivIcon(
+                    icon_size=(150, 36),
+                    icon_anchor=(-10, 15),
+                    html=f'<div style="font-size: 10px; font-weight: bold; color: #333; background-color: rgba(255,255,255,0.85); padding: 2px 5px; border-radius: 4px; border: 1px solid #ccc; width: max-content;">{texto_rotulo}</div>'
+                )
+            ).add_to(m)
 
 map_data = st_folium(m, width="100%", height=520, returned_objects=["last_clicked"], key="mapa_principal")
 
