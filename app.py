@@ -1,139 +1,118 @@
 import streamlit as st
 
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DA PÁGINA (Com ocultação da navegação padrão)
 # ============================================================
 st.set_page_config(
-    page_title="Plataforma COI - Operações",
-    page_icon="💧",
+    page_title="Plataforma COI - Hub Central",
+    page_icon="🏢",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
+)
+
+# Oculta a barra lateral automática de páginas do Streamlit
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 # ============================================================
-# CONTROLE DE AUTENTICAÇÃO E PERFIS
+# CREDENCIAIS DO SECRETS
 # ============================================================
-def verificar_login():
-    if "autenticado" not in st.session_state:
-        st.session_state.autenticado = False
-        st.session_state.perfil = None
+SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin2026")
+SENHA_USUARIO = st.secrets.get("SENHA_USUARIO", "coi2026")
 
-    if st.session_state.autenticado:
-        return True
+# ============================================================
+# CONTROLE DE SESSÃO
+# ============================================================
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+if "perfil" not in st.session_state:
+    st.session_state.perfil = ""
 
-    # ---------- Tela de Login ----------
-    st.markdown(
-        """
-        <style>
-        .login-container {
-            max-width: 420px;
-            margin: 80px auto 40px auto;
-            padding: 40px 36px;
-            background: linear-gradient(145deg, #f0f7ff 0%, #e8f4fd 100%);
-            border-radius: 16px;
-            box-shadow: 0 8px 32px rgba(0, 80, 140, 0.12);
-            border: 1px solid #d0e6f7;
-            text-align: center;
-        }
-        .login-icon { font-size: 52px; margin-bottom: 12px; }
-        .login-title { font-size: 22px; font-weight: 700; color: #0a4d8c; margin-bottom: 6px; }
-        .login-subtitle { font-size: 14px; color: #5a7a9a; margin-bottom: 28px; line-height: 1.4; }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+# ============================================================
+# TELA DE LOGIN
+# ============================================================
+if not st.session_state.autenticado:
+    st.title("🔐 Acesso Restrito - Plataforma COI")
+    st.markdown("Por favor, insira a senha de acesso para continuar.")
 
-    col1, col2, col3 = st.columns([1, 1.4, 1])
-    with col2:
-        st.markdown(
-            """
-            <div class="login-container">
-                <div class="login-icon">💧</div>
-                <div class="login-title">Plataforma Operacional COI</div>
-                <div class="login-subtitle">
-                    Centro de Operações Integradas<br>
-                    Digite sua senha de acesso
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+    with st.form("form_login"):
+        senha_digitada = st.text_input("Senha de Acesso", type="password")
+        botao_login = st.form_submit_button("Entrar", type="primary", use_container_width=True)
 
-        with st.form("form_login"):
-            senha_digitada = st.text_input(
-                "Senha de acesso",
-                type="password",
-                placeholder="Digite a senha...",
-                label_visibility="collapsed"
-            )
-            entrar = st.form_submit_button("Acessar Plataforma", type="primary", use_container_width=True)
-
-            if entrar:
-                # Busca senhas nos secrets com fallbacks de segurança
-                senha_admin = st.secrets.get("SENHA_ADMIN", "admin2026")
-                senha_usuario = st.secrets.get("SENHA_USUARIO", "coi2026")
-
-                if senha_digitada == senha_admin:
-                    st.session_state.autenticado = True
-                    st.session_state.perfil = "admin"
-                    st.rerun()
-                elif senha_digitada == senha_usuario:
-                    st.session_state.autenticado = True
-                    st.session_state.perfil = "usuario"
-                    st.rerun()
-                else:
-                    st.error("Senha incorreta. Tente novamente.")
-
+        if botao_login:
+            if senha_digitada == SENHA_ADMIN:
+                st.session_state.autenticado = True
+                st.session_state.perfil = "admin"
+                st.success("Login de Administrador realizado com sucesso!")
+                st.rerun()
+            elif senha_digitada == SENHA_USUARIO:
+                st.session_state.autenticado = True
+                st.session_state.perfil = "usuario"
+                st.success("Login de Usuário realizado com sucesso!")
+                st.rerun()
+            else:
+                st.error("❌ Senha incorreta. Tente novamente.")
     st.stop()
-    return False
-
-# Executa verificação
-verificar_login()
 
 # ============================================================
-# HUB DE SELEÇÃO (TELA PRINCIPAL PÓS-LOGIN)
+# HUB CENTRAL (APÓS O LOGIN)
 # ============================================================
-st.title("💧 Central de Módulos - COI")
-st.markdown(f"Bem-vindo(a)! Perfil conectado: **{st.session_state.perfil.upper()}**")
+perfil_atual = st.session_state.perfil.upper()
+st.write(f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**")
 st.divider()
 
 st.markdown("### Selecione o módulo desejado:")
+st.markdown("")
 
-col_m1, col_m2, col_m3 = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
-# --- MÓDULO 1 ---
-with col_m1:
+# MÓDULO 1 (Liberado para todos)
+with col1:
     st.markdown("#### 🗺️ Módulo 1")
     st.markdown("**Baixa Pressão**")
-    st.caption("Status: **Ativo para todos**")
+    st.caption("Status: Ativo para todos")
     if st.button("Acessar Baixa Pressão", type="primary", use_container_width=True):
         st.switch_page("pages/1_Baixa_Pressao.py")
 
-# --- MÓDULO 2 ---
-with col_m2:
+# MÓDULO 2 (Restrito a Admin)
+with col2:
     st.markdown("#### 📊 Módulo 2")
     st.markdown("**Mapeamento**")
-    st.caption("Status: **Em desenvolvimento**")
-    
-    admin_ativo = (st.session_state.perfil == "admin")
-    if st.button("Acessar Mapeamento", disabled=not admin_ativo, use_container_width=True):
-        st.switch_page("pages/2_Mapeamento.py")
-    if not admin_ativo:
-        st.caption("🔒 *Restrito a administradores*")
+    if st.session_state.perfil == "admin":
+        st.caption("Status: Em desenvolvimento (Admin)")
+        if st.button("Acessar Mapeamento", use_container_width=True):
+            st.switch_page("pages/2_Mapeamento.py")
+    else:
+        st.caption("Status: Em desenvolvimento")
+        st.button("Acessar Mapeamento", disabled=True, use_container_width=True)
+        st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
 
-# --- MÓDULO 3 ---
-with col_m3:
+# MÓDULO 3 (Restrito a Admin)
+with col3:
     st.markdown("#### ⚙️ Módulo 3")
     st.markdown("**Vazão de Poços**")
-    st.caption("Status: **Em desenvolvimento**")
-    
-    if st.button("Acessar Vazão de Poços", disabled=not admin_ativo, use_container_width=True):
-        st.switch_page("pages/3_Vazao_Pocos.py")
-    if not admin_ativo:
-        st.caption("🔒 *Restrito a administradores*")
+    if st.session_state.perfil == "admin":
+        st.caption("Status: Em desenvolvimento (Admin)")
+        if st.button("Acessar Vazão de Poços", use_container_width=True):
+            st.switch_page("pages/3_Vazao_Pocos.py")
+    else:
+        st.caption("Status: Em desenvolvimento")
+        st.button("Acessar Vazão de Poços", disabled=True, use_container_width=True)
+        st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
 
 st.divider()
+
+# Botão de Logout
 if st.button("Encerrar Sessão / Sair"):
     st.session_state.autenticado = False
-    st.session_state.perfil = None
+    st.session_state.perfil = ""
+    st.success("Sessão encerrada com sucesso!")
     st.rerun()
