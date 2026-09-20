@@ -86,18 +86,13 @@ with col1:
     if st.button("Acessar Baixa Pressão", type="primary", use_container_width=True):
         st.switch_page("pages/1_Baixa_Pressao.py")
 
-# MÓDULO 2 (Restrito a Admin)
+# MÓDULO 2 (Liberado para todos)
 with col2:
     st.markdown("#### 📊 Módulo 2")
     st.markdown("**Mapeamento de Pressão**")
-    if st.session_state.perfil == "admin":
-        st.caption("Status: Ativo (Admin)")
-        if st.button("Acessar Mapeamento", use_container_width=True):
-            st.switch_page("pages/2_Mapeamento_Pressao.py")
-    else:
-        st.caption("Status: Em desenvolvimento")
-        st.button("Acessar Mapeamento", disabled=True, use_container_width=True)
-        st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
+    st.caption("Status: Ativo para todos")
+    if st.button("Acessar Mapeamento", type="primary", use_container_width=True):
+        st.switch_page("pages/2_Mapeamento_Pressao.py")
 
 # MÓDULO 3 (Restrito a Admin)
 with col3:
