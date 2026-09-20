@@ -204,10 +204,12 @@ def carregar_dados() -> pd.DataFrame:
 
 def limpar_cache():
     carregar_dados.clear()
+    st.cache_data.clear()
 
 def adicionar_ponto(pontos: str, lat: float, lon: float, mca: float, obs: str, data_str: str):
     novo_id = gerar_id()
-    worksheet.append_row([novo_id, data_str, pontos, lat, lon, mca, obs])
+    worksheet.append_row([novo_id, data_str, pontos, float(lat), float(lon), float(mca), obs])
+    time.sleep(1)
     limpar_cache()
     return novo_id
 
@@ -215,6 +217,7 @@ def adicionar_lote_pontos(linhas_dados: list):
     if not linhas_dados:
         return 0
     worksheet.append_rows(linhas_dados)
+    time.sleep(1.5)
     limpar_cache()
     return len(linhas_dados)
 
@@ -225,6 +228,7 @@ def atualizar_ponto(id_registro: str, pontos: str, lat: float, lon: float, mca: 
             return False
         linha = celula.row
         worksheet.update(f"A{linha}:G{linha}", [[str(id_registro), str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
+        time.sleep(1)
         limpar_cache()
         return True
     except Exception as e:
@@ -237,6 +241,7 @@ def excluir_ponto(id_registro: str) -> bool:
         if celula is None:
             return False
         worksheet.delete_rows(celula.row)
+        time.sleep(1)
         limpar_cache()
         return True
     except Exception:
@@ -407,7 +412,7 @@ with st.sidebar:
     else:
         st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
 
-    # UPLOAD EM LOTE (Evita erro 429 de cota do Google Sheets)
+    # UPLOAD COM TRATAMENTO DE ERROS E PAUSA DE SEGURANÇA
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
@@ -428,7 +433,7 @@ with st.sidebar:
                 
                 if ponto_val.strip() and lat_val and lon_val:
                     novo_id = gerar_id()
-                    lote_para_enviar.append([novo_id, data_atual_str, ponto_val.strip(), lat_val, lon_val, mca_val, obs_val])
+                    lote_para_enviar.append([novo_id, data_atual_str, ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
 
             if lote_para_enviar:
                 adicionar_lote_pontos(lote_para_enviar)
