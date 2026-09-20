@@ -55,7 +55,6 @@ usuario_atual = st.session_state.get("usuario_logado", "")
 perfil_atual = st.session_state.get("perfil", "")
 eh_admin = (usuario_atual.lower() == "admin" or perfil_atual.lower() == "admin")
 
-# Se NÃO for admin, exibe a tela de Em Desenvolvimento
 if not eh_admin:
     with st.sidebar:
         st.markdown("### 🗺️ COI - Mapeamento")
@@ -66,21 +65,15 @@ if not eh_admin:
 
     st.title("🗺️ Mapeamento de Pressão - COI")
     st.info("🚧 Este módulo está atualmente em fase de desenvolvimento e validação.")
-    st.markdown("""
-        Em breve, novas ferramentas de mapeamento de pressão estarão disponíveis por aqui. 
-        Utilize o menu principal para acessar os módulos liberados.
-    """)
     st.stop()
 
 # ============================================================
-# A PARTIR daqui, roda APENAS PARA O ADMIN (Painel Completo)
+# CONSTANTES E ESTRUTURA DE COLUNAS DA SUA PLANILHA
 # ============================================================
-
-# CONSTANTES
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
-COLUNAS_PADRAO = ["ID", "Data", "Municipio", "Bairro", "Latitude", "Longitude", "Pressao_MCA"]
+COLUNAS_PADRAO = ["ID", "Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -103,11 +96,10 @@ def conectar_google_sheets():
         except Exception:
             ws = sh.sheet1
             
-    # Garante que a planilha tenha cabeçalho se estiver vazia
     try:
         dados_iniciais = ws.get_all_values()
         if not dados_iniciais or len(dados_iniciais) == 0:
-            ws.append_row(COLUNAS_PADRAO)
+            ws.append_row(["ID", "Data", "Pontos", "Latitude", "Longitude", "MCA", "Observação"])
     except Exception:
         pass
         
@@ -128,10 +120,10 @@ def gerar_id() -> str:
 def normalizar_coluna(nome: str) -> str:
     nome = str(nome).strip().lower()
     mapeamento = {
-        "id": "ID", "data": "Data", "municipio": "Municipio", "município": "Municipio",
-        "bairro": "Bairro", "latitude": "Latitude", "lat": "Latitude", "longitude": "Longitude",
-        "lon": "Longitude", "long": "Longitude", "pressao_mca": "Pressao_MCA", "pressão_mca": "Pressao_MCA",
-        "pressao": "Pressao_MCA", "pressão": "Pressao_MCA", "mca": "Pressao_MCA",
+        "id": "ID", "data": "Data", "pontos": "Pontos", "ponto": "Pontos",
+        "latitude": "Latitude", "lat": "Latitude", "longitude": "Longitude",
+        "lon": "Longitude", "long": "Longitude", "mca": "MCA", "pressao": "MCA", "pressão": "MCA",
+        "observacao": "Observacao", "observação": "Observacao", "obs": "Observacao"
     }
     return mapeamento.get(nome, nome.title())
 
@@ -200,31 +192,31 @@ def carregar_dados() -> pd.DataFrame:
 
     df["ID"] = df["ID"].apply(limpar_id)
     df["Data"] = df["Data"].apply(normalizar_data)
-    df["Municipio"] = df["Municipio"].astype(str).str.strip().replace({"": "Teresina", "nan": "Teresina", "None": "Teresina"})
-    df["Bairro"] = df["Bairro"].astype(str).str.strip().replace({"nan": "", "None": ""})
+    df["Pontos"] = df["Pontos"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df["Latitude"] = df["Latitude"].apply(lambda x: normalizar_coordenada(x, "lat"))
     df["Longitude"] = df["Longitude"].apply(lambda x: normalizar_coordenada(x, "lon"))
-    df["Pressao_MCA"] = df["Pressao_MCA"].apply(lambda x: parse_float(x, 0.0) or 0.0)
-    df = df[df["Bairro"].astype(str).str.strip() != ""]
+    df["MCA"] = df["MCA"].apply(lambda x: parse_float(x, 0.0) or 0.0)
+    df["Observacao"] = df["Observacao"].astype(str).str.strip().replace({"nan": "", "None": ""})
+    df = df[df["Pontos"].astype(str).str.strip() != ""]
 
     return df[COLUNAS_PADRAO].reset_index(drop=True)
 
 def limpar_cache():
     carregar_dados.clear()
 
-def adicionar_ponto(municipio: str, bairro: str, lat: float, lon: float, pressao: float, data_str: str):
+def adicionar_ponto(pontos: str, lat: float, lon: float, mca: float, obs: str, data_str: str):
     novo_id = gerar_id()
-    worksheet.append_row([novo_id, data_str, municipio, bairro, lat, lon, pressao])
+    worksheet.append_row([novo_id, data_str, pontos, lat, lon, mca, obs])
     limpar_cache()
     return novo_id
 
-def atualizar_ponto(id_registro: str, municipio: str, bairro: str, lat: float, lon: float, pressao: float, data_str: str) -> bool:
+def atualizar_ponto(id_registro: str, pontos: str, lat: float, lon: float, mca: float, obs: str, data_str: str) -> bool:
     try:
         celula = worksheet.find(str(id_registro))
         if celula is None:
             return False
         linha = celula.row
-        worksheet.update(f"A{linha}:G{linha}", [[str(id_registro), str(data_str), str(municipio), str(bairro), float(lat), float(lon), float(pressao)]])
+        worksheet.update(f"A{linha}:G{linha}", [[str(id_registro), str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
         limpar_cache()
         return True
     except Exception as e:
@@ -270,7 +262,7 @@ def gerar_kml(df):
             try:
                 kml.newpoint(
                     name=str(row.get("ID", "Ponto")),
-                    description=f"Município: {row.get('Municipio', '')}\nBairro: {row.get('Bairro', '')}\nPressão: {row.get('Pressao_MCA', '')} MCA",
+                    description=f"Ponto: {row.get('Pontos', '')}\nMCA: {row.get('MCA', '')}\nObservação: {row.get('Observacao', '')}",
                     coords=[(float(lon), float(lat))]
                 )
             except (ValueError, TypeError):
@@ -300,8 +292,7 @@ def modal_novo_ponto():
     lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
     with st.form("form_novo_ponto_modal", clear_on_submit=True):
-        municipio = st.text_input("Município *", value="Teresina")
-        bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
+        pontos = st.text_input("Pontos / Local *", placeholder="Ex: Ponto A-01")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -309,12 +300,13 @@ def modal_novo_ponto():
         with c2:
             lon = st.number_input("Longitude *", format="%.6f", value=float(lon_default), step=0.000001)
 
-        pressao = st.number_input("Pressão (MCA) *", format="%.2f", value=0.00, min_value=0.0, step=0.1)
+        mca = st.number_input("MCA *", format="%.2f", value=0.00, min_value=0.0, step=0.1)
+        obs = st.text_input("Observação", placeholder="Ex: Válvula regulada")
         enviado = st.form_submit_button("Cadastrar Ponto", type="primary", use_container_width=True)
 
         if enviado:
-            if not municipio.strip() or not bairro.strip():
-                st.error("Município e Bairro são obrigatórios.")
+            if not pontos.strip():
+                st.error("O campo 'Pontos' é obrigatório.")
             elif lat == 0.0 and lon == 0.0:
                 st.error("Informe coordenadas válidas ou clique no mapa.")
             else:
@@ -323,7 +315,7 @@ def modal_novo_ponto():
                 if lat_n is None or lon_n is None:
                     st.error("Coordenadas inválidas.")
                 else:
-                    novo_id = adicionar_ponto(municipio.strip(), bairro.strip(), lat_n, lon_n, pressao, data_para_str(hoje))
+                    novo_id = adicionar_ponto(pontos.strip(), lat_n, lon_n, mca, obs.strip(), data_para_str(hoje))
                     st.success(f"Ponto cadastrado! ID: {novo_id}")
                     st.session_state.clicked_lat = None
                     st.session_state.clicked_lon = None
@@ -336,14 +328,14 @@ def modal_editar_ponto(id_registro: str):
     if not df_edit_busca.empty:
         reg_edit = df_edit_busca.iloc[0]
         with st.form("form_edicao_modal"):
-            municipio = st.text_input("Município *", value=str(reg_edit["Municipio"]))
-            bairro_e = st.text_input("Bairro *", value=str(reg_edit["Bairro"]))
+            pontos_e = st.text_input("Pontos *", value=str(reg_edit["Pontos"]))
             c1, c2 = st.columns(2)
             with c1:
                 lat_e = st.number_input("Latitude *", format="%.6f", value=float(reg_edit["Latitude"] or LAT_BASE), step=0.000001)
             with c2:
                 lon_e = st.number_input("Longitude *", format="%.6f", value=float(reg_edit["Longitude"] or LON_BASE), step=0.000001)
-            pressao_e = st.number_input("Pressão (MCA) *", format="%.2f", value=float(reg_edit["Pressao_MCA"] or 0.0), min_value=0.0, step=0.1)
+            mca_e = st.number_input("MCA *", format="%.2f", value=float(reg_edit["MCA"] or 0.0), min_value=0.0, step=0.1)
+            obs_e = st.text_input("Observação", value=str(reg_edit["Observacao"]))
 
             col_salvar, col_canc = st.columns(2)
             with col_salvar:
@@ -352,7 +344,7 @@ def modal_editar_ponto(id_registro: str):
                 cancelar_edicao = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
             if salvar_edicao:
-                if atualizar_ponto(id_registro, municipio, bairro_e, lat_e, lon_e, pressao_e, reg_edit["Data"]):
+                if atualizar_ponto(id_registro, pontos_e, lat_e, lon_e, mca_e, obs_e, reg_edit["Data"]):
                     st.success("Atualizado com sucesso!")
                     st.rerun()
             if cancelar_edicao:
@@ -389,17 +381,13 @@ with st.sidebar:
     df_all = carregar_dados()
     df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
 
-    municipios_opts = ["Todos"] + sorted(df_data["Municipio"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
-    mun_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
-
-    bairros_base = df_data[df_data["Municipio"] == mun_sel] if mun_sel != "Todos" and not df_data.empty else df_data
-    bairros_opts = ["Todos"] + sorted(bairros_base["Bairro"].dropna().unique().tolist()) if not bairros_base.empty else ["Todos"]
-    bairro_sel = st.selectbox("Bairro", bairros_opts, key="filtro_bairro")
+    pontos_opts = ["Todos"] + sorted(df_data["Pontos"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
+    ponto_sel = st.selectbox("Ponto", pontos_opts, key="filtro_ponto")
 
     faixa_sel = st.selectbox(
-        "Faixa de Pressão",
+        "Faixa de MCA",
         ["Todas", "Críticos (0 MCA)", "Atenção (≤ 5 MCA)", "Normais (> 5 MCA)"],
-        key="filtro_pressao"
+        key="filtro_mca"
     )
 
     st.divider()
@@ -411,7 +399,7 @@ with st.sidebar:
     else:
         st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
 
-    # UPLOAD AUTOMÁTICO (Sem botão extra)
+    # UPLOAD AUTOMÁTICO
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
@@ -422,26 +410,26 @@ with st.sidebar:
             
             contador = 0
             for _, row in df_up.iterrows():
-                muni = str(row.get("Municipio", row.get("Município", "Teresina")))
-                bair = str(row.get("Bairro", ""))
+                ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
                 lat_val = parse_float(row.get("Latitude", row.get("Lat")))
                 lon_val = parse_float(row.get("Longitude", row.get("Lon")))
-                pres_val = parse_float(row.get("Pressao_MCA", row.get("Pressão_MCA", 0.0)), 0.0)
+                mca_val = parse_float(row.get("MCA", row.get("Pressao", 0.0)), 0.0)
+                obs_val = str(row.get("Observação", row.get("Observacao", "")))
                 
-                if bair.strip() and lat_val and lon_val:
-                    adicionar_ponto(muni, bair, lat_val, lon_val, pres_val, data_para_str(hoje))
+                if ponto_val.strip() and lat_val and lon_val:
+                    adicionar_ponto(ponto_val.strip(), lat_val, lon_val, mca_val, obs_val, data_para_str(hoje))
                     contador += 1
             if contador > 0:
                 st.success(f"✅ {contador} registros importados com sucesso!")
                 st.rerun()
             else:
-                st.warning("⚠️ Nenhum registro válido encontrado com Bairro e Coordenadas.")
+                st.warning("⚠️ Nenhum registro válido encontrado com Pontos e Coordenadas.")
         except Exception as e:
             st.error(f"❌ Erro ao processar arquivo: {e}")
 
     st.divider()
 
-    # EXPORTAÇÃO (Sempre visível se houver conexão)
+    # EXPORTAÇÃO
     st.markdown("#### 📥 Exportar Dados")
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -490,23 +478,21 @@ st.caption(f"Visualizando: **{data_str_selecionada}**")
 df = carregar_dados()
 df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
 
-if mun_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Municipio"] == mun_sel]
-if bairro_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Bairro"] == bairro_sel]
+if ponto_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Pontos"] == ponto_sel]
 
 if faixa_sel == "Críticos (0 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] == 0]
+    df_filtrado = df_filtrado[df_filtrado["MCA"] == 0]
 elif faixa_sel == "Atenção (≤ 5 MCA)":
-    df_filtrado = df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)]
+    df_filtrado = df_filtrado[(df_filtrado["MCA"] > 0) & (df_filtrado["MCA"] <= 5)]
 elif faixa_sel == "Normais (> 5 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] > 5]
+    df_filtrado = df_filtrado[df_filtrado["MCA"] > 5]
 
 if not df_filtrado.empty:
     total = len(df_filtrado)
-    criticos = len(df_filtrado[df_filtrado["Pressao_MCA"] == 0])
-    atencao = len(df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)])
-    normais = len(df_filtrado[df_filtrado["Pressao_MCA"] > 5])
+    criticos = len(df_filtrado[df_filtrado["MCA"] == 0])
+    atencao = len(df_filtrado[(df_filtrado["MCA"] > 0) & (df_filtrado["MCA"] <= 5)])
+    normais = len(df_filtrado[df_filtrado["MCA"] > 5])
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total de Ocorrências", total)
@@ -545,7 +531,6 @@ with c_map3:
             value=st.session_state.modo_adicionar_mapa
         )
 
-# Configuração da camada base do Folium baseada na escolha
 if "Satélite" in tipo_mapa:
     tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
     attr = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
@@ -578,20 +563,20 @@ else:
 if not df_filtrado.empty:
     validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
     for _, row in validos.iterrows():
-        pressao = row["Pressao_MCA"]
-        cor = "red" if pressao == 0 else ("orange" if pressao <= 5 else "blue")
-        popup = f"<b>ID:</b> {row['ID']}<br><b>Bairro:</b> {row['Bairro']}<br><b>Pressão:</b> {pressao} MCA"
+        mca = row["MCA"]
+        cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
+        popup = f"<b>Ponto:</b> {row['Pontos']}<br><b>MCA:</b> {mca}<br><b>Obs:</b> {row['Observacao']}"
         
         marker_icon = folium.Icon(color=cor, icon="map-pin", prefix="fa")
         folium.Marker(
             location=[row["Latitude"], row["Longitude"]],
             popup=folium.Popup(popup, max_width=250),
-            tooltip=f"{row['Municipio']} - {row['Bairro']} ({pressao} MCA)",
+            tooltip=f"{row['Pontos']} ({mca} MCA)",
             icon=marker_icon
         ).add_to(m)
 
         if mostrar_rotulos:
-            texto_rotulo = f"{row['Bairro']} — {pressao} MCA"
+            texto_rotulo = f"{row['Pontos']} — {mca} MCA"
             folium.map.Marker(
                 [row["Latitude"], row["Longitude"]],
                 icon=folium.DivIcon(
@@ -633,7 +618,7 @@ st.divider()
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 if not df_filtrado.empty:
-    df_show = df_filtrado[["ID", "Data", "Municipio", "Bairro", "Latitude", "Longitude", "Pressao_MCA"]].reset_index(drop=True)
+    df_show = df_filtrado[["ID", "Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]].reset_index(drop=True)
     evento = st.dataframe(df_show, use_container_width=True, height=300, on_select="rerun", selection_mode="single-row", key="tabela_registros_map")
     
     linhas_selecionadas = evento.selection.rows if evento and evento.selection else []
