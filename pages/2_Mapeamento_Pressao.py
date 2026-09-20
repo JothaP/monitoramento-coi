@@ -242,7 +242,6 @@ def adicionar_lote_seguro(linhas_dados: list):
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
-        # Envio em lote usando append_rows para evitar requisições fragmentadas múltiplas
         dados_formatados = [[d, p, float(lat), float(lon), float(mca), obs] for d, p, lat, lon, mca, obs in linhas_novas]
         worksheet.append_rows(dados_formatados, value_input_option='USER_ENTERED')
         time.sleep(0.3)
@@ -398,7 +397,6 @@ def modal_previa_upload():
             with st.spinner("Enviando registros com segurança para o Google Sheets..."):
                 qtd_inserida = adicionar_lote_seguro(st.session_state.dados_upload_pendentes)
             
-            # Limpa o estado pendente para sumir com o arquivo da barra lateral
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
 
@@ -459,7 +457,6 @@ with st.sidebar:
     if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
         modal_novo_ponto()
 
-    # UPLOAD COM BLOQUEIO DE DUPLICIDADE, PRÉ-VISUALIZAÇÃO E CONTROLE DE ESTADO
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     
     if arquivo_upload is not None:
@@ -494,13 +491,11 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"❌ Erro ao processar arquivo: {e}")
 
-    # Aciona o pop-up de pré-visualização se houver dados pendentes
     if st.session_state.dados_upload_pendentes is not None:
         modal_previa_upload()
 
     st.divider()
 
-    # EXPORTAÇÃO
     st.markdown("#### 📥 Exportar Dados")
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -576,7 +571,7 @@ else:
 st.divider()
 
 # ============================================================
-# MAPA COM SELETOR DE TIPO DE MAPA (ESTILO MY MAPS)
+# MAPA COM SELETOR DE TIPO DE MAPA (CORRIGIDO)
 # ============================================================
 st.subheader("🗺️ Mapa de Mapeamento de Pressão")
 
@@ -589,7 +584,7 @@ with c_map1:
             "Satélite (Esri World Imagery)",
             "Claro / Minimalista (CartoDB Positron)",
             "Escuro / Noturno (CartoDB Dark Matter)",
-            "Terreno (Stamen Terrain)"
+            "Terreno (OpenTopoMap)"
         ],
         key="seletor_tipo_mapa"
     )
@@ -601,22 +596,7 @@ with c_map3:
         value=st.session_state.modo_adicionar_mapa
     )
 
-if "Satélite" in tipo_mapa:
-    tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-    attr = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
-elif "Claro" in tipo_mapa:
-    tiles_url = 'CartoDB positron'
-    attr = None
-elif "Escuro" in tipo_mapa:
-    tiles_url = 'CartoDB dark_matter'
-    attr = None
-elif "Terreno" in tipo_mapa:
-    tiles_url = 'Stamen Terrain'
-    attr = None
-else:
-    tiles_url = 'OpenStreetMap'
-    attr = None
-
+# Configuração dos tiles corrigidos sem exigir chave de API paga
 if not df_filtrado.empty and df_filtrado["Latitude"].notna().any():
     centro_lat = float(df_filtrado["Latitude"].mean())
     centro_lon = float(df_filtrado["Longitude"].mean())
@@ -625,10 +605,23 @@ else:
     centro_lat, centro_lon = LAT_BASE, LON_BASE
     zoom = 12
 
-if attr:
-    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=tiles_url, attr=attr)
+# Inicializa o mapa com tiles vazios para controlarmos via folium.TileLayer
+m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=None)
+
+if "Satélite" in tipo_mapa:
+    folium.TileLayer(
+        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attr='Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+        name='Satélite (Esri World Imagery)'
+    ).add_to(m)
+elif "Claro" in tipo_mapa:
+    folium.TileLayer('cartodbpositron', name='Claro / Minimalista').add_to(m)
+elif "Escuro" in tipo_mapa:
+    folium.TileLayer('cartodbdark_matter', name='Escuro / Noturno').add_to(m)
+elif "Terreno" in tipo_mapa:
+    folium.TileLayer('OpenTopoMap', name='Terreno (OpenTopoMap)').add_to(m)
 else:
-    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=tiles_url)
+    folium.TileLayer('OpenStreetMap', name='Mapa Padrão (OpenStreetMap)').add_to(m)
 
 if not df_filtrado.empty:
     validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
