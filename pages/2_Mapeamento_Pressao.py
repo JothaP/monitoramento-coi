@@ -50,25 +50,6 @@ if "autenticado" not in st.session_state or not st.session_state.autenticado:
     st.stop()
 
 # ============================================================
-# CONTROLE DE ACESSO (ADMIN VS USUÁRIO COMUM)
-# ============================================================
-usuario_atual = st.session_state.get("usuario_logado", "")
-perfil_atual = st.session_state.get("perfil", "")
-eh_admin = (usuario_atual.lower() == "admin" or perfil_atual.lower() == "admin")
-
-if not eh_admin:
-    with st.sidebar:
-        st.markdown("### 🗺️ COI - Mapeamento")
-        st.caption("Em Desenvolvimento")
-        st.divider()
-        if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
-            st.switch_page("app.py")
-
-    st.title("🗺️ Mapeamento de Pressão - COI")
-    st.info("🚧 Este módulo está atualmente em fase de desenvolvimento e validação.")
-    st.stop()
-
-# ============================================================
 # CONSTANTES E ESTRUTURA DE COLUNAS
 # ============================================================
 LAT_BASE = -5.0892
@@ -411,7 +392,6 @@ def modal_previa_upload():
             with st.spinner("Enviando registros com segurança para o Google Sheets..."):
                 qtd_inserida = adicionar_lote_seguro(st.session_state.dados_upload_pendentes)
             
-            # Limpa estados e incrementa chave do uploader para limpar o widget na sidebar
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
             st.session_state.file_uploader_key += 1
@@ -431,11 +411,11 @@ def modal_previa_upload():
             st.rerun()
 
 # ============================================================
-# SIDEBAR (ADMIN)
+# SIDEBAR
 # ============================================================
 with st.sidebar:
     st.markdown("### 🗺️ COI - Mapeamento")
-    st.caption("⚙️ Área de Testes (Admin)")
+    st.caption("⚙️ Painel Operacional")
 
     st.markdown("#### 📅 Selecionar Data")
     data_escolhida = st.date_input(
@@ -459,11 +439,9 @@ with st.sidebar:
     df_all = carregar_dados()
     df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
 
-    # Filtro de Município
     municipios_opts = ["Todos"] + sorted(df_data["Município"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
     municipio_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
 
-    # Filtragem prévia por município para dinamicidade do select de pontos
     df_data_mun = df_data[df_data["Município"] == municipio_sel] if municipio_sel != "Todos" else df_data
 
     pontos_opts = ["Todos"] + sorted(df_data_mun["Pontos"].dropna().unique().tolist()) if not df_data_mun.empty else ["Todos"]
@@ -487,7 +465,6 @@ with st.sidebar:
         key=f"upload_mapeamento_{st.session_state.file_uploader_key}"
     )
     
-    # Botão para baixar a planilha modelo de exemplo
     df_modelo = pd.DataFrame([{
         "Data": datetime.now().strftime("%d/%m/%Y"),
         "Município": "Teresina",
@@ -587,10 +564,9 @@ with st.sidebar:
         st.switch_page("app.py")
 
 # ============================================================
-# ÁREA PRINCIPAL (ADMIN)
+# ÁREA PRINCIPAL
 # ============================================================
 st.title("🗺️ Painel de Mapeamento de Pressão - COI")
-st.warning("⚠️ Modo Admin (Testes do Módulo 2)")
 st.caption(f"Visualizando dados da data: **{data_str_selecionada}**")
 
 df = carregar_dados()
@@ -671,7 +647,7 @@ else:
     folium.TileLayer('OpenStreetMap', name='Mapa Padrão (OpenStreetMap)').add_to(m)
 
 if not df_filtrado.empty:
-    validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
+    validos = df_filtrado.dropna(subnet=["Latitude", "Longitude"])
     for idx_v, row in validos.iterrows():
         mca = row["MCA"]
         cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
