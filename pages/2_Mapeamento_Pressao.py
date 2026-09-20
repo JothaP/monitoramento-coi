@@ -74,7 +74,7 @@ if not eh_admin:
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
-COLUNAS_PADRAO = ["Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]
+COLUNAS_PADRAO = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -100,7 +100,12 @@ def conectar_google_sheets():
     try:
         dados_iniciais = ws.get_all_values()
         if not dados_iniciais or len(dados_iniciais) == 0:
-            ws.append_row(["Data", "Pontos", "Latitude", "Longitude", "MCA", "Observação"])
+            ws.append_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"])
+        else:
+            # Migração automática caso a planilha antiga tenha 6 colunas sem Município
+            cabecalho_atual = dados_iniciais[0]
+            if len(cabecalho_atual) >= 6 and "Município" not in [str(c).strip() for c in cabecalho_atual]:
+                ws.insert_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"], index=1)
     except Exception:
         pass
         
@@ -119,6 +124,7 @@ def normalizar_coluna(nome: str) -> str:
     nome = str(nome).strip().lower()
     mapeamento = {
         "data": "Data",
+        "municipio": "Município", "município": "Município",
         "pontos": "Pontos", "ponto": "Pontos",
         "latitude": "Latitude", "lat": "Latitude", 
         "longitude": "Longitude", "lon": "Longitude", "long": "Longitude",
@@ -200,6 +206,7 @@ def carregar_dados() -> pd.DataFrame:
             df[col] = ""
 
     df["Data"] = df["Data"].apply(normalizar_data)
+    df["Município"] = df["Município"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df["Pontos"] = df["Pontos"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df["Latitude"] = df["Latitude"].apply(lambda x: normalizar_coordenada(x, "lat"))
     df["Longitude"] = df["Longitude"].apply(lambda x: normalizar_coordenada(x, "lon"))
@@ -212,8 +219,8 @@ def carregar_dados() -> pd.DataFrame:
 def limpar_cache():
     st.cache_data.clear()
 
-def adicionar_ponto(data_str: str, pontos: str, lat: float, lon: float, mca: float, obs: str):
-    worksheet.append_row([str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)])
+def adicionar_ponto(data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str):
+    worksheet.append_row([str(data_str), str(municipio), str(pontos), float(lat), float(lon), float(mca), str(obs)])
     time.sleep(0.3)
     limpar_cache()
 
@@ -227,32 +234,32 @@ def adicionar_lote_seguro(linhas_dados: list):
         for _, r in df_atual.iterrows():
             lat_f = f"{float(r['Latitude']):.6f}" if pd.notnull(r['Latitude']) else ""
             lon_f = f"{float(r['Longitude']):.6f}" if pd.notnull(r['Longitude']) else ""
-            chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip().lower(), lat_f, lon_f)
+            chave = (str(r["Data"]).strip(), str(r["Município"]).strip().lower(), str(r["Pontos"]).strip().lower(), lat_f, lon_f)
             chaves_existentes.add(chave)
 
     linhas_novas = []
     for linha in linhas_dados:
-        d_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
+        d_val, mun_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
         lat_f = f"{float(lat_val):.6f}"
         lon_f = f"{float(lon_val):.6f}"
-        chave_nova = (str(d_val).strip(), str(p_val).strip().lower(), lat_f, lon_f)
+        chave_nova = (str(d_val).strip(), str(mun_val).strip().lower(), str(p_val).strip().lower(), lat_f, lon_f)
         
         if chave_nova not in chaves_existentes:
             linhas_novas.append(linha)
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
-        dados_formatados = [[d, p, float(lat), float(lon), float(mca), obs] for d, p, lat, lon, mca, obs in linhas_novas]
+        dados_formatados = [[d, mun, p, float(lat), float(lon), float(mca), obs] for d, mun, p, lat, lon, mca, obs in linhas_novas]
         worksheet.append_rows(dados_formatados, value_input_option='USER_ENTERED')
         time.sleep(0.3)
         limpar_cache()
         return len(linhas_novas)
     return 0
 
-def atualizar_ponto(linha_idx: int, data_str: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
+def atualizar_ponto(linha_idx: int, data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
     try:
         target_row = linha_idx + 2
-        worksheet.update(f"A{target_row}:F{target_row}", [[str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
+        worksheet.update(f"A{target_row}:G{target_row}", [[str(data_str), str(municipio), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
         time.sleep(0.3)
         limpar_cache()
         return True
@@ -282,7 +289,7 @@ def gerar_kml(df):
             try:
                 kml.newpoint(
                     name=str(row.get("Pontos", "Ponto")),
-                    description=f"Data: {row.get('Data', '')}\nPonto: {row.get('Pontos', '')}\nMCA: {row.get('MCA', '')}\nObservação: {row.get('Observacao', '')}",
+                    description=f"Data: {row.get('Data', '')}\nMunicípio: {row.get('Município', '')}\nPonto: {row.get('Pontos', '')}\nMCA: {row.get('MCA', '')}\nObservação: {row.get('Observacao', '')}",
                     coords=[(float(lon), float(lat))]
                 )
             except (ValueError, TypeError):
@@ -317,6 +324,7 @@ def modal_novo_ponto():
 
     with st.form("form_novo_ponto_modal", clear_on_submit=True):
         data_cadastro = st.date_input("Data do Registro", value=hoje, format="DD/MM/YYYY")
+        municipio = st.text_input("Município *", placeholder="Ex: Teresina")
         pontos = st.text_input("Pontos / Local *", placeholder="Ex: Ponto A-01")
 
         c1, c2 = st.columns(2)
@@ -332,12 +340,14 @@ def modal_novo_ponto():
         if enviado:
             lat_n = normalizar_coordenada(lat, "lat")
             lon_n = normalizar_coordenada(lon, "lon")
-            if not pontos.strip():
+            if not municipio.strip():
+                st.error("O campo 'Município' é obrigatório.")
+            elif not pontos.strip():
                 st.error("O campo 'Pontos' é obrigatório.")
             elif lat_n is None or lon_n is None:
                 st.error("Coordenadas inválidas. Verifique os valores de Latitude e Longitude.")
             else:
-                adicionar_ponto(data_para_str(data_cadastro), pontos.strip(), lat_n, lon_n, mca, obs.strip())
+                adicionar_ponto(data_para_str(data_cadastro), municipio.strip(), pontos.strip(), lat_n, lon_n, mca, obs.strip())
                 st.success("Ponto cadastrado com sucesso!")
                 st.session_state.clicked_lat = None
                 st.session_state.clicked_lon = None
@@ -355,6 +365,7 @@ def modal_editar_ponto(idx_tabela: int):
 
         with st.form("form_edicao_modal"):
             data_e = st.date_input("Data do Registro", value=data_parsed, format="DD/MM/YYYY")
+            municipio_e = st.text_input("Município *", value=str(reg_edit["Município"]))
             pontos_e = st.text_input("Pontos *", value=str(reg_edit["Pontos"]))
             c1, c2 = st.columns(2)
             with c1:
@@ -373,10 +384,12 @@ def modal_editar_ponto(idx_tabela: int):
             if salvar_edicao:
                 lat_n = normalizar_coordenada(lat_e, "lat")
                 lon_n = normalizar_coordenada(lon_e, "lon")
-                if lat_n is None or lon_n is None:
+                if not municipio_e.strip():
+                    st.error("O campo 'Município' é obrigatório.")
+                elif lat_n is None or lon_n is None:
                     st.error("Coordenadas inválidas.")
                 else:
-                    if atualizar_ponto(idx_tabela, data_para_str(data_e), pontos_e, lat_n, lon_n, mca_e, obs_e):
+                    if atualizar_ponto(idx_tabela, data_para_str(data_e), municipio_e.strip(), pontos_e, lat_n, lon_n, mca_e, obs_e):
                         st.success("Atualizado com sucesso!")
                         st.rerun()
             if cancelar_edicao:
@@ -387,7 +400,7 @@ def modal_editar_ponto(idx_tabela: int):
 @st.dialog("📋 Pré-visualização da Planilha")
 def modal_previa_upload():
     st.write(f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente}**")
-    df_preview = pd.DataFrame(st.session_state.dados_upload_pendentes, columns=["Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"])
+    df_preview = pd.DataFrame(st.session_state.dados_upload_pendentes, columns=["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"])
     st.dataframe(df_preview, use_container_width=True)
     st.info(f"Total de registros válidos prontos para envio: **{len(df_preview)}**")
 
@@ -442,7 +455,14 @@ with st.sidebar:
     df_all = carregar_dados()
     df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
 
-    pontos_opts = ["Todos"] + sorted(df_data["Pontos"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
+    # Filtro de Município
+    municipios_opts = ["Todos"] + sorted(df_data["Município"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
+    municipio_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
+
+    # Filtragem prévia por município para dinamicidade do select de pontos
+    df_data_mun = df_data[df_data["Município"] == municipio_sel] if municipio_sel != "Todos" else df_data
+
+    pontos_opts = ["Todos"] + sorted(df_data_mun["Pontos"].dropna().unique().tolist()) if not df_data_mun.empty else ["Todos"]
     ponto_sel = st.selectbox("Ponto", pontos_opts, key="filtro_ponto")
 
     faixa_sel = st.selectbox(
@@ -474,20 +494,21 @@ with st.sidebar:
                     if not data_val:
                         data_val = data_str_selecionada
 
+                    municipio_val = str(row.get("Município", row.get("Municipio", row.get("cidade", ""))))
                     ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
                     lat_val = normalizar_coordenada(row.get("Latitude", row.get("Lat")), "lat")
                     lon_val = normalizar_coordenada(row.get("Longitude", row.get("Lon")), "lon")
                     mca_val = parse_float(row.get("MCA", row.get("Pressao", 0.0)), 0.0)
                     obs_val = str(row.get("Observação", row.get("Observacao", "")))
                     
-                    if ponto_val.strip() and lat_val is not None and lon_val is not None:
-                        lote_para_enviar.append([data_val, ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
+                    if municipio_val.strip() and ponto_val.strip() and lat_val is not None and lon_val is not None:
+                        lote_para_enviar.append([data_val, municipio_val.strip(), ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
 
                 if lote_para_enviar:
                     st.session_state.dados_upload_pendentes = lote_para_enviar
                     st.session_state.nome_arquivo_pendente = arquivo_upload.name
                 else:
-                    st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Pontos, Latitude, Longitude, MCA, Observação.")
+                    st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Município, Pontos, Latitude, Longitude, MCA, Observação.")
             except Exception as e:
                 st.error(f"❌ Erro ao processar arquivo: {e}")
 
@@ -543,6 +564,9 @@ st.caption(f"Visualizando dados da data: **{data_str_selecionada}**")
 
 df = carregar_dados()
 df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
+
+if municipio_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Município"] == municipio_sel]
 
 if ponto_sel != "Todos":
     df_filtrado = df_filtrado[df_filtrado["Pontos"] == ponto_sel]
@@ -620,7 +644,7 @@ if not df_filtrado.empty:
     for idx_v, row in validos.iterrows():
         mca = row["MCA"]
         cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
-        popup = f"<b>Data:</b> {row['Data']}<br><b>Ponto:</b> {row['Pontos']}<br><b>MCA:</b> {mca}<br><b>Obs:</b> {row['Observacao']}"
+        popup = f"<b>Data:</b> {row['Data']}<br><b>Município:</b> {row['Município']}<br><b>Ponto:</b> {row['Pontos']}<br><b>MCA:</b> {mca}<br><b>Obs:</b> {row['Observacao']}"
         
         marker_icon = folium.Icon(color=cor, icon="map-pin", prefix="fa")
         folium.Marker(
@@ -673,7 +697,7 @@ st.divider()
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 if not df_filtrado.empty:
-    df_show = df_filtrado[["Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]].reset_index(drop=True)
+    df_show = df_filtrado[["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]].reset_index(drop=True)
     evento = st.dataframe(df_show, use_container_width=True, height=300, on_select="rerun", selection_mode="single-row", key="tabela_registros_map")
     
     linhas_selecionadas = evento.selection.rows if evento and evento.selection else []
