@@ -239,8 +239,74 @@ if "clicked_lon" not in st.session_state:
     st.session_state.clicked_lon = None
 if "modo_adicionar_mapa" not in st.session_state:
     st.session_state.modo_adicionar_mapa = False
-if "id_editando" not in st.session_state:
-    st.session_state.id_editando = None
+
+# ============================================================
+# DIALOGS (POP-UPS PARA CADASTRO E EDIÇÃO)
+# ============================================================
+@st.dialog("➕ Cadastrar Novo Ponto")
+def modal_adicionar_ponto():
+    st.markdown(f"Data de referência: **{data_para_str(hoje)}**")
+    lat_default = st.session_state.clicked_lat if st.session_state.clicked_lat is not None else 0.0
+    lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
+
+    with st.form("form_novo_ponto_modal"):
+        municipio = st.text_input("Município *", value="Teresina")
+        bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            lat = st.number_input("Latitude *", format="%.6f", value=float(lat_default), step=0.000001)
+        with c2:
+            lon = st.number_input("Longitude *", format="%.6f", value=float(lon_default), step=0.000001)
+
+        pressao = st.number_input("Pressão (MCA) *", format="%.2f", value=0.00, min_value=0.0, step=0.1)
+        enviado = st.form_submit_button("Cadastrar Ponto", type="primary", use_container_width=True)
+
+        if enviado:
+            if not municipio.strip() or not bairro.strip():
+                st.error("Município e Bairro são obrigatórios.")
+            elif lat == 0.0 and lon == 0.0:
+                st.error("Informe coordenadas válidas ou clique no mapa.")
+            else:
+                lat_n = normalizar_coordenada(lat, "lat")
+                lon_n = normalizar_coordenada(lon, "lon")
+                if lat_n is None or lon_n is None:
+                    st.error("Coordenadas inválidas.")
+                else:
+                    novo_id = adicionar_ponto(municipio.strip(), bairro.strip(), lat_n, lon_n, pressao, data_para_str(hoje))
+                    st.success(f"Ponto cadastrado! ID: {novo_id}")
+                    st.session_state.clicked_lat = None
+                    st.session_state.clicked_lon = None
+                    st.rerun()
+
+@st.dialog("✏️ Editar Registro")
+def modal_editar_ponto(id_registro: str):
+    df_all = carregar_dados()
+    df_edit_busca = df_all[df_all["ID"] == id_registro]
+    if not df_edit_busca.empty:
+        reg_edit = df_edit_busca.iloc[0]
+        with st.form("form_edicao_modal"):
+            municipio = st.text_input("Município *", value=str(reg_edit["Municipio"]))
+            bairro_e = st.text_input("Bairro *", value=str(reg_edit["Bairro"]))
+            c1, c2 = st.columns(2)
+            with c1:
+                lat_e = st.number_input("Latitude *", format="%.6f", value=float(reg_edit["Latitude"] or LAT_BASE), step=0.000001)
+            with c2:
+                lon_e = st.number_input("Longitude *", format="%.6f", value=float(reg_edit["Longitude"] or LON_BASE), step=0.000001)
+            pressao_e = st.number_input("Pressão (MCA) *", format="%.2f", value=float(reg_edit["Pressao_MCA"] or 0.0), min_value=0.0, step=0.1)
+
+            col_salvar, col_canc = st.columns(2)
+            with col_salvar:
+                salvar_edicao = st.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
+            with col_canc:
+                cancelar_edicao = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+            if salvar_edicao:
+                if atualizar_ponto(id_registro, municipio, bairro_e, lat_e, lon_e, pressao_e, reg_edit["Data"]):
+                    st.success("Atualizado com sucesso!")
+                    st.rerun()
+            if cancelar_edicao:
+                st.rerun()
 
 # ============================================================
 # SIDEBAR
@@ -271,11 +337,15 @@ with st.sidebar:
     df_all = carregar_dados()
     df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
 
-    municipios_opts = ["Todos"] + sorted(df_data["Municipio"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
+    municipios_opts = ["Selecione..."] + sorted(df_data["Municipio"].dropna().unique().tolist()) if not df_data.empty else ["Selecione..."]
     mun_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
 
-    bairros_base = df_data[df_data["Municipio"] == mun_sel] if mun_sel != "Todos" and not df_data.empty else df_data
-    bairros_opts = ["Todos"] + sorted(bairros_base["Bairro"].dropna().unique().tolist()) if not bairros_base.empty else ["Todos"]
+    if mun_sel != "Selecione...":
+        bairros_base = df_data[df_data["Municipio"] == mun_sel] if not df_data.empty else df_data
+        bairros_opts = ["Selecione..."] + sorted(bairros_base["Bairro"].dropna().unique().tolist()) if not bairros_base.empty else ["Selecione..."]
+    else:
+        bairros_opts = ["Selecione..."]
+    
     bairro_sel = st.selectbox("Bairro", bairros_opts, key="filtro_bairro")
 
     faixa_sel = st.selectbox(
@@ -286,84 +356,13 @@ with st.sidebar:
 
     st.divider()
 
-    # FORMULÁRIO DE CADASTRO OU EDIÇÃO
-    if st.session_state.id_editando:
-        st.markdown("#### ✏️ Editar Ponto")
-        df_edit_busca = df_all[df_all["ID"] == st.session_state.id_editando]
-        if not df_edit_busca.empty:
-            reg_edit = df_edit_busca.iloc[0]
-            with st.form("form_edicao"):
-                municipio = st.text_input("Município *", value=str(reg_edit["Municipio"]))
-                bairro_e = st.text_input("Bairro *", value=str(reg_edit["Bairro"]))
-                c1, c2 = st.columns(2)
-                with c1:
-                    lat_e = st.number_input("Latitude *", format="%.6f", value=float(reg_edit["Latitude"] or LAT_BASE), step=0.000001)
-                with c2:
-                    lon_e = st.number_input("Longitude *", format="%.6f", value=float(reg_edit["Longitude"] or LON_BASE), step=0.000001)
-                pressao_e = st.number_input("Pressão (MCA) *", format="%.2f", value=float(reg_edit["Pressao_MCA"] or 0.0), min_value=0.0, step=0.1)
-
-                col_salvar, col_canc = st.columns(2)
-                with col_salvar:
-                    salvar_edicao = st.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
-                with col_canc:
-                    cancelar_edicao = st.form_submit_button("❌ Cancelar", use_container_width=True)
-
-                if salvar_edicao:
-                    if atualizar_ponto(st.session_state.id_editando, municipio, bairro_e, lat_e, lon_e, pressao_e, reg_edit["Data"]):
-                        st.success("Atualizado com sucesso!")
-                        st.session_state.id_editando = None
-                        st.rerun()
-                if cancelar_edicao:
-                    st.session_state.id_editando = None
-                    st.rerun()
-        else:
-            st.session_state.id_editando = None
-    else:
-        st.markdown("#### ➕ Novo Ponto")
-        if data_escolhida != hoje:
-            st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
-        else:
-            lat_default = st.session_state.clicked_lat if st.session_state.clicked_lat is not None else 0.0
-            lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
-
-            with st.form("form_novo_ponto", clear_on_submit=True):
-                municipio = st.text_input("Município *", value="Teresina")
-                bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
-
-                c1, c2 = st.columns(2)
-                with c1:
-                    lat = st.number_input("Latitude *", format="%.6f", value=float(lat_default), step=0.000001)
-                with c2:
-                    lon = st.number_input("Longitude *", format="%.6f", value=float(lon_default), step=0.000001)
-
-                pressao = st.number_input("Pressão (MCA) *", format="%.2f", value=0.00, min_value=0.0, step=0.1)
-                enviado = st.form_submit_button("Cadastrar Ponto", type="primary", use_container_width=True)
-
-                if enviado:
-                    if not municipio.strip() or not bairro.strip():
-                        st.error("Município e Bairro são obrigatórios.")
-                    elif lat == 0.0 and lon == 0.0:
-                        st.error("Informe coordenadas válidas ou clique no mapa.")
-                    else:
-                        lat_n = normalizar_coordenada(lat, "lat")
-                        lon_n = normalizar_coordenada(lon, "lon")
-                        if lat_n is None or lon_n is None:
-                            st.error("Coordenadas inválidas.")
-                        else:
-                            novo_id = adicionar_ponto(municipio.strip(), bairro.strip(), lat_n, lon_n, pressao, data_para_str(hoje))
-                            st.success(f"Ponto cadastrado! ID: {novo_id}")
-                            st.session_state.clicked_lat = None
-                            st.session_state.clicked_lon = None
-                            st.rerun()
-
-    st.divider()
     st.markdown("#### ⏱️ Atualização")
     intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=30)
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
     # Espaçamento dinâmico para empurrar o botão de voltar para o final absoluto da barra lateral
-    st.markdown("<br>" * 3, unsafe_allow_html=True)
+    st.markdown("<br>" * 5, unsafe_allow_html=True)
     st.divider()
 
     # Botão de voltar ao menu principal posicionado rigorosamente no rodapé
@@ -376,34 +375,45 @@ with st.sidebar:
 st.title("💧 Painel de Monitoramento de Baixa Pressão - COI")
 st.caption(f"Visualizando: **{data_str_selecionada}**")
 
-df = carregar_dados()
-df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
-
-if mun_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Municipio"] == mun_sel]
-if bairro_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Bairro"] == bairro_sel]
-
-if faixa_sel == "Críticos (0 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] == 0]
-elif faixa_sel == "Atenção (≤ 5 MCA)":
-    df_filtrado = df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)]
-elif faixa_sel == "Normais (> 5 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] > 5]
-
-if not df_filtrado.empty:
-    total = len(df_filtrado)
-    criticos = len(df_filtrado[df_filtrado["Pressao_MCA"] == 0])
-    atencao = len(df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)])
-    normais = len(df_filtrado[df_filtrado["Pressao_MCA"] > 5])
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Total de Ocorrências", total)
-    k2.metric("Críticos (0 MCA)", criticos)
-    k3.metric("Em Atenção (≤ 5 MCA)", atencao)
-    k4.metric("Normais (> 5 MCA)", normais)
+# Botão de Ação rápida para Adicionar Novo Ponto via Pop-up
+if data_escolhida == hoje:
+    if st.button("➕ Adicionar Novo Ponto no Sistema", type="primary"):
+        modal_adicionar_ponto()
 else:
-    st.info("Nenhum ponto registrado para a data e filtros selecionados.")
+    st.info("💡 O cadastro de novos pontos é permitido apenas para a data de hoje.")
+
+# REGRA DE FILTRO OBRIGATÓRIO: Se não selecionar Município ou Bairro, nada é exibido
+if mun_sel == "Selecione..." and bairro_sel == "Selecione...":
+    st.warning("⚠️ Por favor, selecione um **Município** ou **Bairro** nos filtros da barra lateral para carregar os dados.")
+    df_filtrado = pd.DataFrame(columns=COLUNAS_PADRAO)
+else:
+    df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
+
+    if mun_sel != "Selecione...":
+        df_filtrado = df_filtrado[df_filtrado["Municipio"] == mun_sel]
+    if bairro_sel != "Selecione...":
+        df_filtrado = df_filtrado[df_filtrado["Bairro"] == bairro_sel]
+
+    if faixa_sel == "Críticos (0 MCA)":
+        df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] == 0]
+    elif faixa_sel == "Atenção (≤ 5 MCA)":
+        df_filtrado = df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)]
+    elif faixa_sel == "Normais (> 5 MCA)":
+        df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] > 5]
+
+    if not df_filtrado.empty:
+        total = len(df_filtrado)
+        criticos = len(df_filtrado[df_filtrado["Pressao_MCA"] == 0])
+        atencao = len(df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)])
+        normais = len(df_filtrado[df_filtrado["Pressao_MCA"] > 5])
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total de Ocorrências", total)
+        k2.metric("Críticos (0 MCA)", criticos)
+        k3.metric("Em Atenção (≤ 5 MCA)", atencao)
+        k4.metric("Normais (> 5 MCA)", normais)
+    else:
+        st.info("Nenhum ponto registrado para os filtros selecionados.")
 
 st.divider()
 
@@ -478,7 +488,7 @@ if st.session_state.modo_adicionar_mapa and data_escolhida == hoje and map_data 
         st.session_state.clicked_lat = round(clicked["lat"], 6)
         st.session_state.clicked_lon = round(clicked["lng"], 6)
         st.success(f"📍 Coordenadas capturadas: {st.session_state.clicked_lat}, {st.session_state.clicked_lon}")
-        st.rerun()
+        modal_adicionar_ponto()
 
 st.divider()
 
@@ -496,9 +506,8 @@ if not df_filtrado.empty:
         
         col_a, col_b, _ = st.columns([1, 1, 4])
         with col_a:
-            if st.button("✏️ Editar", use_container_width=True):
-                st.session_state.id_editando = id_sel
-                st.rerun()
+            if st.button("✏️ Editar Registro", use_container_width=True):
+                modal_editar_ponto(id_sel)
         with col_b:
             if st.button("🗑️ Excluir", use_container_width=True):
                 if excluir_ponto(id_sel):
@@ -524,14 +533,13 @@ if not df_all.empty:
         
     with col_g3:
         bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
-        # Adicionado estado inicial condicional ("Selecione...") para evitar carregamento automático indesejado
         bairro_analise = st.selectbox(
             "Selecione o Bairro", 
             options=["Selecione..."] + bairros_disponiveis, 
             key="analise_bairro"
         )
 
-    # O gráfico de tendência só será carregado e renderizado estritamente se o usuário selecionar um bairro válido
+    # O gráfico de tendência só será carregado estritamente se o usuário selecionar um bairro válido
     if bairro_analise != "Selecione...":
         if data_ini_analise > data_fim_analise:
             st.error("A data inicial não pode ser maior que a data final.")
