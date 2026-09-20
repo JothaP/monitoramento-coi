@@ -571,7 +571,7 @@ else:
 st.divider()
 
 # ============================================================
-# MAPA COM SELETOR DE TIPO DE MAPA (CORRIGIDO)
+# MAPA COM SELETOR DE TIPO DE MAPA (APENAS OS 3 FUNCIONAIS)
 # ============================================================
 st.subheader("🗺️ Mapa de Mapeamento de Pressão")
 
@@ -582,8 +582,6 @@ with c_map1:
         options=[
             "Mapa Padrão (OpenStreetMap)",
             "Satélite (Esri World Imagery)",
-            "Claro / Minimalista (CartoDB Positron)",
-            "Escuro / Noturno (CartoDB Dark Matter)",
             "Terreno (OpenTopoMap)"
         ],
         key="seletor_tipo_mapa"
@@ -596,7 +594,6 @@ with c_map3:
         value=st.session_state.modo_adicionar_mapa
     )
 
-# Configuração dos tiles corrigidos sem exigir chave de API paga
 if not df_filtrado.empty and df_filtrado["Latitude"].notna().any():
     centro_lat = float(df_filtrado["Latitude"].mean())
     centro_lon = float(df_filtrado["Longitude"].mean())
@@ -605,7 +602,6 @@ else:
     centro_lat, centro_lon = LAT_BASE, LON_BASE
     zoom = 12
 
-# Inicializa o mapa com tiles vazios para controlarmos via folium.TileLayer
 m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=None)
 
 if "Satélite" in tipo_mapa:
@@ -614,10 +610,6 @@ if "Satélite" in tipo_mapa:
         attr='Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
         name='Satélite (Esri World Imagery)'
     ).add_to(m)
-elif "Claro" in tipo_mapa:
-    folium.TileLayer('cartodbpositron', name='Claro / Minimalista').add_to(m)
-elif "Escuro" in tipo_mapa:
-    folium.TileLayer('cartodbdark_matter', name='Escuro / Noturno').add_to(m)
 elif "Terreno" in tipo_mapa:
     folium.TileLayer('OpenTopoMap', name='Terreno (OpenTopoMap)').add_to(m)
 else:
