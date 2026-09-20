@@ -312,6 +312,8 @@ if "dados_upload_pendentes" not in st.session_state:
     st.session_state.dados_upload_pendentes = None
 if "nome_arquivo_pendente" not in st.session_state:
     st.session_state.nome_arquivo_pendente = None
+if "file_uploader_key" not in st.session_state:
+    st.session_state.file_uploader_key = 0
 
 # ============================================================
 # DIALOGS (POP-UPS DE CADASTRO, EDIÇÃO E PRÉ-VISUALIZAÇÃO DE UPLOAD)
@@ -409,8 +411,10 @@ def modal_previa_upload():
             with st.spinner("Enviando registros com segurança para o Google Sheets..."):
                 qtd_inserida = adicionar_lote_seguro(st.session_state.dados_upload_pendentes)
             
+            # Limpa estados e incrementa chave do uploader para limpar o widget na sidebar
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
+            st.session_state.file_uploader_key += 1
 
             if qtd_inserida > 0:
                 st.success(f"✅ {qtd_inserida} novos registros importados com sucesso!")
@@ -423,6 +427,7 @@ def modal_previa_upload():
         if st.button("Cancelar", use_container_width=True):
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
+            st.session_state.file_uploader_key += 1
             st.rerun()
 
 # ============================================================
@@ -476,7 +481,11 @@ with st.sidebar:
     if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
         modal_novo_ponto()
 
-    arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
+    arquivo_upload = st.file_uploader(
+        "📂 Enviar Planilha (XLSX/CSV)", 
+        type=["xlsx", "csv"], 
+        key=f"upload_mapeamento_{st.session_state.file_uploader_key}"
+    )
     
     # Botão para baixar a planilha modelo de exemplo
     df_modelo = pd.DataFrame([{
