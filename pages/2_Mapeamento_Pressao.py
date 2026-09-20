@@ -69,7 +69,7 @@ if not eh_admin:
     st.stop()
 
 # ============================================================
-# CONSTANTES E ESTRUTURA DE COLUNAS (6 colunas com Data)
+# CONSTANTES E ESTRUTURA DE COLUNAS
 # ============================================================
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
@@ -159,7 +159,7 @@ def normalizar_data(valor) -> str:
     if isinstance(valor, (datetime, date)):
         return valor.strftime("%d/%m/%Y")
     texto = str(valor).strip()
-    if not texto or texto.lower() in ("nan", "none", "nat"):
+    if not texto or texto.lower() in ("nan", "none", "nat", ""):
         return ""
     formatos = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"]
     for fmt in formatos:
@@ -214,7 +214,7 @@ def limpar_cache():
 
 def adicionar_ponto(data_str: str, pontos: str, lat: float, lon: float, mca: float, obs: str):
     worksheet.append_row([str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)])
-    time.sleep(0.5)
+    time.sleep(0.3)
     limpar_cache()
 
 def adicionar_lote_seguro(linhas_dados: list):
@@ -225,13 +225,18 @@ def adicionar_lote_seguro(linhas_dados: list):
     chaves_existentes = set()
     if not df_atual.empty:
         for _, r in df_atual.iterrows():
-            chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip(), str(round(float(r["Latitude"]), 6)), str(round(float(r["Longitude"]), 6)))
+            lat_f = f"{float(r['Latitude']):.6f}" if pd.notnull(r['Latitude']) else ""
+            lon_f = f"{float(r['Longitude']):.6f}" if pd.notnull(r['Longitude']) else ""
+            chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip().lower(), lat_f, lon_f)
             chaves_existentes.add(chave)
 
     linhas_novas = []
     for linha in linhas_dados:
         d_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
-        chave_nova = (str(d_val).strip(), str(p_val).strip(), str(round(float(lat_val), 6)), str(round(float(lon_val), 6)))
+        lat_f = f"{float(lat_val):.6f}"
+        lon_f = f"{float(lon_val):.6f}"
+        chave_nova = (str(d_val).strip(), str(p_val).strip().lower(), lat_f, lon_f)
+        
         if chave_nova not in chaves_existentes:
             linhas_novas.append(linha)
             chaves_existentes.add(chave_nova)
@@ -239,7 +244,7 @@ def adicionar_lote_seguro(linhas_dados: list):
     if linhas_novas:
         for linha in linhas_novas:
             worksheet.append_row(linha)
-            time.sleep(0.4)
+            time.sleep(0.3)
         limpar_cache()
         return len(linhas_novas)
     return 0
@@ -248,7 +253,7 @@ def atualizar_ponto(linha_idx: int, data_str: str, pontos: str, lat: float, lon:
     try:
         target_row = linha_idx + 2
         worksheet.update(f"A{target_row}:F{target_row}", [[str(data_str), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
-        time.sleep(0.5)
+        time.sleep(0.3)
         limpar_cache()
         return True
     except Exception as e:
@@ -259,7 +264,7 @@ def excluir_ponto(linha_idx: int) -> bool:
     try:
         target_row = linha_idx + 2
         worksheet.delete_rows(target_row)
-        time.sleep(0.5)
+        time.sleep(0.3)
         limpar_cache()
         return True
     except Exception:
@@ -419,7 +424,7 @@ with st.sidebar:
     if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
         modal_novo_ponto()
 
-    # UPLOAD COM BLOQUEIO DE DUPLICIDADE
+    # UPLOAD COM BLOQUEIO DE DUPLICIDADE E DATA CORRETA
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
@@ -430,9 +435,12 @@ with st.sidebar:
             
             lote_para_enviar = []
             for _, row in df_up.iterrows():
-                data_val = normalizar_data(row.get("Data", data_str_selecionada))
+                # Tenta ler a data da planilha; se não houver ou estiver vazia, usa a data selecionada atualmente no painel
+                raw_data = row.get("Data", row.get("date", ""))
+                data_val = normalizar_data(raw_data)
                 if not data_val:
                     data_val = data_str_selecionada
+
                 ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
                 lat_val = normalizar_coordenada(row.get("Latitude", row.get("Lat")), "lat")
                 lon_val = normalizar_coordenada(row.get("Longitude", row.get("Lon")), "lon")
@@ -486,7 +494,7 @@ with st.sidebar:
 
     st.divider()
     st.markdown("#### ⏱️ Atualização")
-    intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=30)
+    intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=60)
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
