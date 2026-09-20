@@ -24,11 +24,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilização para otimizar espaço da barra lateral e fixar o botão no rodapé
+# Estilização CSS para otimizar espaço da barra lateral e ocultar menu padrão
 st.markdown(
     """
     <style>
-        /* Oculta navegação padrão do Streamlit */
+        /* Oculta navegação padrão automática do Streamlit */
         [data-testid="stSidebarNav"] {
             display: none !important;
         }
@@ -66,19 +66,20 @@ def conectar_gsheets():
 def carregar_dados():
     client = conectar_gsheets()
     if not client:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Protocolo", "Data", "Município", "Bairro", "Status", "Lat", "Lon"])
     try:
         sheet = client.open("Nome_Da_Sua_Planilha").worksheet("Ocorrencias")
         dados = sheet.get_all_records()
-        return pd.DataFrame(dados)
+        df = pd.DataFrame(dados)
+        return df
     except Exception as e:
         st.warning(f"Aviso ao carregar dados da planilha: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Protocolo", "Data", "Município", "Bairro", "Status", "Lat", "Lon"])
 
 df_ocorrencias = carregar_dados()
 
 # ============================================================
-# FUNÇÕES DE SUPORTE E EXPORTAÇÃO (KML / MAPA)
+# FUNÇÕES DE SUPORTE E EXPORTAÇÃO (KML)
 # ============================================================
 def gerar_kml(df):
     kml = simplekml.Kml()
@@ -86,11 +87,14 @@ def gerar_kml(df):
         lat = row.get("Lat")
         lon = row.get("Lon")
         if pd.notnull(lat) and pd.notnull(lon):
-            kml.newpoint(
-                name=str(row.get("Protocolo", "Ocorrência")),
-                description=f"Bairro: {row.get('Bairro', '')}\nStatus: {row.get('Status', '')}",
-                coords=[(lon, lat)]
-            )
+            try:
+                kml.newpoint(
+                    name=str(row.get("Protocolo", "Ocorrência")),
+                    description=f"Município: {row.get('Município', '')}\nBairro: {row.get('Bairro', '')}\nStatus: {row.get('Status', '')}",
+                    coords=[(float(lon), float(lat))]
+                )
+            except (ValueError, TypeError):
+                continue
     return kml.kml()
 
 # ============================================================
@@ -102,7 +106,7 @@ with st.sidebar:
     
     st.subheader("Filtros de Análise")
     
-    # Extração segura de opções para os filtros
+    # Extração dinâmica e segura dos filtros
     municipios_disponiveis = sorted(df_ocorrencias["Município"].dropna().unique().tolist()) if not df_ocorrencias.empty and "Município" in df_ocorrencias.columns else ["Teresina", "Timon"]
     municipio_selecionado = st.selectbox(
         "Selecione o Município",
@@ -122,7 +126,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Ações de exportação
+    # Botão de Download do KML
     if not df_ocorrencias.empty:
         kml_data = gerar_kml(df_ocorrencias)
         st.download_button(
@@ -133,11 +137,11 @@ with st.sidebar:
             use_container_width=True
         )
     
-    # Espaçamento dinâmico para empurrar o botão de voltar para o final
-    st.markdown("<br>" * 2, unsafe_allow_html=True)
+    # Espaçamento dinâmico para empurrar o botão de voltar para o final absoluto da barra lateral
+    st.markdown("<br>" * 3, unsafe_allow_html=True)
     st.markdown("---")
     
-    # Botão de voltar ao menu principal rigorosamente embaixo
+    # Botão de voltar ao menu principal posicionado rigorosamente embaixo
     if st.button("⬅️ Voltar ao Menu Principal", use_container_width=True):
         st.switch_page("app.py")
 
@@ -148,7 +152,7 @@ st.header("💧 Monitoramento de Baixa Pressão - COI")
 st.markdown("Acompanhamento operacional de ocorrências, chamados e tendências temporais.")
 st.markdown("---")
 
-# Métricas Principais
+# Seção de Métricas Rápidas
 col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("Total de Ocorrências", len(df_ocorrencias) if not df_ocorrencias.empty else 0)
@@ -162,18 +166,21 @@ with col3:
 st.markdown("---")
 
 # ============================================================
-# MAPA OPERACIONAL
+# MAPA OPERACIONAL DE OCORRÊNCIAS
 # ============================================================
 st.subheader("Mapa Operacional de Ocorrências")
 
 if not df_ocorrencias.empty and "Lat" in df_ocorrencias.columns and "Lon" in df_ocorrencias.columns:
     m = folium.Map(location=[-5.0892, -42.8019], zoom_start=13)
     for _, row in df_ocorrencias.dropna(subset=["Lat", "Lon"]).iterrows():
-        folium.Marker(
-            location=[row["Lat"], row["Lon"]],
-            popup=f"Protocolo: {row.get('Protocolo', 'N/A')}<br>Bairro: {row.get('Bairro', 'N/A')}",
-            icon=folium.Icon(color="blue", icon="info-sign")
-        ).add_to(m)
+        try:
+            folium.Marker(
+                location=[float(row["Lat"]), float(row["Lon"])],
+                popup=f"Protocolo: {row.get('Protocolo', 'N/A')}<br>Bairro: {row.get('Bairro', 'N/A')}<br>Status: {row.get('Status', 'N/A')}",
+                icon=folium.Icon(color="blue", icon="info-sign")
+            ).add_to(m)
+        except (ValueError, TypeError):
+            continue
     st_folium(m, width="100%", height=450)
 else:
     st.info("Nenhuma coordenada geográfica disponível no momento para exibição no mapa.")
@@ -185,28 +192,24 @@ st.markdown("---")
 # ============================================================
 st.subheader("Análise de Tendência Temporal")
 
-# O gráfico só é renderizado após a seleção obrigatória de Município, Bairro e Período
+# O gráfico só é renderizado após a seleção estrita de Município, Bairro e Período
 if (municipio_selecionado != "Selecione..." and 
     bairro_selecionado != "Selecione..." and 
     periodo_selecionado != "Selecione..."):
     
-    # Filtragem dos dados para o gráfico
+    # Filtragem dos dados para o gráfico com base nas seleções
     if not df_ocorrencias.empty and "Data" in df_ocorrencias.columns:
         df_filtrado = df_ocorrencias[
             (df_ocorrencias.get("Município", "") == municipio_selecionado) & 
             (df_ocorrencias.get("Bairro", "") == bairro_selecionado)
         ]
     else:
-        # Base demonstrativa caso não haja registros carregados da planilha
-        df_filtrado = pd.DataFrame({
-            "Data": pd.date_range(start="2026-09-01", periods=10),
-            "Ocorrências": [2, 4, 1, 6, 3, 5, 8, 2, 4, 3]
-        })
+        df_filtrado = pd.DataFrame()
     
     if not df_filtrado.empty:
         fig = px.line(
             df_filtrado, 
-            x="Data" if "Data" in df_filtrado.columns else df_filtrado.index, 
+            x="Data", 
             y="Ocorrências" if "Ocorrências" in df_filtrado.columns else df_filtrado.columns[0], 
             markers=True,
             title=f"Evolução Temporal - {bairro_selecionado} ({municipio_selecionado}) [{periodo_selecionado}]"
@@ -216,5 +219,5 @@ if (municipio_selecionado != "Selecione..." and
     else:
         st.warning("Nenhum dado encontrado para os filtros selecionados.")
 else:
-    # Estado inicial sem dados prévios carregados
+    # Estado inicial limpo: sem dados prévios carregados na tela
     st.info("👆 Selecione o **Município**, o **Bairro** e o **Período** na barra lateral para carregar a análise de tendência.")
