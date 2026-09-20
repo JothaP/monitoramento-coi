@@ -12,6 +12,7 @@ from streamlit_autorefresh import st_autorefresh
 import io
 import uuid
 from typing import Optional
+import time
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -210,6 +211,13 @@ def adicionar_ponto(pontos: str, lat: float, lon: float, mca: float, obs: str, d
     limpar_cache()
     return novo_id
 
+def adicionar_lote_pontos(linhas_dados: list):
+    if not linhas_dados:
+        return 0
+    worksheet.append_rows(linhas_dados)
+    limpar_cache()
+    return len(linhas_dados)
+
 def atualizar_ponto(id_registro: str, pontos: str, lat: float, lon: float, mca: float, obs: str, data_str: str) -> bool:
     try:
         celula = worksheet.find(str(id_registro))
@@ -399,7 +407,7 @@ with st.sidebar:
     else:
         st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
 
-    # UPLOAD AUTOMÁTICO
+    # UPLOAD EM LOTE (Evita erro 429 de cota do Google Sheets)
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
     if arquivo_upload is not None:
         try:
@@ -408,7 +416,9 @@ with st.sidebar:
             else:
                 df_up = pd.read_excel(arquivo_upload)
             
-            contador = 0
+            lote_para_enviar = []
+            data_atual_str = data_para_str(hoje)
+
             for _, row in df_up.iterrows():
                 ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
                 lat_val = parse_float(row.get("Latitude", row.get("Lat")))
@@ -417,10 +427,12 @@ with st.sidebar:
                 obs_val = str(row.get("Observação", row.get("Observacao", "")))
                 
                 if ponto_val.strip() and lat_val and lon_val:
-                    adicionar_ponto(ponto_val.strip(), lat_val, lon_val, mca_val, obs_val, data_para_str(hoje))
-                    contador += 1
-            if contador > 0:
-                st.success(f"✅ {contador} registros importados com sucesso!")
+                    novo_id = gerar_id()
+                    lote_para_enviar.append([novo_id, data_atual_str, ponto_val.strip(), lat_val, lon_val, mca_val, obs_val])
+
+            if lote_para_enviar:
+                adicionar_lote_pontos(lote_para_enviar)
+                st.success(f"✅ {len(lote_para_enviar)} registros importados com sucesso em lote!")
                 st.rerun()
             else:
                 st.warning("⚠️ Nenhum registro válido encontrado com Pontos e Coordenadas.")
