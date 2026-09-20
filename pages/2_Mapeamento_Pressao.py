@@ -169,16 +169,17 @@ def carregar_dados() -> pd.DataFrame:
     cabecalhos = [normalizar_coluna(c) for c in cabecalhos_raw]
 
     registros = []
-    for linha in valores[1:]:
+    # Armazenamos o índice real da planilha do Google (linha física = index_planilha + 2)
+    for idx_linha, linha in enumerate(valores[1:], start=0):
         if not any(str(c).strip() for c in linha):
             continue
-        reg = {}
+        reg = {"_linha_real": idx_linha}
         for i, col in enumerate(cabecalhos):
             reg[col] = linha[i] if i < len(linha) else ""
         registros.append(reg)
 
     if not registros:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+        return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
     df = pd.DataFrame(registros)
     for col in COLUNAS_PADRAO:
@@ -194,7 +195,8 @@ def carregar_dados() -> pd.DataFrame:
     df["Observacao"] = df["Observacao"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df = df[df["Pontos"].astype(str).str.strip() != ""]
 
-    return df[COLUNAS_PADRAO].reset_index(drop=True)
+    colunas_finais = COLUNAS_PADRAO + ["_linha_real"]
+    return df[colunas_finais].reset_index(drop=True)
 
 def limpar_cache():
     st.cache_data.clear()
@@ -236,9 +238,9 @@ def adicionar_lote_seguro(linhas_dados: list):
         return len(linhas_novas)
     return 0
 
-def atualizar_ponto(linha_idx: int, data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
+def atualizar_ponto(linha_real: int, data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
     try:
-        target_row = linha_idx + 2
+        target_row = linha_real + 2
         worksheet.update(f"A{target_row}:G{target_row}", [[str(data_str), str(municipio), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
         time.sleep(0.3)
         limpar_cache()
@@ -247,14 +249,17 @@ def atualizar_ponto(linha_idx: int, data_str: str, municipio: str, pontos: str, 
         st.error(f"Erro ao atualizar: {e}")
         return False
 
-def excluir_ponto(linha_idx: int) -> bool:
+def excluir_pontos_lote(linhas_reais: list) -> bool:
     try:
-        target_row = linha_idx + 2
-        worksheet.delete_rows(target_row)
+        # Ordena em ordem decrescente para excluir de baixo para cima sem alterar o índice das linhas superiores
+        linhas_ordenadas = sorted([r + 2 for r in linhas_reais], reverse=True)
+        for r in linhas_ordenadas:
+            worksheet.delete_rows(r)
         time.sleep(0.3)
         limpar_cache()
         return True
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro ao excluir: {e}")
         return False
 
 def data_para_str(d: date) -> str:
@@ -336,10 +341,11 @@ def modal_novo_ponto():
                 st.rerun()
 
 @st.dialog("✏️ Editar Ponto de Pressão")
-def modal_editar_ponto(idx_tabela: int):
+def modal_editar_ponto(linha_real: int):
     df_all = carregar_dados()
-    if idx_tabela < len(df_all):
-        reg_edit = df_all.iloc[idx_tabela]
+    reg_edit = df_all[df_all["_linha_real"] == linha_real]
+    if not reg_edit.empty:
+        reg_edit = reg_edit.iloc[0]
         try:
             data_parsed = datetime.strptime(str(reg_edit["Data"]), "%d/%m/%Y").date()
         except ValueError:
@@ -371,7 +377,7 @@ def modal_editar_ponto(idx_tabela: int):
                 elif lat_n is None or lon_n is None:
                     st.error("Coordenadas inválidas.")
                 else:
-                    if atualizar_ponto(idx_tabela, data_para_str(data_e), municipio_e.strip(), pontos_e, lat_n, lon_n, mca_e, obs_e):
+                    if atualizar_ponto(linha_real, data_para_str(data_e), municipio_e.strip(), pontos_e, lat_n, lon_n, mca_e, obs_e):
                         st.success("Atualizado com sucesso!")
                         st.rerun()
             if cancelar_edicao:
@@ -493,7 +499,7 @@ with st.sidebar:
                 if arquivo_upload.name.endswith('.csv'):
                     df_up = pd.read_csv(arquivo_upload)
                 else:
-                    df_up = pd.read_excel(arquivo_upload)
+                    df_up = pd.read_excel(arquivo_upload, engine='openpyxl')
                 
                 lote_para_enviar = []
                 for _, row in df_up.iterrows():
@@ -529,7 +535,7 @@ with st.sidebar:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_all.empty:
-            df_all.to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
+            df_all[COLUNAS_PADRAO].to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
         else:
             pd.DataFrame(columns=COLUNAS_PADRAO).to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
     excel_data = output.getvalue()
@@ -648,7 +654,7 @@ else:
 
 if not df_filtrado.empty:
     validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
-    for idx_v, row in validos.iterrows():
+    for _, row in validos.iterrows():
         mca = row["MCA"]
         cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
         popup = f"<b>Data:</b> {row['Data']}<br><b>Município:</b> {row['Município']}<br><b>Ponto:</b> {row['Pontos']}<br><b>MCA:</b> {mca}<br><b>Obs:</b> {row['Observacao']}"
@@ -700,24 +706,51 @@ if st.session_state.modo_adicionar_mapa and map_data and map_data.get("last_clic
 st.divider()
 
 # ============================================================
-# TABELA
+# TABELA E GERENCIAMENTO (EDIÇÃO E EXCLUSÃO MÚLTIPLA)
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 if not df_filtrado.empty:
-    df_show = df_filtrado[["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]].reset_index(drop=True)
-    evento = st.dataframe(df_show, use_container_width=True, height=300, on_select="rerun", selection_mode="single-row", key="tabela_registros_map")
+    # Adiciona coluna de seleção (checkbox) na tabela para exclusão múltipla
+    df_show = df_filtrado[COLUNAS_PADRAO].copy()
+    df_show.insert(0, "Selecionar", False)
     
-    linhas_selecionadas = evento.selection.rows if evento and evento.selection else []
-    if linhas_selecionadas:
-        idx = linhas_selecionadas[0]
-        col_a, col_b, _ = st.columns([1, 1, 4])
-        with col_a:
-            if st.button("✏️ Editar", use_container_width=True):
-                modal_editar_ponto(idx)
-        with col_b:
-            if st.button("🗑️ Excluir", use_container_width=True):
-                if excluir_ponto(idx):
-                    st.success("Excluído com sucesso.")
+    # Usamos st.data_editor para permitir marcar checkboxes
+    edited_df = st.data_editor(
+        df_show,
+        use_container_width=True,
+        height=300,
+        disabled=COLUNAS_PADRAO,
+        key="editor_tabela_map"
+    )
+
+    # Identifica quais linhas foram selecionadas pelo checkbox
+    linhas_marcadas_idx = edited_df[edited_df["Selecionar"] == True].index.tolist()
+    
+    # Identifica também a linha selecionada por clique simples caso queira editar
+    evento_selecao = st.dataframe(df_filtrado[COLUNAS_PADRAO], use_container_width=True, height=1, hide_index=True) # apenas referência visual ou seleção única antiga se necessário
+
+    c_edit, c_del, _ = st.columns([1.5, 1.5, 4])
+    
+    with c_edit:
+        # Seletor de qual linha editar pelo Ponto/Local exato
+        pontos_disponiveis = df_filtrado["Pontos"].tolist()
+        ponto_para_editar = st.selectbox("Selecionar para Editar", options=["-- Selecione --"] + pontos_disponiveis, key="select_edicao_ponto")
+        if ponto_para_editar != "-- Selecione --":
+            if st.button("✏️ Abrir Edição do Ponto", use_container_width=True):
+                reg_selecionado = df_filtrado[df_filtrado["Pontos"] == ponto_para_editar].iloc[0]
+                linha_real_alvo = int(reg_selecionado["_linha_real"])
+                modal_editar_ponto(linha_real_alvo)
+
+    with c_del:
+        st.markdown("<br>", unsafe_allow_html=True) # Espaçamento visual
+        if len(linhas_marcadas_idx) > 0:
+            if st.button(f"🗑️ Excluir Selecionados ({len(linhas_marcadas_idx)})", type="primary", use_container_width=True):
+                # Pega as linhas reais correspondentes na planilha do Google
+                linhas_reais_para_excluir = df_filtrado.iloc[linhas_marcadas_idx]["_linha_real"].tolist()
+                if excluir_pontos_lote(linhas_reais_para_excluir):
+                    st.success(f"🗑️ {len(linhas_reais_para_excluir)} registro(s) excluído(s) com sucesso!")
                     st.rerun()
+        else:
+            st.button("🗑️ Excluir Selecionados", disabled=True, use_container_width=True)
 else:
     st.info(f"Nenhum ponto registrado para a data {data_str_selecionada} com os filtros selecionados.")
