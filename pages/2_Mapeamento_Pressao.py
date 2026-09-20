@@ -221,13 +221,12 @@ def adicionar_lote_seguro(linhas_dados: list):
     if not linhas_dados:
         return 0
     
-    # Carrega os dados atuais para evitar duplicidade exata (Data + Ponto + Lat + Lon)
-df_atual = carregar_dados()
-chaves_existentes = set()
-if not df_atual.empty:
-    for _, r in df_atual.iterrows():
-        chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip(), str(round(float(r["Latitude"]), 6)), str(round(float(r["Longitude"]), 6)))
-        chaves_existentes.add(chave)
+    df_atual = carregar_dados()
+    chaves_existentes = set()
+    if not df_atual.empty:
+        for _, r in df_atual.iterrows():
+            chave = (str(r["Data"]).strip(), str(r["Pontos"]).strip(), str(round(float(r["Latitude"]), 6)), str(round(float(r["Longitude"]), 6)))
+            chaves_existentes.add(chave)
 
     linhas_novas = []
     for linha in linhas_dados:
@@ -235,7 +234,7 @@ if not df_atual.empty:
         chave_nova = (str(d_val).strip(), str(p_val).strip(), str(round(float(lat_val), 6)), str(round(float(lon_val), 6)))
         if chave_nova not in chaves_existentes:
             linhas_novas.append(linha)
-            chaves_existentes.add(chave_nova) # Evita duplicidade dentro do próprio lote
+            chaves_existentes.add(chave_nova)
 
     if linhas_novas:
         for linha in linhas_novas:
