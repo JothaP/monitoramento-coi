@@ -21,7 +21,26 @@ st.set_page_config(
     page_title="Monitoramento de Baixa Pressão - COI",
     page_icon="💧",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
+)
+
+# Estilização CSS para ocultar navegação padrão e fixar rodapé na sidebar
+st.markdown(
+    """
+    <style>
+        /* Oculta navegação padrão automática do Streamlit */
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+        
+        /* Otimização de espaçamento interno da sidebar */
+        [data-testid="stSidebar"] div.block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 1rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 # ============================================================
@@ -227,10 +246,6 @@ if "id_editando" not in st.session_state:
 # SIDEBAR
 # ============================================================
 with st.sidebar:
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
-        st.switch_page("app.py")
-    st.divider()
-
     st.markdown("### 💧 COI - Monitoramento")
     st.caption("Baixa Pressão • Tempo Real")
 
@@ -278,7 +293,7 @@ with st.sidebar:
         if not df_edit_busca.empty:
             reg_edit = df_edit_busca.iloc[0]
             with st.form("form_edicao"):
-                municipio	= st.text_input("Município *\t", value=str(reg_edit["Municipio"]))
+                municipio = st.text_input("Município *", value=str(reg_edit["Municipio"]))
                 bairro_e = st.text_input("Bairro *", value=str(reg_edit["Bairro"]))
                 c1, c2 = st.columns(2)
                 with c1:
@@ -294,7 +309,7 @@ with st.sidebar:
                     cancelar_edicao = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
                 if salvar_edicao:
-                    if atualizar_ponto(st.session_state.id_editando, municipio	, bairro_e, lat_e, lon_e, pressao_e, reg_edit["Data"]):
+                    if atualizar_ponto(st.session_state.id_editando, municipio, bairro_e, lat_e, lon_e, pressao_e, reg_edit["Data"]):
                         st.success("Atualizado com sucesso!")
                         st.session_state.id_editando = None
                         st.rerun()
@@ -312,7 +327,7 @@ with st.sidebar:
             lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
             with st.form("form_novo_ponto", clear_on_submit=True):
-                municipio	= st.text_input("Município *\t", value="Teresina")
+                municipio = st.text_input("Município *", value="Teresina")
                 bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
 
                 c1, c2 = st.columns(2)
@@ -325,7 +340,7 @@ with st.sidebar:
                 enviado = st.form_submit_button("Cadastrar Ponto", type="primary", use_container_width=True)
 
                 if enviado:
-                    if not municipio	.strip() or not bairro.strip():
+                    if not municipio.strip() or not bairro.strip():
                         st.error("Município e Bairro são obrigatórios.")
                     elif lat == 0.0 and lon == 0.0:
                         st.error("Informe coordenadas válidas ou clique no mapa.")
@@ -335,7 +350,7 @@ with st.sidebar:
                         if lat_n is None or lon_n is None:
                             st.error("Coordenadas inválidas.")
                         else:
-                            novo_id = adicionar_ponto(municipio	.strip(), bairro.strip(), lat_n, lon_n, pressao, data_para_str(hoje))
+                            novo_id = adicionar_ponto(municipio.strip(), bairro.strip(), lat_n, lon_n, pressao, data_para_str(hoje))
                             st.success(f"Ponto cadastrado! ID: {novo_id}")
                             st.session_state.clicked_lat = None
                             st.session_state.clicked_lon = None
@@ -346,6 +361,14 @@ with st.sidebar:
     intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=30)
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
+
+    # Espaçamento dinâmico para empurrar o botão de voltar para o final absoluto da barra lateral
+    st.markdown("<br>" * 3, unsafe_allow_html=True)
+    st.divider()
+
+    # Botão de voltar ao menu principal posicionado rigorosamente no rodapé
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        st.switch_page("app.py")
 
 # ============================================================
 # ÁREA PRINCIPAL
@@ -501,40 +524,49 @@ if not df_all.empty:
         
     with col_g3:
         bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
-        bairro_analise = st.selectbox("Selecione o Bairro", bairros_disponiveis, key="analise_bairro")
+        # Adicionado estado inicial condicional ("Selecione...") para evitar carregamento automático indesejado
+        bairro_analise = st.selectbox(
+            "Selecione o Bairro", 
+            options=["Selecione..."] + bairros_disponiveis, 
+            key="analise_bairro"
+        )
 
-    if data_ini_analise > data_fim_analise:
-        st.error("A data inicial não pode ser maior que a data final.")
-    else:
-        df_tendencia = df_all[df_all["Bairro"] == bairro_analise].copy()
-        
-        if not df_tendencia.empty:
-            df_tendencia["DataObj"] = pd.to_datetime(df_tendencia["Data"], format="%d/%m/%Y", errors="coerce")
-            df_tendencia = df_tendencia.dropna(subset=["DataObj"])
-            
-            mask = (df_tendencia["DataObj"].dt.date >= data_ini_analise) & (df_tendencia["DataObj"].dt.date <= data_fim_analise)
-            df_tendencia = df_tendencia.loc[mask].sort_values("DataObj")
-
-            if not df_tendencia.empty:
-                fig = px.line(
-                    df_tendencia,
-                    x="Data",
-                    y="Pressao_MCA",
-                    markers=True,
-                    title=f"Evolução da Pressão (MCA) — {bairro_analise}",
-                    labels={"Data": "Data do Registro", "Pressao_MCA": "Pressão (MCA)"},
-                )
-                
-                fig.add_hline(y=5, line_dash="dash", line_color="orange", annotation_text="Limite de Atenção (5 MCA)", annotation_position="top left")
-                fig.add_hline(y=0, line_dash="solid", line_color="red", annotation_text="Crítico (0 MCA)", annotation_position="bottom left")
-                
-                fig.update_traces(line_color="#0284c7", line_width=3, marker_size=8)
-                fig.update_layout(xaxis_title="Data", yaxis_title="Pressão (MCA)", hovermode="x unified")
-                
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info(f"Nenhum registro encontrado para o bairro **{bairro_analise}** no período selecionado.")
+    # O gráfico de tendência só será carregado e renderizado estritamente se o usuário selecionar um bairro válido
+    if bairro_analise != "Selecione...":
+        if data_ini_analise > data_fim_analise:
+            st.error("A data inicial não pode ser maior que a data final.")
         else:
-            st.warning("Não há dados históricos suficientes para este bairro.")
+            df_tendencia = df_all[df_all["Bairro"] == bairro_analise].copy()
+            
+            if not df_tendencia.empty:
+                df_tendencia["DataObj"] = pd.to_datetime(df_tendencia["Data"], format="%d/%m/%Y", errors="coerce")
+                df_tendencia = df_tendencia.dropna(subset=["DataObj"])
+                
+                mask = (df_tendencia["DataObj"].dt.date >= data_ini_analise) & (df_tendencia["DataObj"].dt.date <= data_fim_analise)
+                df_tendencia = df_tendencia.loc[mask].sort_values("DataObj")
+
+                if not df_tendencia.empty:
+                    fig = px.line(
+                        df_tendencia,
+                        x="Data",
+                        y="Pressao_MCA",
+                        markers=True,
+                        title=f"Evolução da Pressão (MCA) — {bairro_analise}",
+                        labels={"Data": "Data do Registro", "Pressao_MCA": "Pressão (MCA)"},
+                    )
+                    
+                    fig.add_hline(y=5, line_dash="dash", line_color="orange", annotation_text="Limite de Atenção (5 MCA)", annotation_position="top left")
+                    fig.add_hline(y=0, line_dash="solid", line_color="red", annotation_text="Crítico (0 MCA)", annotation_position="bottom left")
+                    
+                    fig.update_traces(line_color="#0284c7", line_width=3, marker_size=8)
+                    fig.update_layout(xaxis_title="Data", yaxis_title="Pressão (MCA)", hovermode="x unified")
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info(f"Nenhum registro encontrado para o bairro **{bairro_analise}** no período selecionado.")
+            else:
+                st.warning("Não há dados históricos suficientes para este bairro.")
+    else:
+        st.info("👆 Selecione um **Bairro** acima para carregar a análise de tendência temporal.")
 else:
     st.info("Aguardando dados para gerar o gráfico de tendência.")
