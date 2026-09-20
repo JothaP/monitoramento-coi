@@ -647,7 +647,7 @@ else:
     folium.TileLayer('OpenStreetMap', name='Mapa Padrão (OpenStreetMap)').add_to(m)
 
 if not df_filtrado.empty:
-    validos = df_filtrado.dropna(subnet=["Latitude", "Longitude"])
+    validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
     for idx_v, row in validos.iterrows():
         mca = row["MCA"]
         cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
