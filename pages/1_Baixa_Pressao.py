@@ -283,9 +283,10 @@ def gerar_kml(df):
         lon = row.get("Longitude")
         if pd.notnull(lat) and pd.notnull(lon):
             try:
+                obs_text = f"\nObservação: {row.get('Observacao', '')}" if str(row.get('Observacao', '')).strip() else ""
                 kml.newpoint(
                     name=str(row.get("ID", "Ponto")),
-                    description=f"Município: {row.get('Municipio', '')}\nBairro: {row.get('Bairro', '')}\nPressão: {row.get('Pressao_MCA', '')} MCA\nObservação: {row.get('Observacao', '')}",
+                    description=f"Município: {row.get('Municipio', '')}\nBairro: {row.get('Bairro', '')}\nPressão: {row.get('Pressao_MCA', '')} MCA{obs_text}",
                     coords=[(float(lon), float(lat))]
                 )
             except (ValueError, TypeError):
@@ -662,23 +663,31 @@ if not df_filtrado.empty:
     validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
     for _, row in validos.iterrows():
         pressao = row["Pressao_MCA"]
+        obs = str(row["Observacao"]).strip()
         cor = "red" if pressao == 0 else ("orange" if pressao <= 5 else "blue")
-        popup = f"<b>ID:</b> {row['ID']}<br><b>Data:</b> {row['Data']}<br><b>Município:</b> {row['Municipio']}<br><b>Bairro:</b> {row['Bairro']}<br><b>Pressão:</b> {pressao} MCA<br><b>Obs:</b> {row['Observacao']}"
+        
+        # Tooltip e Popup com Observação (se houver)
+        obs_tooltip_text = f" | Obs: {obs}" if obs else ""
+        tooltip_str = f"{row['Municipio']} - {row['Bairro']} ({pressao} MCA){obs_tooltip_text}"
+        
+        obs_popup_html = f"<br><b>Obs:</b> {obs}" if obs else ""
+        popup = f"<b>ID:</b> {row['ID']}<br><b>Data:</b> {row['Data']}<br><b>Município:</b> {row['Municipio']}<br><b>Bairro:</b> {row['Bairro']}<br><b>Pressão:</b> {pressao} MCA{obs_popup_html}"
         
         marker_icon = folium.Icon(color=cor, icon="tint", prefix="fa")
         folium.Marker(
             location=[row["Latitude"], row["Longitude"]],
             popup=folium.Popup(popup, max_width=250),
-            tooltip=f"{row['Municipio']} - {row['Bairro']} ({pressao} MCA)",
+            tooltip=tooltip_str,
             icon=marker_icon
         ).add_to(m)
 
         if mostrar_rotulos:
+            obs_rotulo_html = f"<br><span style='font-weight: normal; color: #4b5563;'>Obs: {obs}</span>" if obs else ""
             texto_rotulo = f"{row['Bairro']} — {pressao} MCA"
             folium.map.Marker(
                 [row["Latitude"], row["Longitude"]],
                 icon=folium.DivIcon(
-                    icon_size=(200, 40),
+                    icon_size=(220, 50),
                     icon_anchor=(-12, 18),
                     html=f'''
                     <div style="
@@ -686,15 +695,15 @@ if not df_filtrado.empty:
                         font-size: 11px;
                         font-weight: 600;
                         color: #1f2937;
-                        background-color: rgba(255, 255, 255, 0.92);
-                        padding: 4px 8px;
+                        background-color: rgba(255, 255, 255, 0.95);
+                        padding: 5px 9px;
                         border-radius: 6px;
                         border: 1px solid #cbd5e1;
                         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
                         width: max-content;
                         white-space: nowrap;
                     ">
-                        📍 {texto_rotulo}
+                        📍 {texto_rotulo}{obs_rotulo_html}
                     </div>
                     '''
                 )
