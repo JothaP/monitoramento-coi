@@ -21,26 +21,7 @@ st.set_page_config(
     page_title="Monitoramento de Baixa Pressão - COI",
     page_icon="💧",
     layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Estilização CSS para ocultar navegação padrão e fixar rodapé na sidebar
-st.markdown(
-    """
-    <style>
-        /* Oculta navegação padrão automática do Streamlit */
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-        
-        /* Otimização de espaçamento interno da sidebar */
-        [data-testid="stSidebar"] div.block-container {
-            padding-top: 1.5rem;
-            padding-bottom: 1rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
+    initial_sidebar_state="collapsed"
 )
 
 # ============================================================
@@ -250,7 +231,7 @@ def modal_adicionar_ponto():
     lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
     with st.form("form_novo_ponto_modal"):
-        municipio = st.text_input("Município *", value="Teresina")
+        municipio = st.text_input("Município *\t", value="Teresina")
         bairro = st.text_input("Bairro *", placeholder="Ex: Centro")
 
         c1, c2 = st.columns(2)
@@ -286,7 +267,7 @@ def modal_editar_ponto(id_registro: str):
     if not df_edit_busca.empty:
         reg_edit = df_edit_busca.iloc[0]
         with st.form("form_edicao_modal"):
-            municipio = st.text_input("Município *", value=str(reg_edit["Municipio"]))
+            municipio = st.text_input("Município *\t", value=str(reg_edit["Municipio"]))
             bairro_e = st.text_input("Bairro *", value=str(reg_edit["Bairro"]))
             c1, c2 = st.columns(2)
             with c1:
@@ -312,6 +293,10 @@ def modal_editar_ponto(id_registro: str):
 # SIDEBAR
 # ============================================================
 with st.sidebar:
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        st.switch_page("app.py")
+    st.divider()
+
     st.markdown("### 💧 COI - Monitoramento")
     st.caption("Baixa Pressão • Tempo Real")
 
@@ -337,15 +322,11 @@ with st.sidebar:
     df_all = carregar_dados()
     df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
 
-    municipios_opts = ["Selecione..."] + sorted(df_data["Municipio"].dropna().unique().tolist()) if not df_data.empty else ["Selecione..."]
+    municipios_opts = ["Todos"] + sorted(df_data["Municipio"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
     mun_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
 
-    if mun_sel != "Selecione...":
-        bairros_base = df_data[df_data["Municipio"] == mun_sel] if not df_data.empty else df_data
-        bairros_opts = ["Selecione..."] + sorted(bairros_base["Bairro"].dropna().unique().tolist()) if not bairros_base.empty else ["Selecione..."]
-    else:
-        bairros_opts = ["Selecione..."]
-    
+    bairros_base = df_data[df_data["Municipio"] == mun_sel] if mun_sel != "Todos" and not df_data.empty else df_data
+    bairros_opts = ["Todos"] + sorted(bairros_base["Bairro"].dropna().unique().tolist()) if not bairros_base.empty else ["Todos"]
     bairro_sel = st.selectbox("Bairro", bairros_opts, key="filtro_bairro")
 
     faixa_sel = st.selectbox(
@@ -356,18 +337,19 @@ with st.sidebar:
 
     st.divider()
 
+    # Botão na barra lateral para abrir o Pop-up de Cadastro
+    st.markdown("#### ➕ Ações")
+    if data_escolhida != hoje:
+        st.warning("Cadastro manual disponível apenas para a **data de hoje**.")
+    else:
+        if st.button("Novo Ponto", type="primary", use_container_width=True):
+            modal_adicionar_ponto()
+
+    st.divider()
     st.markdown("#### ⏱️ Atualização")
     intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=30)
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
-
-    # Espaçamento dinâmico para empurrar o botão de voltar para o final absoluto da barra lateral
-    st.markdown("<br>" * 5, unsafe_allow_html=True)
-    st.divider()
-
-    # Botão de voltar ao menu principal posicionado rigorosamente no rodapé
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
-        st.switch_page("app.py")
 
 # ============================================================
 # ÁREA PRINCIPAL
@@ -375,45 +357,34 @@ with st.sidebar:
 st.title("💧 Painel de Monitoramento de Baixa Pressão - COI")
 st.caption(f"Visualizando: **{data_str_selecionada}**")
 
-# Botão de Ação rápida para Adicionar Novo Ponto via Pop-up
-if data_escolhida == hoje:
-    if st.button("➕ Adicionar Novo Ponto no Sistema", type="primary"):
-        modal_adicionar_ponto()
+df = carregar_dados()
+df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
+
+if mun_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Municipio"] == mun_sel]
+if bairro_sel != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["Bairro"] == bairro_sel]
+
+if faixa_sel == "Críticos (0 MCA)":
+    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] == 0]
+elif faixa_sel == "Atenção (≤ 5 MCA)":
+    df_filtrado = df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)]
+elif faixa_sel == "Normais (> 5 MCA)":
+    df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] > 5]
+
+if not df_filtrado.empty:
+    total = len(df_filtrado)
+    criticos = len(df_filtrado[df_filtrado["Pressao_MCA"] == 0])
+    atencao = len(df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)])
+    normais = len(df_filtrado[df_filtrado["Pressao_MCA"] > 5])
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Total de Ocorrências", total)
+    k2.metric("Críticos (0 MCA)", criticos)
+    k3.metric("Em Atenção (≤ 5 MCA)", atencao)
+    k4.metric("Normais (> 5 MCA)", normais)
 else:
-    st.info("💡 O cadastro de novos pontos é permitido apenas para a data de hoje.")
-
-# REGRA DE FILTRO OBRIGATÓRIO: Se não selecionar Município ou Bairro, nada é exibido
-if mun_sel == "Selecione..." and bairro_sel == "Selecione...":
-    st.warning("⚠️ Por favor, selecione um **Município** ou **Bairro** nos filtros da barra lateral para carregar os dados.")
-    df_filtrado = pd.DataFrame(columns=COLUNAS_PADRAO)
-else:
-    df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
-
-    if mun_sel != "Selecione...":
-        df_filtrado = df_filtrado[df_filtrado["Municipio"] == mun_sel]
-    if bairro_sel != "Selecione...":
-        df_filtrado = df_filtrado[df_filtrado["Bairro"] == bairro_sel]
-
-    if faixa_sel == "Críticos (0 MCA)":
-        df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] == 0]
-    elif faixa_sel == "Atenção (≤ 5 MCA)":
-        df_filtrado = df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)]
-    elif faixa_sel == "Normais (> 5 MCA)":
-        df_filtrado = df_filtrado[df_filtrado["Pressao_MCA"] > 5]
-
-    if not df_filtrado.empty:
-        total = len(df_filtrado)
-        criticos = len(df_filtrado[df_filtrado["Pressao_MCA"] == 0])
-        atencao = len(df_filtrado[(df_filtrado["Pressao_MCA"] > 0) & (df_filtrado["Pressao_MCA"] <= 5)])
-        normais = len(df_filtrado[df_filtrado["Pressao_MCA"] > 5])
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total de Ocorrências", total)
-        k2.metric("Críticos (0 MCA)", criticos)
-        k3.metric("Em Atenção (≤ 5 MCA)", atencao)
-        k4.metric("Normais (> 5 MCA)", normais)
-    else:
-        st.info("Nenhum ponto registrado para os filtros selecionados.")
+    st.info("Nenhum ponto registrado para a data e filtros selecionados.")
 
 st.divider()
 
@@ -487,7 +458,6 @@ if st.session_state.modo_adicionar_mapa and data_escolhida == hoje and map_data 
     if clicked:
         st.session_state.clicked_lat = round(clicked["lat"], 6)
         st.session_state.clicked_lon = round(clicked["lng"], 6)
-        st.success(f"📍 Coordenadas capturadas: {st.session_state.clicked_lat}, {st.session_state.clicked_lon}")
         modal_adicionar_ponto()
 
 st.divider()
@@ -506,7 +476,7 @@ if not df_filtrado.empty:
         
         col_a, col_b, _ = st.columns([1, 1, 4])
         with col_a:
-            if st.button("✏️ Editar Registro", use_container_width=True):
+            if st.button("✏️ Editar", use_container_width=True):
                 modal_editar_ponto(id_sel)
         with col_b:
             if st.button("🗑️ Excluir", use_container_width=True):
@@ -533,13 +503,14 @@ if not df_all.empty:
         
     with col_g3:
         bairros_disponiveis = sorted(df_all["Bairro"].dropna().unique().tolist())
+        # Adicionada opção padrão "Selecione..." para que o gráfico não carregue sozinho na abertura da página
         bairro_analise = st.selectbox(
             "Selecione o Bairro", 
             options=["Selecione..."] + bairros_disponiveis, 
             key="analise_bairro"
         )
 
-    # O gráfico de tendência só será carregado estritamente se o usuário selecionar um bairro válido
+    # O gráfico só é exibido estritamente após o usuário selecionar um bairro válido
     if bairro_analise != "Selecione...":
         if data_ini_analise > data_fim_analise:
             st.error("A data inicial não pode ser maior que a data final.")
