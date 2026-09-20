@@ -485,15 +485,31 @@ if not df_filtrado.empty:
             icon=marker_icon
         ).add_to(m)
 
-        # Exibição de rótulos fixos caso o checkbox esteja ativado
+        # Se o checkbox de rótulos estiver marcado, adiciona o rótulo estilizado ao lado do ponto
         if mostrar_rotulos:
-            texto_rotulo = f"{row['Bairro']} ({pressao}mca)"
+            texto_rotulo = f"{row['Bairro']} — {pressao} MCA"
             folium.map.Marker(
                 [row["Latitude"], row["Longitude"]],
                 icon=folium.DivIcon(
-                    icon_size=(150, 36),
-                    icon_anchor=(-10, 15),
-                    html=f'<div style="font-size: 10px; font-weight: bold; color: #333; background-color: rgba(255,255,255,0.85); padding: 2px 5px; border-radius: 4px; border: 1px solid #ccc; width: max-content;">{texto_rotulo}</div>'
+                    icon_size=(200, 40),
+                    icon_anchor=(-12, 18),
+                    html=f'''
+                    <div style="
+                        font-family: sans-serif;
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: #1f2937;
+                        background-color: rgba(255, 255, 255, 0.92);
+                        padding: 4px 8px;
+                        border-radius: 6px;
+                        border: 1px solid #cbd5e1;
+                        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                        width: max-content;
+                        white-space: nowrap;
+                    ">
+                        📍 {texto_rotulo}
+                    </div>
+                    '''
                 )
             ).add_to(m)
 
