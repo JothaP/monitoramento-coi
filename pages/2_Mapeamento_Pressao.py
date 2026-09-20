@@ -242,9 +242,10 @@ def adicionar_lote_seguro(linhas_dados: list):
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
-        for linha in linhas_novas:
-            worksheet.append_row(linha)
-            time.sleep(0.3)
+        # Envio em lote usando append_rows para evitar requisições fragmentadas múltiplas
+        dados_formatados = [[d, p, float(lat), float(lon), float(mca), obs] for d, p, lat, lon, mca, obs in linhas_novas]
+        worksheet.append_rows(dados_formatados, value_input_option='USER_ENTERED')
+        time.sleep(0.3)
         limpar_cache()
         return len(linhas_novas)
     return 0
@@ -302,9 +303,13 @@ if "clicked_lon" not in st.session_state:
     st.session_state.clicked_lon = None
 if "modo_adicionar_mapa" not in st.session_state:
     st.session_state.modo_adicionar_mapa = False
+if "dados_upload_pendentes" not in st.session_state:
+    st.session_state.dados_upload_pendentes = None
+if "nome_arquivo_pendente" not in st.session_state:
+    st.session_state.nome_arquivo_pendente = None
 
 # ============================================================
-# DIALOGS (POP-UPS DE CADASTRO E EDIÇÃO)
+# DIALOGS (POP-UPS DE CADASTRO, EDIÇÃO E PRÉ-VISUALIZAÇÃO DE UPLOAD)
 # ============================================================
 @st.dialog("➕ Cadastrar Ponto de Pressão")
 def modal_novo_ponto():
@@ -380,6 +385,36 @@ def modal_editar_ponto(idx_tabela: int):
     else:
         st.warning("Registro não encontrado.")
 
+@st.dialog("📋 Pré-visualização da Planilha")
+def modal_previa_upload():
+    st.write(f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente}**")
+    df_preview = pd.DataFrame(st.session_state.dados_upload_pendentes, columns=["Data", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"])
+    st.dataframe(df_preview, use_container_width=True)
+    st.info(f"Total de registros válidos prontos para envio: **{len(df_preview)}**")
+
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("Confirmar e Enviar", type="primary", use_container_width=True):
+            with st.spinner("Enviando registros com segurança para o Google Sheets..."):
+                qtd_inserida = adicionar_lote_seguro(st.session_state.dados_upload_pendentes)
+            
+            # Limpa o estado pendente para sumir com o arquivo da barra lateral
+            st.session_state.dados_upload_pendentes = None
+            st.session_state.nome_arquivo_pendente = None
+
+            if qtd_inserida > 0:
+                st.success(f"✅ {qtd_inserida} novos registros importados com sucesso!")
+            else:
+                st.info("ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita.")
+            time.sleep(1)
+            st.rerun()
+
+    with col_btn2:
+        if st.button("Cancelar", use_container_width=True):
+            st.session_state.dados_upload_pendentes = None
+            st.session_state.nome_arquivo_pendente = None
+            st.rerun()
+
 # ============================================================
 # SIDEBAR (ADMIN)
 # ============================================================
@@ -424,44 +459,44 @@ with st.sidebar:
     if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
         modal_novo_ponto()
 
-    # UPLOAD COM BLOQUEIO DE DUPLICIDADE E DATA CORRETA
+    # UPLOAD COM BLOQUEIO DE DUPLICIDADE, PRÉ-VISUALIZAÇÃO E CONTROLE DE ESTADO
     arquivo_upload = st.file_uploader("📂 Enviar Planilha (XLSX/CSV)", type=["xlsx", "csv"], key="upload_mapeamento")
+    
     if arquivo_upload is not None:
-        try:
-            if arquivo_upload.name.endswith('.csv'):
-                df_up = pd.read_csv(arquivo_upload)
-            else:
-                df_up = pd.read_excel(arquivo_upload)
-            
-            lote_para_enviar = []
-            for _, row in df_up.iterrows():
-                # Tenta ler a data da planilha; se não houver ou estiver vazia, usa a data selecionada atualmente no painel
-                raw_data = row.get("Data", row.get("date", ""))
-                data_val = normalizar_data(raw_data)
-                if not data_val:
-                    data_val = data_str_selecionada
-
-                ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
-                lat_val = normalizar_coordenada(row.get("Latitude", row.get("Lat")), "lat")
-                lon_val = normalizar_coordenada(row.get("Longitude", row.get("Lon")), "lon")
-                mca_val = parse_float(row.get("MCA", row.get("Pressao", 0.0)), 0.0)
-                obs_val = str(row.get("Observação", row.get("Observacao", "")))
-                
-                if ponto_val.strip() and lat_val is not None and lon_val is not None:
-                    lote_para_enviar.append([data_val, ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
-
-            if lote_para_enviar:
-                with st.spinner("Enviando registros com segurança para o Google Sheets..."):
-                    qtd_inserida = adicionar_lote_seguro(lote_para_enviar)
-                if qtd_inserida > 0:
-                    st.success(f"✅ {qtd_inserida} novos registros importados com sucesso!")
+        if st.session_state.nome_arquivo_pendente != arquivo_upload.name:
+            try:
+                if arquivo_upload.name.endswith('.csv'):
+                    df_up = pd.read_csv(arquivo_upload)
                 else:
-                    st.info("ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita.")
-                st.rerun()
-            else:
-                st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Pontos, Latitude, Longitude, MCA, Observação.")
-        except Exception as e:
-            st.error(f"❌ Erro ao processar arquivo: {e}")
+                    df_up = pd.read_excel(arquivo_upload)
+                
+                lote_para_enviar = []
+                for _, row in df_up.iterrows():
+                    raw_data = row.get("Data", row.get("date", ""))
+                    data_val = normalizar_data(raw_data)
+                    if not data_val:
+                        data_val = data_str_selecionada
+
+                    ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
+                    lat_val = normalizar_coordenada(row.get("Latitude", row.get("Lat")), "lat")
+                    lon_val = normalizar_coordenada(row.get("Longitude", row.get("Lon")), "lon")
+                    mca_val = parse_float(row.get("MCA", row.get("Pressao", 0.0)), 0.0)
+                    obs_val = str(row.get("Observação", row.get("Observacao", "")))
+                    
+                    if ponto_val.strip() and lat_val is not None and lon_val is not None:
+                        lote_para_enviar.append([data_val, ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
+
+                if lote_para_enviar:
+                    st.session_state.dados_upload_pendentes = lote_para_enviar
+                    st.session_state.nome_arquivo_pendente = arquivo_upload.name
+                else:
+                    st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Pontos, Latitude, Longitude, MCA, Observação.")
+            except Exception as e:
+                st.error(f"❌ Erro ao processar arquivo: {e}")
+
+    # Aciona o pop-up de pré-visualização se houver dados pendentes
+    if st.session_state.dados_upload_pendentes is not None:
+        modal_previa_upload()
 
     st.divider()
 
