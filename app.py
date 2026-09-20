@@ -35,6 +35,8 @@ if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 if "perfil" not in st.session_state:
     st.session_state.perfil = ""
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = ""
 
 # ============================================================
 # TELA DE LOGIN
@@ -51,11 +53,13 @@ if not st.session_state.autenticado:
             if senha_digitada == SENHA_ADMIN:
                 st.session_state.autenticado = True
                 st.session_state.perfil = "admin"
+                st.session_state.usuario_logado = "admin"
                 st.success("Login de Administrador realizado com sucesso!")
                 st.rerun()
             elif senha_digitada == SENHA_USUARIO:
                 st.session_state.autenticado = True
                 st.session_state.perfil = "usuario"
+                st.session_state.usuario_logado = "operador"
                 st.success("Login de Usuário realizado com sucesso!")
                 st.rerun()
             else:
@@ -85,11 +89,11 @@ with col1:
 # MÓDULO 2 (Restrito a Admin)
 with col2:
     st.markdown("#### 📊 Módulo 2")
-    st.markdown("**Mapeamento**")
+    st.markdown("**Mapeamento de Pressão**")
     if st.session_state.perfil == "admin":
-        st.caption("Status: Em desenvolvimento (Admin)")
+        st.caption("Status: Ativo (Admin)")
         if st.button("Acessar Mapeamento", use_container_width=True):
-            st.switch_page("pages/2_Mapeamento.py")
+            st.switch_page("pages/2_Mapeamento_Pressao.py")
     else:
         st.caption("Status: Em desenvolvimento")
         st.button("Acessar Mapeamento", disabled=True, use_container_width=True)
@@ -114,5 +118,6 @@ st.divider()
 if st.button("Encerrar Sessão / Sair"):
     st.session_state.autenticado = False
     st.session_state.perfil = ""
+    st.session_state.usuario_logado = ""
     st.success("Sessão encerrada com sucesso!")
     st.rerun()
