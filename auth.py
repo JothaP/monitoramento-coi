@@ -6,7 +6,7 @@ import extra_streamlit_components as stx
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
-TEMPO_SESSAO_HORAS = 8          # ← Altere aqui o tempo de expiração da sessão
+TEMPO_SESSAO_HORAS = 8          # ← Tempo de duração da sessão
 COOKIE_NAME = "coi_auth_token"
 
 
@@ -14,7 +14,7 @@ def get_manager():
     return stx.CookieManager(key="coi_cookie_manager")
 
 
-def fazer_login(usuario: str = "usuario"):
+def fazer_login(usuario: str, perfil: str):
     """Chamado quando o login é bem-sucedido"""
     cookie_manager = get_manager()
     
@@ -23,10 +23,10 @@ def fazer_login(usuario: str = "usuario"):
     dados = {
         "autenticado": True,
         "usuario": usuario,
+        "perfil": perfil,
         "expira_em": expiracao.isoformat()
     }
     
-    # Grava o cookie (válido por 1 dia no navegador)
     cookie_manager.set(
         COOKIE_NAME,
         json.dumps(dados),
@@ -34,15 +34,14 @@ def fazer_login(usuario: str = "usuario"):
     )
     
     st.session_state.autenticado = True
-    st.session_state.usuario = usuario
+    st.session_state.usuario_logado = usuario
+    st.session_state.perfil = perfil
 
 
 def verificar_autenticacao() -> bool:
     """
-    Deve ser chamada no INÍCIO de todas as páginas protegidas.
-    Retorna True se a sessão for válida.
+    Restaura a sessão se o cookie ainda for válido.
     """
-    # Já está autenticado nesta execução?
     if st.session_state.get("autenticado") is True:
         return True
     
@@ -57,12 +56,11 @@ def verificar_autenticacao() -> bool:
         expira_em = datetime.fromisoformat(dados["expira_em"])
         
         if datetime.now() < expira_em:
-            # Cookie ainda válido → restaura a sessão
             st.session_state.autenticado = True
-            st.session_state.usuario = dados.get("usuario", "usuario")
+            st.session_state.usuario_logado = dados.get("usuario", "")
+            st.session_state.perfil = dados.get("perfil", "")
             return True
         else:
-            # Cookie expirado
             cookie_manager.delete(COOKIE_NAME)
             return False
             
@@ -76,6 +74,5 @@ def fazer_logout():
     cookie_manager = get_manager()
     cookie_manager.delete(COOKIE_NAME)
     
-    # Limpa todo o session_state
     for key in list(st.session_state.keys()):
         del st.session_state[key]
