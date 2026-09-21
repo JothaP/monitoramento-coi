@@ -707,6 +707,7 @@ st.divider()
 # TABELA E GERENCIAMENTO (EDIÇÃO E EXCLUSÃO MÚLTIPLA COM CHAVE REAL)
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
+
 if not df_filtrado.empty:
     # Prepara o dataframe mantendo a coluna oculta _linha_real para rastreamento exato
     df_show = df_filtrado[COLUNAS_PADRAO + ["_linha_real"]].copy()
@@ -717,34 +718,57 @@ if not df_filtrado.empty:
         use_container_width=True,
         height=350,
         disabled=COLUNAS_PADRAO + ["_linha_real"],
-        key="editor_tabela_map_unificado"
+        key="editor_tabela_map_unificado",
+        hide_index=True,          # opcional, fica mais limpo
     )
 
-    # Identifica as linhas reais diretamente pela coluna invisível/armazenada, sem erro de índice
-    linhas_marcadas_idx = edited_df[edited_df["Selecionar"] == True].index.tolist()
-
+    # ===== EXCLUSÃO (corrigida) =====
+    selecionados = edited_df[edited_df["Selecionar"] == True]
+    
     c_edit, c_del = st.columns([2, 2])
     
     with c_edit:
-        opcoes_pontos = ["-- Selecione o Ponto --"] + df_filtrado["Pontos"].tolist()
-        ponto_para_editar = st.selectbox("Selecionar Ponto para Editar", options=opcoes_pontos, key="select_edicao_ponto_preciso")
+        # ===== EDIÇÃO mais segura =====
+        # Cria opções únicas e legíveis
+        opcoes_map = {}
+        opcoes_lista = ["-- Selecione o Ponto --"]
+        
+        for _, row in df_filtrado.iterrows():
+            label = f"{row['Pontos']}  |  {row['Município']}  |  MCA: {row['MCA']}"
+            # garante unicidade mesmo com nomes repetidos
+            while label in opcoes_map:
+                label += " "
+            opcoes_lista.append(label)
+            opcoes_map[label] = int(row["_linha_real"])
+        
+        ponto_para_editar = st.selectbox(
+            "Selecionar Ponto para Editar",
+            options=opcoes_lista,
+            key="select_edicao_ponto_preciso"
+        )
         
         if ponto_para_editar != "-- Selecione o Ponto --":
             if st.button("✏️ Abrir Edição do Ponto Selecionado", type="primary", use_container_width=True):
-                reg_selecionado = df_filtrado[df_filtrado["Pontos"] == ponto_para_editar].iloc[0]
-                linha_real_alvo = int(reg_selecionado["_linha_real"])
+                linha_real_alvo = opcoes_map[ponto_para_editar]
                 modal_editar_ponto(linha_real_alvo)
 
     with c_del:
         st.markdown("<br>", unsafe_allow_html=True)
-        if len(linhas_marcadas_idx) > 0:
-            if st.button(f"🗑️ Excluir Selecionados ({len(linhas_marcadas_idx)})", type="primary", use_container_width=True):
-                # Extrai as linhas reais com total segurança a partir do dataframe editado
-                linhas_reais_para_excluir = edited_df.iloc[linhas_marcadas_idx]["_linha_real"].tolist()
+        
+        if not selecionados.empty:
+            if st.button(
+                f"🗑️ Excluir Selecionados ({len(selecionados)})",
+                type="primary",
+                use_container_width=True
+            ):
+                # Agora pega diretamente a coluna _linha_real (sem iloc errado)
+                linhas_reais_para_excluir = selecionados["_linha_real"].astype(int).tolist()
+                
                 if excluir_pontos_lote(linhas_reais_para_excluir):
                     st.success(f"🗑️ {len(linhas_reais_para_excluir)} registro(s) excluído(s) com sucesso!")
                     st.rerun()
         else:
             st.button("🗑️ Excluir Selecionados", disabled=True, use_container_width=True)
+
 else:
     st.info(f"Nenhum ponto registrado para a data {data_str_selecionada} com os filtros selecionados.")
