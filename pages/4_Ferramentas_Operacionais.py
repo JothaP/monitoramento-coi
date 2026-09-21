@@ -65,7 +65,6 @@ with col2:
     st.markdown("#### 📊 Gerador de Painel")
     st.markdown("**Painéis Operacionais**")
     st.caption("Status: Em desenvolvimento")
-   st.caption("Status: Em desenvolvimento")
     st.button("Em breve", disabled=True, use_container_width=True, key="btn_gerador_painel")
 
 with col3:
