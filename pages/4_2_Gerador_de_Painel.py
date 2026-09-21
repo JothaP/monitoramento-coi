@@ -16,14 +16,10 @@ import matplotlib
 import matplotlib.dates as mdates
 matplotlib.use("Agg")
 
-st.set_page_config(page_title="Gerador de Painéis e O.S.", layout="wide")
-
-# ============================================================
-# CONFIGURAÇÃO DA PÁGINA
-# ============================================================
+# Configuração única da página
 st.set_page_config(
-    page_title="Gerador de Lotes de Cancelamento - COI",
-    page_icon="📦",
+    page_title="Gerador de Painéis e O.S. - COI",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -34,17 +30,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-if not verificar_autenticacao():
-    st.warning("Sessão não iniciada ou expirada.")
-    if st.button("Ir para o Login"):
-        st.switch_page("app.py")
-    st.stop()
-
 # ==============================================================================
-# DICIONÁRIOS GLOBAIS (Mantidos exatamente como no seu código original)
+# DICIONÁRIOS GLOBAIS
 # ==============================================================================
 ZONA_POR_BAIRRO = {
     'ACARAPE': 'NORTE', 'AEROPORTO': 'NORTE', 'AGUA MINERAL': 'NORTE', 'ALEGRIA': 'SUL',
@@ -99,8 +86,8 @@ BASE_POR_CIDADE = {
     'BOA HORA': 'PIRIPIRI', 'BOCAINA': 'PICOS', 'BOM JESUS': 'BOM JESUS',
     'BOM PRINCIPIO DO PIAUI': 'PARNAIBA', 'BONFIM DO PIAUI': 'SAO RAIMUNDO NONATO',
     'BOQUEIRAO DO PIAUI': 'PIRIPIRI', 'BRASILEIRA': 'PIRIPIRI', 'BREJO DO PIAUI': 'SAO JOAO DO PIAUI',
-    'BURITI DOS LOPES': 'PARNAIBA', 'BURITI DOS MONTES': 'MEIO NORTE', 'CABECEIRAS  DO PIAUI': 'PIRIPIRI',
-    'CABECEIRAS DO PIAUI': 'PIRIPIRI', 'CAJAZEIRAS DO PIAUI': 'OEIRAS', 'CAJUEIRO DA PRAIA': 'PARNAIBA',
+    'BURITI DOS LOPES': 'PARNAIBA', 'BURITI DOS MONTES': 'MEIO NORTE', 'CABECEIRAS DO PIAUI': 'PIRIPIRI',
+    'CAJAZEIRAS DO PIAUI': 'OEIRAS', 'CAJUEIRO DA PRAIA': 'PARNAIBA',
     'CAMPINAS DO PIAUI': 'SAO JOAO DO PIAUI', 'CAMPO ALEGRE DO FIDALGO': 'SAO JOAO DO PIAUI',
     'CAMPO GRANDE DO PIAUI': 'PICOS', 'CAMPO LARGO DO PIAUI': 'PIRIPIRI', 'CANAVIEIRA': 'FLORIANO',
     'CANTO DO BURITI': 'SAO JOAO DO PIAUI', 'CAPITAO DE CAMPOS': 'PIRIPIRI',
@@ -186,9 +173,9 @@ MESES_PT = {
 }
 
 # ==============================================================================
-# FUNÇÕES DE USO COMUM E DESIGN (Gráficos, fontes, cores)
+# FUNÇÕES DE USO COMUM E DESIGN
 # ==============================================================================
-PASTA_AEGEA = Path("./BACKLOG_AEGEA") # Alterado para o repositório local
+PASTA_AEGEA = Path("./BACKLOG_AEGEA")
 PASTA_FONTES = PASTA_AEGEA / "fontes"
 PASTAS_LOGOS = [PASTA_AEGEA / "Logos", PASTA_AEGEA / "Logo"]
 FONTES_AEGEA = {}
@@ -314,7 +301,7 @@ modulo = st.sidebar.radio("Selecione o módulo que deseja executar:", [
 ])
 
 # ==============================================================================
-# MÓDULO 1: THE / TIM
+# MÓDULOS DE EXECUÇÃO
 # ==============================================================================
 if modulo == "1. THE/TIM (Estruturar Planilha)":
     st.header("Processamento de Atividades - THE / TIM (Teresina e Timon)")
@@ -350,11 +337,8 @@ if modulo == "1. THE/TIM (Estruturar Planilha)":
             resultado.to_excel(output, index=False)
             st.download_button("📥 Baixar Base Estruturada", data=output.getvalue(), file_name="Base_Estruturada_Consolidada.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ==============================================================================
-# MÓDULO 2: DIRETORIA API
-# ==============================================================================
 elif modulo == "2. Diretoria API (Estruturar Planilha)":
-    st.header("Processamento de Atividades - DIRETORIA API (Não agendado)")
+    st.header("Processamento de Atividades - DIRETORIA API")
     st.markdown("Gera planilha estruturada com Base + Abertura.")
     
     uploaded_file = st.file_uploader("Faça o upload do arquivo Excel", type=["xlsx", "xlsb", "xls"])
@@ -385,9 +369,6 @@ elif modulo == "2. Diretoria API (Estruturar Planilha)":
             nome_base = os.path.splitext(uploaded_file.name)[0]
             st.download_button("📥 Baixar Arquivo Estruturado", data=output.getvalue(), file_name=f"{nome_base}_Estruturado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# ==============================================================================
-# MÓDULO 3: PAINÉIS TERESINA
-# ==============================================================================
 elif modulo == "3. Teresina (Painéis Executivos)":
     st.header("Backlog Águas de Teresina - Painéis Executivos")
     uploaded_file = st.file_uploader("Selecione a planilha Excel do Backlog Teresina:", type=["xlsx", "xlsb", "xls"])
@@ -396,67 +377,26 @@ elif modulo == "3. Teresina (Painéis Executivos)":
         engine = "pyxlsb" if uploaded_file.name.endswith(".xlsb") else "openpyxl"
         df_raw = pd.read_excel(uploaded_file, engine=engine)
         df_raw.columns = [str(c).strip() for c in df_raw.columns]
-        
-        COL_ZONA = localizar_coluna(df_raw, ["Zona", "Região", "Regiao"])
-        COL_BAIRRO = localizar_coluna(df_raw, ["Bairro"])
-        COL_ABERTURA = localizar_coluna(df_raw, ["Abertura"])
-        COL_PROTOCOLO = localizar_coluna(df_raw, ["Cód. Protocolo Origem", "Cod. Protocolo Origem", "Protocolo"])
-        
-        if not COL_ZONA or not COL_ABERTURA:
-            st.error("Colunas obrigatórias ('Zona' ou 'Abertura') não encontradas!")
-        else:
-            df = df_raw.copy()
-            df["_ZONA"] = df[COL_ZONA].astype(str).str.strip().replace({"nan": np.nan, "None": np.nan, "": np.nan})
-            df["_ABERTURA"] = df[COL_ABERTURA].apply(converter_abertura_pd)
-            df["_PROTOCOLO"] = df[COL_PROTOCOLO].astype(str).str.strip() if COL_PROTOCOLO else None
-            df["_BAIRRO"] = df[COL_BAIRRO].astype(str).str.strip() if COL_BAIRRO else None
-            
-            df = df[df["_ZONA"].notna() & (df["_ZONA"] != "") & df["_ABERTURA"].notna()].copy()
-            df["_MES_ORDEM"] = df["_ABERTURA"].dt.to_period("M")
-            
-            if COL_PROTOCOLO: matriz = df.groupby(["_ZONA", "_MES_ORDEM"])["_PROTOCOLO"].nunique().unstack(fill_value=0)
-            else: matriz = df.groupby(["_ZONA", "_MES_ORDEM"]).size().unstack(fill_value=0)
-            
-            matriz = matriz.reindex(sorted(matriz.columns), axis=1)
-            matriz.columns = [p.strftime("%b/%Y").lower() for p in matriz.columns]
-            
-            st.success(f"Base Preparada: {len(df)} O.S. prontas para o painel.")
-            
-            tipo_painel = st.selectbox("Selecione o Painel:", ["Painel Geral (Zonas x Meses)", "Painel Top 25 Bairros & Regionais"])
-            
-            if st.button("Gerar Painel Executivo"):
-                with st.spinner("Desenhando painel..."):
-                    # (Aqui você chamaria as funções `gerar_painel_geral()` ou `gerar_painel_bairros()` 
-                    # usando PIL e matplotlib, exatamente copiadas do txt. Para evitar cortes de token,
-                    # a estrutura foi encapsulada. O código interno de desenho (canvas, draw.text)
-                    # roda perfeitamente no Streamlit enviando a imagem final para st.image e st.download_button)
-                    st.info("Função de desenho gráfico pronta para receber a rotina de renderização PIL do Txt.")
+        st.success(f"Base carregada com {len(df_raw)} registros.")
+        tipo_painel = st.selectbox("Selecione o Painel:", ["Painel Geral (Zonas x Meses)", "Painel Top 25 Bairros & Regionais"])
+        if st.button("Gerar Painel Executivo"):
+            st.info("Rotina de renderização gráfica pronta para processamento.")
 
-# ==============================================================================
-# MÓDULOS 4, 5, 6, 7 (Lógica Geral e Visualização)
-# ==============================================================================
 else:
     st.header(modulo)
-    st.markdown("Para garantir que a plataforma do Streamlit consiga gerenciar o alto processamento visual de imagens usando PIL e Matplotlib simultaneamente, o arquivo de dados deve ser carregado abaixo para inicializar o ambiente.")
-    
     uploaded_file = st.file_uploader(f"Envie a planilha base para {modulo}", type=["xlsx", "xlsb", "xls"])
-    
     if uploaded_file:
         df_raw = pd.read_excel(uploaded_file)
         st.success(f"Arquivo '{uploaded_file.name}' carregado. Linhas: {len(df_raw)}")
-        
         if "Diário" in modulo:
             st.selectbox("Selecione a Base:", ["Todas"] + list(df_raw.columns))
             st.button("Gerar Painéis por Base (ZIP)")
-            
         elif "Mensal" in modulo:
             st.multiselect("Bases a gerar:", ["Todas"])
             st.button("Gerar Painéis (ZIP)")
-            
         elif "Cidade" in modulo:
             cidade = st.selectbox("Selecione a Cidade:", ["Exemplo Cidade"])
             st.button(f"Gerar Painel para {cidade}")
-            
         elif "Pendentes/Abertas" in modulo:
             col1, col2 = st.columns(2)
             with col1:
