@@ -1,78 +1,118 @@
 import streamlit as st
-from datetime import datetime, timedelta
-import json
-import extra_streamlit_components as stx
+from auth import fazer_login, verificar_autenticacao, fazer_logout
 
 # ============================================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÃO DA PÁGINA (Com ocultação da navegação padrão)
 # ============================================================
-TEMPO_SESSAO_HORAS = 8          # ← Tempo de duração da sessão
-COOKIE_NAME = "coi_auth_token"
+st.set_page_config(
+    page_title="Plataforma COI - Hub Central",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-
-def get_manager():
-    return stx.CookieManager(key="coi_cookie_manager")
-
-
-def fazer_login(usuario: str, perfil: str):
-    """Chamado quando o login é bem-sucedido"""
-    cookie_manager = get_manager()
-    
-    expiracao = datetime.now() + timedelta(hours=TEMPO_SESSAO_HORAS)
-    
-    dados = {
-        "autenticado": True,
-        "usuario": usuario,
-        "perfil": perfil,
-        "expira_em": expiracao.isoformat()
-    }
-    
-    cookie_manager.set(
-        COOKIE_NAME,
-        json.dumps(dados),
-        expires_at=datetime.now() + timedelta(days=1)
-    )
-    
-    st.session_state.autenticado = True
-    st.session_state.usuario_logado = usuario
-    st.session_state.perfil = perfil
-
-
-def verificar_autenticacao() -> bool:
+# Oculta a barra lateral automática de páginas do Streamlit
+st.markdown(
     """
-    Restaura a sessão se o cookie ainda for válido.
-    """
-    if st.session_state.get("autenticado") is True:
-        return True
-    
-    cookie_manager = get_manager()
-    cookie = cookie_manager.get(COOKIE_NAME)
-    
-    if not cookie:
-        return False
-    
-    try:
-        dados = json.loads(cookie)
-        expira_em = datetime.fromisoformat(dados["expira_em"])
-        
-        if datetime.now() < expira_em:
-            st.session_state.autenticado = True
-            st.session_state.usuario_logado = dados.get("usuario", "")
-            st.session_state.perfil = dados.get("perfil", "")
-            return True
-        else:
-            cookie_manager.delete(COOKIE_NAME)
-            return False
-            
-    except Exception:
-        cookie_manager.delete(COOKIE_NAME)
-        return False
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
+# ============================================================
+# CREDENCIAIS DO SECRETS
+# ============================================================
+SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin2026")
+SENHA_USUARIO = st.secrets.get("SENHA_USUARIO", "coi2026")
 
-def fazer_logout():
-    """Limpa a sessão e o cookie"""
-    cookie_manager = get_manager()
-    cookie_manager.delete(COOKIE_NAME)
+# ============================================================
+# CONTROLE DE SESSÃO (com Cookie)
+# ============================================================
+# Tenta restaurar a sessão automaticamente
+verificar_autenticacao()
+
+# ============================================================
+# TELA DE LOGIN
+# ============================================================
+if not st.session_state.get("autenticado"):
+    st.title("🔐 Acesso Restrito - Plataforma COI")
+    st.markdown("Por favor, insira a senha de acesso para continuar.")
+
+    with st.form("form_login"):
+        senha_digitada = st.text_input("Senha de Acesso", type="password")
+        botao_login = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+
+        if botao_login:
+            if senha_digitada == SENHA_ADMIN:
+                fazer_login(usuario="admin", perfil="admin")
+                st.success("Login de Administrador realizado com sucesso!")
+                st.rerun()
+            elif senha_digitada == SENHA_USUARIO:
+                fazer_login(usuario="operador", perfil="usuario")
+                st.success("Login de Usuário realizado com sucesso!")
+                st.rerun()
+            else:
+                st.error("❌ Senha incorreta. Tente novamente.")
     
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    st.stop()
+
+# ============================================================
+# HUB CENTRAL (APÓS O LOGIN)
+# ============================================================
+perfil_atual = st.session_state.perfil.upper()
+st.write(f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**")
+st.divider()
+
+st.markdown("### Selecione o módulo desejado:")
+st.markdown("")
+
+col1, col2, col3, col4 = st.columns(4)
+
+# MÓDULO 1 (Liberado para todos)
+with col1:
+    st.markdown("#### 🗺️ Módulo 1")
+    st.markdown("**Baixa Pressão**")
+    st.caption("Status: Ativo para todos")
+    if st.button("Acessar Baixa Pressão", type="primary", use_container_width=True):
+        st.switch_page("pages/1_Baixa_Pressao.py")
+
+# MÓDULO 2 (Liberado para todos)
+with col2:
+    st.markdown("#### 📊 Módulo 2")
+    st.markdown("**Mapeamento de Pressão**")
+    st.caption("Status: Ativo para todos")
+    if st.button("Acessar Mapeamento", type="primary", use_container_width=True):
+        st.switch_page("pages/2_Mapeamento_Pressao.py")
+
+# MÓDULO 3 (Restrito a Admin)
+with col3:
+    st.markdown("#### ⚙️ Módulo 3")
+    st.markdown("**Vazão de Poços**")
+    if st.session_state.perfil == "admin":
+        st.caption("Status: Em desenvolvimento (Admin)")
+        if st.button("Acessar Vazão de Poços", use_container_width=True):
+            st.switch_page("pages/3_Vazao_Pocos.py")
+    else:
+        st.caption("Status: Em desenvolvimento")
+        st.button("Acessar Vazão de Poços", disabled=True, use_container_width=True)
+        st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
+
+# MÓDULO 4 - NOVO (Ferramentas Operacionais)
+with col4:
+    st.markdown("#### 🛠️ Módulo 4")
+    st.markdown("**Ferramentas Operacionais**")
+    st.caption("Status: Ativo para todos")
+    if st.button("Acessar Ferramentas", type="primary", use_container_width=True):
+        st.switch_page("pages/4_Ferramentas_Operacionais.py")
+
+st.divider()
+
+# Botão de Logout
+if st.button("Encerrar Sessão / Sair"):
+    fazer_logout()
+    st.success("Sessão encerrada com sucesso!")
+    st.rerun()
