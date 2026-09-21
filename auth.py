@@ -6,12 +6,15 @@ import extra_streamlit_components as stx
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
-TEMPO_SESSAO_HORAS = 8          # ← Tempo de duração da sessão
+TEMPO_SESSAO_HORAS = 8          # Tempo de duração da sessão
 COOKIE_NAME = "coi_auth_token"
 
 
 def get_manager():
-    return stx.CookieManager(key="coi_cookie_manager")
+    """Garante que o CookieManager seja criado apenas uma vez"""
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = stx.CookieManager(key="coi_cookie_manager")
+    return st.session_state.cookie_manager
 
 
 def fazer_login(usuario: str, perfil: str):
@@ -74,5 +77,7 @@ def fazer_logout():
     cookie_manager = get_manager()
     cookie_manager.delete(COOKIE_NAME)
     
-    for key in list(st.session_state.keys()):
+    # Limpa todo o session_state (exceto o próprio cookie_manager se quiser)
+    keys_to_delete = [k for k in st.session_state.keys() if k != "cookie_manager"]
+    for key in keys_to_delete:
         del st.session_state[key]
