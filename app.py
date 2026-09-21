@@ -101,15 +101,19 @@ with col3:
         st.button("Acessar Vazão de Poços", disabled=True, use_container_width=True)
         st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
 
-# MÓDULO 4 - NOVO (Ferramentas Operacionais)
+# MÓDULO 4 - Ferramentas Operacionais (Restrito a Admin)
 with col4:
     st.markdown("#### 🛠️ Módulo 4")
     st.markdown("**Ferramentas Operacionais**")
-    st.caption("Status: Ativo para todos")
-    if st.button("Acessar Ferramentas", type="primary", use_container_width=True):
-        st.switch_page("pages/4_Ferramentas_Operacionais.py")
-
-st.divider()
+    
+    if st.session_state.perfil == "admin":
+        st.caption("Status: Ativo (Admin)")
+        if st.button("Acessar Ferramentas", type="primary", use_container_width=True):
+            st.switch_page("pages/4_Ferramentas_Operacionais.py")
+    else:
+        st.caption("Status: Em desenvolvimento")
+        st.button("Acessar Ferramentas", disabled=True, use_container_width=True)
+        st.markdown("<p style='font-size:12px; color:gray;'>🔒 Restrito a administradores</p>", unsafe_allow_html=True)
 
 # Botão de Logout
 if st.button("Encerrar Sessão / Sair"):
