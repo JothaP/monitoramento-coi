@@ -65,8 +65,8 @@ with col2:
     st.markdown("#### 📊 Gerador de Painel")
     st.markdown("**Painéis Operacionais**")
     st.caption("Status: Em desenvolvimento")
-    st.button("Gerador de Painel", type="primary", use_container_width=True, key="btn_gerador_painel"):
-        st.switch_page("pages/4_2_Gerador_de_Painel.py")
+   st.caption("Status: Em desenvolvimento")
+    st.button("Em breve", disabled=True, use_container_width=True, key="btn_gerador_painel")
 
 with col3:
     st.markdown("#### 🃏 Cards Operacionais")
