@@ -58,17 +58,17 @@ with col1:
     st.markdown("#### 📦 Gerador de Lotes")
     st.markdown("**Cancelamento de O.S.**")
     st.caption("Filtragem, Duplicidades, Eventos, Serviços, Acompanhamento e Lista Rápida")
-    if st.button("Acessar Gerador de Lotes", type="primary", use_container_width=True):
+    if st.button("Acessar Gerador de Lotes", type="primary", use_container_width=True, key="btn_gerador_lotes"):
         st.switch_page("pages/4_1_Gerador_Lotes_Cancelamento.py")
 
 with col2:
-    st.markdown("#### 🔧 Em breve")
-    st.markdown("**Ferramenta 2**")
+    st.markdown("#### 📊 Gerador de Painel")
+    st.markdown("**Painéis Operacionais**")
     st.caption("Status: Em desenvolvimento")
-    st.button("Em breve", disabled=True, use_container_width=True)
+    st.button("Em breve", disabled=True, use_container_width=True, key="btn_gerador_painel")
 
 with col3:
-    st.markdown("#### 🔧 Em breve")
-    st.markdown("**Ferramenta 3**")
+    st.markdown("#### 🃏 Cards Operacionais")
+    st.markdown("**Cards e Indicadores**")
     st.caption("Status: Em desenvolvimento")
-    st.button("Em breve", disabled=True, use_container_width=True)
+    st.button("Em breve", disabled=True, use_container_width=True, key="btn_cards_operacionais")
