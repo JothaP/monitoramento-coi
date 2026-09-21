@@ -57,7 +57,7 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("#### 📦 Gerador de Lotes")
     st.markdown("**Cancelamento de O.S.**")
-    st.caption("Filtragem, Duplicidades, Eventos, Serviços, Acompanhamento e Lista Rápida")
+    st.caption("Status: Ativo")
     if st.button("Acessar Gerador de Lotes", type="primary", use_container_width=True, key="btn_gerador_lotes"):
         st.switch_page("pages/4_1_Gerador_Lotes_Cancelamento.py")
 
@@ -65,7 +65,8 @@ with col2:
     st.markdown("#### 📊 Gerador de Painel")
     st.markdown("**Painéis Operacionais**")
     st.caption("Status: Em desenvolvimento")
-    st.button("Em breve", disabled=True, use_container_width=True, key="btn_gerador_painel")
+    st.button("Gerador de Painel", type="primary", use_container_width=True, key="btn_gerador_painel"):
+        st.switch_page("pages/4_2_Gerador_de_Painel.py")
 
 with col3:
     st.markdown("#### 🃏 Cards Operacionais")
