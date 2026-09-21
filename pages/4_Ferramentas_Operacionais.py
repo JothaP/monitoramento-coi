@@ -11,7 +11,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Oculta a navegação padrão do Streamlit
 st.markdown(
     """
     <style>
@@ -49,8 +48,27 @@ with st.sidebar:
 # ÁREA PRINCIPAL
 # ============================================================
 st.title("🛠️ Ferramentas Operacionais")
-st.caption("Módulo destinado a ferramentas auxiliares da operação.")
+st.caption("Selecione a ferramenta desejada:")
 
 st.divider()
 
-st.info("Este módulo está pronto para receber as ferramentas. Me diga quais funcionalidades você deseja implementar aqui.")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown("#### 📦 Gerador de Lotes")
+    st.markdown("**Cancelamento de O.S.**")
+    st.caption("Filtragem, Duplicidades, Eventos, Serviços, Acompanhamento e Lista Rápida")
+    if st.button("Acessar Gerador de Lotes", type="primary", use_container_width=True):
+        st.switch_page("pages/4_1_Gerador_Lotes_Cancelamento.py")
+
+with col2:
+    st.markdown("#### 🔧 Em breve")
+    st.markdown("**Ferramenta 2**")
+    st.caption("Status: Em desenvolvimento")
+    st.button("Em breve", disabled=True, use_container_width=True)
+
+with col3:
+    st.markdown("#### 🔧 Em breve")
+    st.markdown("**Ferramenta 3**")
+    st.caption("Status: Em desenvolvimento")
+    st.button("Em breve", disabled=True, use_container_width=True)
