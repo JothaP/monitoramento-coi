@@ -1,1 +1,17 @@
 
+import streamlit as st
+
+st.set_page_config(page_title="Vazão de Poços - COI", page_icon="⚙️", layout="wide")
+
+# Verificação segura de sessão e perfil de administrador
+if "autenticado" not in st.session_state or not st.session_state.autenticado:
+    st.warning("Sessão não iniciada ou expirada.")
+    if st.button("Ir para o Login"):
+        st.switch_page("app.py")
+    st.stop()
+
+if st.sidebar.button("🏠 Voltar ao Menu Principal"):
+    st.switch_page("app.py")
+
+st.title("⚙️ Módulo 4 - Ferramentas Operacionais (Em Desenvolvimento)")
+st.info("Painel restrito para testes do administrador.")
