@@ -169,7 +169,6 @@ def carregar_dados() -> pd.DataFrame:
     cabecalhos = [normalizar_coluna(c) for c in cabecalhos_raw]
 
     registros = []
-    # Armazenamos o índice real da planilha do Google (linha física = index_planilha + 2)
     for idx_linha, linha in enumerate(valores[1:], start=0):
         if not any(str(c).strip() for c in linha):
             continue
@@ -251,7 +250,6 @@ def atualizar_ponto(linha_real: int, data_str: str, municipio: str, pontos: str,
 
 def excluir_pontos_lote(linhas_reais: list) -> bool:
     try:
-        # Ordena em ordem decrescente para excluir de baixo para cima sem alterar o índice das linhas superiores
         linhas_ordenadas = sorted([r + 2 for r in linhas_reais], reverse=True)
         for r in linhas_ordenadas:
             worksheet.delete_rows(r)
@@ -706,46 +704,45 @@ if st.session_state.modo_adicionar_mapa and map_data and map_data.get("last_clic
 st.divider()
 
 # ============================================================
-# TABELA E GERENCIAMENTO (EDIÇÃO E EXCLUSÃO MÚLTIPLA)
+# TABELA E GERENCIAMENTO (EDIÇÃO E EXCLUSÃO MÚLTIPLA UNIFICADAS)
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 if not df_filtrado.empty:
-    # Adiciona coluna de seleção (checkbox) na tabela para exclusão múltipla
+    # Prepara o dataframe para exibição única sem sobreposições
     df_show = df_filtrado[COLUNAS_PADRAO].copy()
     df_show.insert(0, "Selecionar", False)
     
-    # Usamos st.data_editor para permitir marcar checkboxes
+    # Única tabela interativa da tela (sem st.dataframe embaixo)
     edited_df = st.data_editor(
         df_show,
         use_container_width=True,
-        height=300,
+        height=350,
         disabled=COLUNAS_PADRAO,
-        key="editor_tabela_map"
+        key="editor_tabela_map_unificado"
     )
 
-    # Identifica quais linhas foram selecionadas pelo checkbox
+    # Identifica linhas marcadas com checkbox para exclusão em lote
     linhas_marcadas_idx = edited_df[edited_df["Selecionar"] == True].index.tolist()
-    
-    # Identifica também a linha selecionada por clique simples caso queira editar
-    evento_selecao = st.dataframe(df_filtrado[COLUNAS_PADRAO], use_container_width=True, height=1, hide_index=True) # apenas referência visual ou seleção única antiga se necessário
 
-    c_edit, c_del, _ = st.columns([1.5, 1.5, 4])
+    c_edit, c_del = st.columns([2, 2])
     
     with c_edit:
-        # Seletor de qual linha editar pelo Ponto/Local exato
-        pontos_disponiveis = df_filtrado["Pontos"].tolist()
-        ponto_para_editar = st.selectbox("Selecionar para Editar", options=["-- Selecione --"] + pontos_disponiveis, key="select_edicao_ponto")
-        if ponto_para_editar != "-- Selecione --":
-            if st.button("✏️ Abrir Edição do Ponto", use_container_width=True):
+        # Seletor baseado nos pontos filtrados atuais para garantir precisão absoluta na edição
+        opcoes_pontos = ["-- Selecione o Ponto --"] + df_filtrado["Pontos"].tolist()
+        ponto_para_editar = st.selectbox("Selecionar Ponto para Editar", options=opcoes_pontos, key="select_edicao_ponto_preciso")
+        
+        if ponto_para_editar != "-- Selecione o Ponto --":
+            if st.button("✏️ Abrir Edição do Ponto Selecionado", type="primary", use_container_width=True):
+                # Pega exatamente a linha real correspondente ao ponto escolhido na tela
                 reg_selecionado = df_filtrado[df_filtrado["Pontos"] == ponto_para_editar].iloc[0]
                 linha_real_alvo = int(reg_selecionado["_linha_real"])
                 modal_editar_ponto(linha_real_alvo)
 
     with c_del:
-        st.markdown("<br>", unsafe_allow_html=True) # Espaçamento visual
+        st.markdown("<br>", unsafe_allow_html=True) # Alinhamento visual
         if len(linhas_marcadas_idx) > 0:
             if st.button(f"🗑️ Excluir Selecionados ({len(linhas_marcadas_idx)})", type="primary", use_container_width=True):
-                # Pega as linhas reais correspondentes na planilha do Google
+                # Mapeia com segurança usando o _linha_real oculto
                 linhas_reais_para_excluir = df_filtrado.iloc[linhas_marcadas_idx]["_linha_real"].tolist()
                 if excluir_pontos_lote(linhas_reais_para_excluir):
                     st.success(f"🗑️ {len(linhas_reais_para_excluir)} registro(s) excluído(s) com sucesso!")
