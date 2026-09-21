@@ -44,12 +44,13 @@ st.markdown(
 # ============================================================
 # TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
-if "autenticado" not in st.session_state or not st.session_state.autenticado:
+from auth import verificar_autenticacao
+
+if not verificar_autenticacao():
     st.warning("Sessão não iniciada ou expirada.")
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
     st.stop()
-
 # ============================================================
 # CONSTANTES
 # ============================================================
