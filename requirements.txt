@@ -8,3 +8,4 @@ simplekml
 streamlit-autorefresh
 plotly
 openpyxl
+extra-streamlit-components
