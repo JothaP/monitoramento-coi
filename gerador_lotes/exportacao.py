@@ -3,11 +3,10 @@ import io
 import pandas as pd
 
 
-# ============================================================
-# GERAR EXCEL
-# ============================================================
-
-def dataframe_para_excel(df):
+def dataframe_para_excel(
+    df,
+    nome_aba="Resultado"
+):
 
     if df is None or df.empty:
         return None
@@ -22,7 +21,7 @@ def dataframe_para_excel(df):
         df.to_excel(
             writer,
             index=False,
-            sheet_name="Resultado"
+            sheet_name=nome_aba
         )
 
     buffer.seek(0)
