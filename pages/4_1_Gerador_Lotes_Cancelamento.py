@@ -11,22 +11,11 @@ from gerador_lotes import (
     limpar_bases,
 )
 
-from gerador_lotes.carregamento import (
-    processar_upload_multiplo,
-)
+from gerador_lotes.carregamento import processar_upload_multiplo
 
-from gerador_lotes.ferramentas.filtragem import (
-    render_filtragem,
-)
+from gerador_lotes.ferramentas.filtragem import render_filtragem
+from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 
-from gerador_lotes.ferramentas.duplicidade import (
-    render_duplicidade,
-)
-
-
-# ============================================================
-# CONFIGURAÇÃO DA PÁGINA
-# ============================================================
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
@@ -47,10 +36,6 @@ st.markdown(
 )
 
 
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-
 if not verificar_autenticacao():
     st.warning("Sessão não iniciada ou expirada.")
 
@@ -60,16 +45,8 @@ if not verificar_autenticacao():
     st.stop()
 
 
-# ============================================================
-# ESTADO
-# ============================================================
-
 inicializar_estado()
 
-
-# ============================================================
-# ROTEAMENTO INTERNO DAS FERRAMENTAS
-# ============================================================
 
 ferramenta_atual = st.session_state.get(
     "ferramenta_atual"
@@ -85,10 +62,6 @@ if ferramenta_atual == "duplicidade":
     render_duplicidade()
     st.stop()
 
-
-# ============================================================
-# SIDEBAR
-# ============================================================
 
 with st.sidebar:
 
@@ -128,10 +101,6 @@ with st.sidebar:
         st.rerun()
 
 
-# ============================================================
-# CABEÇALHO
-# ============================================================
-
 st.title("📦 Gerador de Lotes")
 
 st.caption(
@@ -141,10 +110,6 @@ st.caption(
 
 st.divider()
 
-
-# ============================================================
-# BASES
-# ============================================================
 
 st.markdown("## 🗂️ Bases de Dados")
 
@@ -182,10 +147,6 @@ bases = [
     ),
 ]
 
-
-# ============================================================
-# UPLOAD DAS BASES
-# ============================================================
 
 for nome_base, titulo_base, descricao_base in bases:
 
@@ -227,7 +188,7 @@ for nome_base, titulo_base, descricao_base in bases:
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.success("✅ Carregada")
+            st.success("Carregada")
 
         with col2:
             st.metric(
@@ -266,7 +227,7 @@ for nome_base, titulo_base, descricao_base in bases:
             )
 
         if st.button(
-            f"🗑️ Limpar {titulo_base}",
+            f"Limpar {titulo_base}",
             key=f"limpar_{nome_base}",
         ):
 
@@ -275,16 +236,10 @@ for nome_base, titulo_base, descricao_base in bases:
 
     else:
 
-        st.info(
-            "Nenhum arquivo carregado."
-        )
+        st.info("Nenhum arquivo carregado.")
 
     st.divider()
 
-
-# ============================================================
-# FERRAMENTAS
-# ============================================================
 
 st.markdown("## 🛠️ Ferramentas")
 
@@ -295,10 +250,6 @@ st.caption(
 
 col1, col2, col3 = st.columns(3)
 
-
-# ============================================================
-# FILTRAGEM
-# ============================================================
 
 with col1:
 
@@ -321,16 +272,9 @@ with col1:
         key="btn_acessar_filtragem",
     ):
 
-        st.session_state.ferramenta_atual = (
-            "filtragem"
-        )
-
+        st.session_state.ferramenta_atual = "filtragem"
         st.rerun()
 
-
-# ============================================================
-# DUPLICIDADE
-# ============================================================
 
 with col2:
 
@@ -353,16 +297,9 @@ with col2:
         key="btn_acessar_duplicidade",
     ):
 
-        st.session_state.ferramenta_atual = (
-            "duplicidade"
-        )
-
+        st.session_state.ferramenta_atual = "duplicidade"
         st.rerun()
 
-
-# ============================================================
-# ESPAÇO PARA FUTURAS FERRAMENTAS
-# ============================================================
 
 with col3:
 
@@ -380,23 +317,16 @@ with col3:
     )
 
 
-# ============================================================
-# STATUS DAS BASES
-# ============================================================
-
 st.divider()
 
 st.markdown("## 📊 Status das Bases")
 
-status_col1, status_col2, status_col3 = st.columns(3)
+
+status_colunas = st.columns(3)
 
 for indice, (nome_base, titulo_base, _) in enumerate(bases):
 
-    coluna = [
-        status_col1,
-        status_col2,
-        status_col3,
-    ][indice % 3]
+    coluna = status_colunas[indice % 3]
 
     with coluna:
 
@@ -406,10 +336,7 @@ for indice, (nome_base, titulo_base, _) in enumerate(bases):
 
             st.success(
                 f"{titulo_base}: "
-                f"{len(df):,} registros".replace(
-                    ",",
-                    ".",
-                )
+                f"{len(df):,} registros".replace(",", ".")
             )
 
         else:
@@ -418,26 +345,3 @@ for indice, (nome_base, titulo_base, _) in enumerate(bases):
                 f"{titulo_base}: não carregada"
             )
 ```
-
-Depois de substituir o arquivo, **reinicie o aplicativo**.
-
-A tela do Hub deverá ficar com:
-
-```text
-📦 Gerador de Lotes
-
-🗂️ Bases de Dados
-├── 🔵 API
-├── 🟢 THE
-├── 🔧 Serviços API
-├── 🔧 Serviços THE
-├── 📋 Eventos
-└── 📦 Lotes
-
-🛠️ Ferramentas
-├── 🔎 Filtragem
-├── ♻️ Duplicidade
-└── 🛠️ Serviços
-```
-
-E a Duplicidade só ficará habilitada quando **API ou THE** estiver carregada.
