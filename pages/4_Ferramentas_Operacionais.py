@@ -30,8 +30,15 @@ st.markdown(
 if not verificar_autenticacao():
     st.warning("Sessão não iniciada ou expirada.")
 
-    if st.button("Ir para o Login"):
-        st.switch_page("app.py")
+    if st.button(
+    "Acessar Gerador de Lotes",
+    type="primary",
+    use_container_width=True,
+    key="btn_gerador_lotes"
+):
+    st.switch_page(
+        "pages/4_1_Gerador_Lotes_Cancelamento.py"
+    )
 
     st.stop()
 
