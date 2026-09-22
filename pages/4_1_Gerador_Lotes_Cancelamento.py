@@ -270,32 +270,6 @@ with col1:
         st.session_state.ferramenta_atual = "filtragem"
         st.rerun()
 
-
-with col2:
-
-    st.markdown("### Duplicidade")
-
-    st.caption(
-        "Analise de registros duplicados."
-    )
-
-    pode_analisar_duplicidade = (
-        base_carregada("api")
-        or base_carregada("the")
-    )
-
-    if st.button(
-        "Acessar Duplicidade",
-        type="primary",
-        use_container_width=True,
-        disabled=not pode_analisar_duplicidade,
-        key="btn_acessar_duplicidade",
-    ):
-
-        st.session_state.ferramenta_atual = "duplicidade"
-        st.rerun()
-
-
 with col3:
 
     st.markdown("### Servicos")
