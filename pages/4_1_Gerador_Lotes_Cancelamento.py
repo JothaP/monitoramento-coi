@@ -1,62 +1,34 @@
-```python
-# ============================================================
-# MÓDULO 4.1 — FILTRAGEM / CANCELAMENTO
-# PLATAFORMA COI — GERADOR DE LOTES
-# ============================================================
-#
-# IMPORTANTE:
-# As bases NÃO são carregadas neste módulo.
-#
-# O carregamento é realizado pelo HUB CENTRAL e mantido em:
-#
-#   st.session_state.df_api
-#   st.session_state.df_the
-#
-# O modo operacional é mantido em:
-#
-#   st.session_state.modo_operacao
-#
-# ============================================================
-
-
-# ============================================================
-# IMPORTAÇÕES
-# ============================================================
-
-import io
 import re
 import unicodedata
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from auth import verificar_autenticacao
-
 from gerador_lotes.estado import (
     inicializar_estado,
+    obter_base,
+    base_carregada,
+    limpar_base,
+    limpar_bases,
+    limpar_resultado,
 )
-
-from gerador_lotes.exportacao import (
-    dataframe_para_excel,
-)
+from gerador_lotes.carregamento import processar_upload_multiplo
+from gerador_lotes.exportacao import dataframe_para_excel
 
 
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO
 # ============================================================
 
 st.set_page_config(
-    page_title="Gerador de Lotes - Cancelamento",
+    page_title="Gerador de Lotes - COI",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-
-# ============================================================
-# OCULTA NAVEGAÇÃO PADRÃO DO STREAMLIT
-# ============================================================
 
 st.markdown(
     """
@@ -65,8 +37,21 @@ st.markdown(
             display: none !important;
         }
 
-        .block-container {
-            padding-top: 1.5rem;
+        .base-card {
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+
+        .status-ok {
+            color: #16803c;
+            font-weight: 600;
+        }
+
+        .status-off {
+            color: #777777;
+            font-weight: 600;
         }
     </style>
     """,
@@ -79,22 +64,16 @@ st.markdown(
 # ============================================================
 
 if not verificar_autenticacao():
+    st.warning("Sessão não iniciada ou expirada.")
 
-    st.warning(
-        "Sessão não iniciada ou expirada."
-    )
-
-    if st.button(
-        "Ir para o Login",
-        use_container_width=True,
-    ):
+    if st.button("Ir para o Login"):
         st.switch_page("app.py")
 
     st.stop()
 
 
 # ============================================================
-# ESTADO COMPARTILHADO
+# ESTADO
 # ============================================================
 
 inicializar_estado()
@@ -105,7 +84,6 @@ inicializar_estado()
 # ============================================================
 
 MAPA_ZONAS = {
-
     "ACAUA": 229,
     "AGRICOLANDIA": 1,
     "AGUA BRANCA": 3,
@@ -333,7 +311,6 @@ MAPA_ZONAS = {
     "VERA MENDES": 413,
     "VILA NOVA DO PIAUI": 196,
     "WALL FERRAZ": 309,
-
     "POV SANTA TERESA": 158,
     "POV CALDEIRAOZINHO": 287,
     "POVOADO BURITIZINHO": 233,
@@ -356,13 +333,11 @@ MAPA_ZONAS = {
 
 
 # ============================================================
-# MAPA NORMALIZADO
+# FUNÇÕES DE NORMALIZAÇÃO
 # ============================================================
 
 def normalizar_texto(texto):
-
     if pd.isna(texto):
-
         return ""
 
     texto = str(texto)
@@ -395,15 +370,11 @@ MAPA_ZONAS_NORMALIZADO = {
 }
 
 
-# ============================================================
-# OBTÉM ZONA
-# ============================================================
-
 def obter_zona(cidade):
+    cidade_normalizada = normalizar_texto(cidade)
 
-    cidade_normalizada = normalizar_texto(
-        cidade
-    )
+    if not cidade_normalizada:
+        return None
 
     return MAPA_ZONAS_NORMALIZADO.get(
         cidade_normalizada
@@ -411,138 +382,68 @@ def obter_zona(cidade):
 
 
 # ============================================================
-# LOCALIZA COLUNA
+# LOCALIZAÇÃO DE COLUNAS
 # ============================================================
 
-def localizar_coluna(
-    df,
-    tipo,
-):
-
+def localizar_coluna(df, tipo):
     if df is None or df.empty:
-
         return None
 
-    colunas = list(df.columns)
-
-    normalizadas = {
-        coluna: normalizar_texto(coluna)
-        for coluna in colunas
+    mapa = {
+        normalizar_texto(coluna): coluna
+        for coluna in df.columns
     }
 
-
-    # --------------------------------------------------------
-    # PROTOCOLO
-    # --------------------------------------------------------
-
     if tipo == "protocolo":
+        nome_exato = "COD. PROTOCOLO ORIGEM"
 
-        for coluna, nome in normalizadas.items():
+        if nome_exato in mapa:
+            return mapa[nome_exato]
 
-            if nome == "COD. PROTOCOLO ORIGEM":
-
-                return coluna
-
-        for coluna, nome in normalizadas.items():
-
+        for normalizada, original in mapa.items():
             if (
-                "PROTOCOLO" in nome
-                and
-                "ORIGEM" in nome
+                "PROTOCOLO" in normalizada
+                and "ORIGEM" in normalizada
             ):
-
-                return coluna
-
-
-    # --------------------------------------------------------
-    # MATRÍCULA
-    # --------------------------------------------------------
+                return original
 
     elif tipo == "matricula":
+        if "MATRICULA" in mapa:
+            return mapa["MATRICULA"]
 
-        for coluna, nome in normalizadas.items():
-
-            if nome == "MATRICULA":
-
-                return coluna
-
-        for coluna, nome in normalizadas.items():
-
-            if "MATRICULA" in nome:
-
-                return coluna
-
-
-    # --------------------------------------------------------
-    # CIDADE
-    # --------------------------------------------------------
+        for normalizada, original in mapa.items():
+            if "MATRICULA" in normalizada:
+                return original
 
     elif tipo == "cidade":
-
-        for coluna, nome in normalizadas.items():
-
-            if nome == "CIDADE":
-
-                return coluna
-
-
-    # --------------------------------------------------------
-    # BAIRRO
-    # --------------------------------------------------------
+        if "CIDADE" in mapa:
+            return mapa["CIDADE"]
 
     elif tipo == "bairro":
+        if "BAIRRO" in mapa:
+            return mapa["BAIRRO"]
 
-        for coluna, nome in normalizadas.items():
-
-            if nome == "BAIRRO":
-
-                return coluna
-
-        for coluna, nome in normalizadas.items():
-
-            if "BAIRRO" in nome:
-
-                return coluna
-
-
-    # --------------------------------------------------------
-    # DATA
-    # --------------------------------------------------------
+        for normalizada, original in mapa.items():
+            if "BAIRRO" in normalizada:
+                return original
 
     elif tipo == "data":
+        if "DATA" in mapa:
+            return mapa["DATA"]
 
-        for coluna, nome in normalizadas.items():
+        for normalizada, original in mapa.items():
+            if normalizada.startswith("DATA "):
+                return original
 
-            if nome == "DATA":
+        for normalizada, original in mapa.items():
+            if "DATA" in normalizada:
+                return original
 
-                return coluna
+        if "INICIO DO SLA" in mapa:
+            return mapa["INICIO DO SLA"]
 
-        for coluna, nome in normalizadas.items():
-
-            if nome.startswith("DATA "):
-
-                return coluna
-
-        for coluna, nome in normalizadas.items():
-
-            if "DATA" in nome:
-
-                return coluna
-
-        # ----------------------------------------------------
-        # Compatibilidade com "Início do SLA"
-        # ----------------------------------------------------
-
-        for coluna, nome in normalizadas.items():
-
-            if (
-                "INICIO DO SLA" in nome
-                or
-                "INICIO SLA" in nome
-            ):
-
-                return coluna
-
+        if "INICIO SLA" in mapa:
+            return mapa["INICIO SLA"]
 
     return None
 
@@ -552,9 +453,7 @@ def localizar_coluna(
 # ============================================================
 
 def converter_datas_robusto(serie):
-
     if serie is None:
-
         return pd.Series(
             dtype="datetime64[ns]"
         )
@@ -565,93 +464,73 @@ def converter_datas_robusto(serie):
         dtype="datetime64[ns]",
     )
 
+    mascara_nao_nula = serie.notna()
 
-    # ========================================================
-    # DATETIME / TIMESTAMP
-    # ========================================================
+    if not mascara_nao_nula.any():
+        return resultado
 
-    mascara_datetime = serie.map(
-        lambda valor:
-        isinstance(
+    valores = serie.loc[mascara_nao_nula]
+
+    # --------------------------------------------------------
+    # Datas já reconhecidas como datetime
+    # --------------------------------------------------------
+
+    mascara_datetime = valores.apply(
+        lambda valor: isinstance(
             valor,
             (datetime, pd.Timestamp),
         )
     )
 
-
     if mascara_datetime.any():
-
         resultado.loc[
-            mascara_datetime
+            valores.index[mascara_datetime]
         ] = pd.to_datetime(
-            serie.loc[mascara_datetime],
+            valores.loc[mascara_datetime],
             errors="coerce",
         )
 
+    # --------------------------------------------------------
+    # Números / datas Excel
+    # --------------------------------------------------------
 
-    # ========================================================
-    # EXCEL SERIAL
-    # ========================================================
-
-    mascara_numerica = (
-        ~mascara_datetime
-        &
-        serie.map(
-            lambda valor:
-            isinstance(
-                valor,
-                (int, float),
-            )
-            and not isinstance(
-                valor,
-                bool,
-            )
+    mascara_numerico = valores.apply(
+        lambda valor: (
+            isinstance(valor, (int, float))
+            and not isinstance(valor, bool)
         )
     )
 
-
-    if mascara_numerica.any():
-
-        valores_numericos = pd.to_numeric(
-            serie.loc[mascara_numerica],
+    if mascara_numerico.any():
+        numeros = pd.to_numeric(
+            valores.loc[mascara_numerico],
             errors="coerce",
         )
 
-        resultado.loc[
-            mascara_numerica
-        ] = pd.to_datetime(
-            valores_numericos,
+        convertidos = pd.to_datetime(
+            numeros,
             unit="D",
             origin="1899-12-30",
             errors="coerce",
         )
 
+        resultado.loc[
+            convertidos.index
+        ] = convertidos
 
-    # ========================================================
-    # STRINGS
-    # ========================================================
+    # --------------------------------------------------------
+    # Textos
+    # --------------------------------------------------------
 
-    mascara_texto = (
-        ~mascara_datetime
-        &
-        ~mascara_numerica
-        &
-        serie.notna()
+    mascara_texto = ~(
+        mascara_datetime
+        | mascara_numerico
     )
 
-
     if mascara_texto.any():
-
-        textos = (
-            serie.loc[mascara_texto]
-            .astype(str)
-            .str.strip()
-        )
-
-
-        # ----------------------------------------------------
-        # dd/mm/yyyy HH:MM:SS
-        # ----------------------------------------------------
+        textos = valores.loc[
+            mascara_texto
+        ].astype(str).str.strip()
 
         formatos = [
             "%d/%m/%Y %H:%M:%S",
@@ -662,1179 +541,425 @@ def converter_datas_robusto(serie):
             "%Y-%m-%d",
         ]
 
-
-        convertido = pd.Series(
-            pd.NaT,
-            index=textos.index,
-            dtype="datetime64[ns]",
-        )
-
+        restante = textos.copy()
 
         for formato in formatos:
-
-            mascara_pendente = convertido.isna()
-
-            if not mascara_pendente.any():
+            if restante.empty:
                 break
 
-            convertido.loc[
-                mascara_pendente
-            ] = pd.to_datetime(
-                textos.loc[mascara_pendente],
+            convertidos = pd.to_datetime(
+                restante,
                 format=formato,
                 errors="coerce",
             )
 
+            mascara_convertido = convertidos.notna()
+
+            if mascara_convertido.any():
+                resultado.loc[
+                    convertidos.index[
+                        mascara_convertido
+                    ]
+                ] = convertidos.loc[
+                    mascara_convertido
+                ]
+
+            restante = restante.loc[
+                ~mascara_convertido
+            ]
 
         # ----------------------------------------------------
-        # Última tentativa para valores textuais não
-        # reconhecidos pelos formatos explícitos.
+        # Última tentativa
         # ----------------------------------------------------
 
-        mascara_pendente = convertido.isna()
-
-        if mascara_pendente.any():
-
-            convertido.loc[
-                mascara_pendente
-            ] = pd.to_datetime(
-                textos.loc[mascara_pendente],
+        if not restante.empty:
+            convertidos = pd.to_datetime(
+                restante,
                 errors="coerce",
                 dayfirst=True,
             )
 
-
-        resultado.loc[
-            mascara_texto
-        ] = convertido
-
+            resultado.loc[
+                convertidos.index
+            ] = convertidos
 
     return resultado
 
 
 # ============================================================
-# CONVERSÃO DE HORA
+# CONVERSÃO DE HORÁRIO
 # ============================================================
 
 def converter_hora(valor):
+    if valor is None:
+        return None
 
     valor = str(valor).strip()
 
-    correspondencia = re.fullmatch(
-        r"(\d{1,2}):(\d{2})",
+    if not valor:
+        return None
+
+    if not re.fullmatch(
+        r"\d{1,2}:\d{2}",
         valor,
-    )
-
-    if not correspondencia:
-
-        raise ValueError(
-            f"Horário inválido: '{valor}'. "
-            "Use HH:MM."
-        )
-
-
-    hora = int(
-        correspondencia.group(1)
-    )
-
-    minuto = int(
-        correspondencia.group(2)
-    )
-
-
-    if not (
-        0 <= hora <= 23
-        and
-        0 <= minuto <= 59
     ):
-
         raise ValueError(
             f"Horário inválido: '{valor}'. "
             "Use HH:MM."
         )
 
+    hora, minuto = map(
+        int,
+        valor.split(":"),
+    )
+
+    if hora < 0 or hora > 23:
+        raise ValueError(
+            f"Horário inválido: '{valor}'. "
+            "A hora deve estar entre 00 e 23."
+        )
+
+    if minuto < 0 or minuto > 59:
+        raise ValueError(
+            f"Horário inválido: '{valor}'. "
+            "Os minutos devem estar entre 00 e 59."
+        )
 
     return time(
-        hora,
-        minuto,
+        hour=hora,
+        minute=minuto,
     )
 
 
 # ============================================================
-# PARSE DO PROTOCOLO
+# PROTOCOLO
 # ============================================================
 
 def parse_protocolo(proto):
-
     if pd.isna(proto):
-
         return "", "", None
 
     texto = str(proto).strip()
 
-    correspondencia = re.search(
+    match = re.search(
         r"(\d+)\s*/\s*(\d{4})",
         texto,
     )
 
-    if not correspondencia:
-
+    if not match:
         return "", "", None
 
+    numero_str = match.group(1)
+    ano_str = match.group(2)
 
-    numero = (
-        correspondencia.group(1)
-    )
-
-    ano = (
-        correspondencia.group(2)
-    )
-
-    numero_int = int(
-        numero
-    )
-
+    try:
+        numero_int = int(numero_str)
+    except Exception:
+        return "", "", None
 
     return (
-        numero,
-        ano,
+        numero_str,
+        ano_str,
         numero_int,
     )
-
-
-# ============================================================
-# ESTADO ESPECÍFICO DA FERRAMENTA
-# ============================================================
-
-def inicializar_estado_filtragem():
-
-    valores_padrao = {
-
-        "filtro_cidades": [],
-        "filtro_bairros": [],
-        "filtro_anos": [],
-        "filtro_meses": [],
-        "filtro_dias": [],
-
-        "hora_inicio": "00:00",
-        "hora_fim": "23:59",
-
-        "observacoes_filtragem": "",
-
-        "filtragem_preview": None,
-        "filtragem_etapas": [],
-        "filtragem_total_inicial": 0,
-
-        "filtragem_geracao_info": None,
-    }
-
-
-    for chave, valor in valores_padrao.items():
-
-        if chave not in st.session_state:
-
-            if isinstance(
-                valor,
-                list,
-            ):
-
-                st.session_state[chave] = (
-                    valor.copy()
-                )
-
-            else:
-
-                st.session_state[chave] = valor
-
-
-# ============================================================
-# OBTÉM MODO ATIVO
-# ============================================================
-
-def obter_modo_atual():
-
-    modo = str(
-        st.session_state.get(
-            "modo_operacao",
-            "API",
-        )
-    ).upper().strip()
-
-
-    if modo not in (
-        "API",
-        "THE",
-    ):
-
-        modo = "API"
-
-
-    return modo
-
-
-# ============================================================
-# OBTÉM BASE ATIVA
-# ============================================================
-
-def obter_backlog_filtragem(
-    modo=None,
-):
-
-    if modo is None:
-
-        modo = obter_modo_atual()
-
-
-    modo = str(
-        modo
-    ).upper().strip()
-
-
-    if modo == "THE":
-
-        return st.session_state.get(
-            "df_the"
-        )
-
-
-    return st.session_state.get(
-        "df_api"
-    )
-
-
-# ============================================================
-# COLUNAS DISPONÍVEIS
-# ============================================================
-
-def obter_colunas_filtragem(df):
-
-    if df is None or df.empty:
-
-        return {
-            "cidade": None,
-            "bairro": None,
-            "data": None,
-            "protocolo": None,
-            "matricula": None,
-        }
-
-
-    return {
-
-        "cidade": localizar_coluna(
-            df,
-            "cidade",
-        ),
-
-        "bairro": localizar_coluna(
-            df,
-            "bairro",
-        ),
-
-        "data": localizar_coluna(
-            df,
-            "data",
-        ),
-
-        "protocolo": localizar_coluna(
-            df,
-            "protocolo",
-        ),
-
-        "matricula": localizar_coluna(
-            df,
-            "matricula",
-        ),
-    }
 
 
 # ============================================================
 # VALORES ÚNICOS
 # ============================================================
 
-def obter_valores_unicos(
-    df,
-    coluna,
-):
-
+def obter_valores_unicos(df, coluna):
     if (
         df is None
-        or df.empty
         or coluna is None
+        or coluna not in df.columns
     ):
-
         return []
 
+    valores = df[coluna].dropna()
 
-    valores = (
-        df[coluna]
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
+    resultado = {}
+    for valor in valores:
+        texto = str(valor).strip()
 
+        if not texto:
+            continue
 
-    valores = valores[
-        ~valores.str.lower().isin(
-            {
-                "",
-                "nan",
-                "none",
-                "null",
-            }
-        )
+        if texto.lower() in {
+            "nan",
+            "none",
+            "null",
+        }:
+            continue
+
+        chave = normalizar_texto(texto)
+
+        if chave not in resultado:
+            resultado[chave] = texto
+
+    return [
+        resultado[chave]
+        for chave in sorted(resultado.keys())
     ]
 
 
-    resultado = {}
+# ============================================================
+# FILTROS
+# ============================================================
 
-
-    for valor in valores:
-
-        normalizado = normalizar_texto(
-            valor
-        )
-
-        if not normalizado:
-            continue
-
-        if normalizado not in resultado:
-
-            resultado[normalizado] = valor
-
-
-    return sorted(
-        resultado.values(),
-        key=normalizar_texto,
+def obter_modo_atual():
+    modo = st.session_state.get(
+        "modo_operacao",
+        "API",
     )
 
+    if modo not in {"API", "THE"}:
+        modo = "API"
 
-# ============================================================
-# CIDADES
-# ============================================================
-
-def obter_cidades_filtragem(df):
-
-    col_cidade = localizar_coluna(
-        df,
-        "cidade",
-    )
-
-    return obter_valores_unicos(
-        df,
-        col_cidade,
-    )
+    return modo
 
 
-# ============================================================
-# BAIRROS
-# ============================================================
+def obter_backlog_filtragem(modo):
+    if modo == "THE":
+        return obter_base("the")
 
-def obter_bairros_filtragem(
-    df,
-    cidades_selecionadas=None,
-):
+    return obter_base("api")
 
-    col_bairro = localizar_coluna(
-        df,
-        "bairro",
-    )
-
-
-    if col_bairro is None:
-
-        return []
-
-
-    base = df.copy()
-
-
-    cidades_selecionadas = (
-        cidades_selecionadas
-        or []
-    )
-
-
-    if cidades_selecionadas:
-
-        col_cidade = localizar_coluna(
-            df,
-            "cidade",
-        )
-
-
-        if col_cidade is not None:
-
-            cidades_norm = {
-                normalizar_texto(cidade)
-                for cidade
-                in cidades_selecionadas
-            }
-
-
-            mascara = (
-                df[col_cidade]
-                .map(normalizar_texto)
-                .isin(cidades_norm)
-            )
-
-
-            base = df.loc[
-                mascara
-            ]
-
-
-    return obter_valores_unicos(
-        base,
-        col_bairro,
-    )
-
-
-# ============================================================
-# ANOS
-# ============================================================
-
-def obter_anos_filtragem(df):
-
-    col_data = localizar_coluna(
-        df,
-        "data",
-    )
-
-
-    if col_data is None:
-
-        return []
-
-
-    datas = converter_datas_robusto(
-        df[col_data]
-    )
-
-
-    anos = (
-        datas
-        .dropna()
-        .dt.year
-        .astype(int)
-        .unique()
-        .tolist()
-    )
-
-
-    anos.sort()
-
-    return anos
-
-
-# ============================================================
-# MESES
-# ============================================================
-
-MESES_FILTRAGEM = {
-
-    1: "Janeiro",
-    2: "Fevereiro",
-    3: "Março",
-    4: "Abril",
-    5: "Maio",
-    6: "Junho",
-    7: "Julho",
-    8: "Agosto",
-    9: "Setembro",
-    10: "Outubro",
-    11: "Novembro",
-    12: "Dezembro",
-}
-
-
-def obter_meses_filtragem():
-
-    return list(
-        MESES_FILTRAGEM.keys()
-    )
-
-
-# ============================================================
-# DIAS
-# ============================================================
-
-def obter_dias_filtragem():
-
-    return list(
-        range(
-            1,
-            32,
-        )
-    )
-
-
-# ============================================================
-# APLICA FILTROS
-# ============================================================
 
 def aplicar_filtros_filtragem(
-    df_consolidado,
+    df,
+    coluna_cidade,
+    coluna_bairro,
+    coluna_data,
+    cidades,
+    bairros,
+    ano,
+    meses,
+    dias,
+    hora_inicial,
+    hora_final,
 ):
+    if df is None or df.empty:
+        return df
 
-    if df_consolidado is None:
+    resultado = df.copy()
 
-        raise ValueError(
-            "Nenhum arquivo foi carregado."
-        )
-
-
-    if df_consolidado.empty:
-
-        raise ValueError(
-            "A base carregada está vazia."
-        )
-
-
-    df = (
-        df_consolidado
-        .copy()
-    )
-
-
-    total_inicial = len(
-        df
-    )
-
-
-    col_cidade = localizar_coluna(
-        df,
-        "cidade",
-    )
-
-    col_bairro = localizar_coluna(
-        df,
-        "bairro",
-    )
-
-    col_data = localizar_coluna(
-        df,
-        "data",
-    )
-
-
-    etapas = []
-
-
-    # ========================================================
+    # --------------------------------------------------------
     # CIDADE
-    # ========================================================
+    # --------------------------------------------------------
 
-    cidades_selecionadas = list(
-        st.session_state.get(
-            "filtro_cidades",
-            [],
-        )
-    )
-
-
-    if cidades_selecionadas:
-
-        if col_cidade is None:
-
-            raise ValueError(
-                "A planilha não possui a coluna Cidade."
-            )
-
-
-        cidades_norm = {
-            normalizar_texto(cidade)
-            for cidade
-            in cidades_selecionadas
+    if cidades and coluna_cidade:
+        cidades_normalizadas = {
+            normalizar_texto(valor)
+            for valor in cidades
         }
 
-
-        mascara = (
-            df[col_cidade]
-            .map(normalizar_texto)
-            .isin(cidades_norm)
-        )
-
-
-        df = df.loc[
-            mascara
+        resultado = resultado[
+            resultado[coluna_cidade].apply(
+                normalizar_texto
+            ).isin(cidades_normalizadas)
         ]
 
-
-        etapas.append(
-            (
-                "Cidade",
-                len(df),
-            )
-        )
-
-
-    # ========================================================
+    # --------------------------------------------------------
     # BAIRRO
-    # ========================================================
+    # --------------------------------------------------------
 
-    bairros_selecionados = list(
-        st.session_state.get(
-            "filtro_bairros",
-            [],
-        )
-    )
-
-
-    if bairros_selecionados:
-
-        if col_bairro is None:
-
-            raise ValueError(
-                "A planilha não possui a coluna Bairro."
-            )
-
-
-        bairros_norm = {
-            normalizar_texto(bairro)
-            for bairro
-            in bairros_selecionados
+    if bairros and coluna_bairro:
+        bairros_normalizados = {
+            normalizar_texto(valor)
+            for valor in bairros
         }
 
-
-        mascara = (
-            df[col_bairro]
-            .map(normalizar_texto)
-            .isin(bairros_norm)
-        )
-
-
-        df = df.loc[
-            mascara
+        resultado = resultado[
+            resultado[coluna_bairro].apply(
+                normalizar_texto
+            ).isin(bairros_normalizados)
         ]
 
+    # --------------------------------------------------------
+    # DATA / HORA
+    # --------------------------------------------------------
 
-        etapas.append(
-            (
-                "Bairro",
-                len(df),
-            )
-        )
-
-
-    # ========================================================
-    # DATA / HORÁRIO
-    # ========================================================
-
-    anos_selecionados = list(
-        st.session_state.get(
-            "filtro_anos",
-            [],
-        )
+    existe_filtro_temporal = (
+        ano is not None
+        or bool(meses)
+        or bool(dias)
+        or hora_inicial is not None
+        or hora_final is not None
     )
 
-
-    meses_selecionados = list(
-        st.session_state.get(
-            "filtro_meses",
-            [],
-        )
-    )
-
-
-    dias_selecionados = list(
-        st.session_state.get(
-            "filtro_dias",
-            [],
-        )
-    )
-
-
-    inicio = converter_hora(
-        st.session_state.get(
-            "hora_inicio",
-            "00:00",
-        )
-    )
-
-
-    fim = converter_hora(
-        st.session_state.get(
-            "hora_fim",
-            "23:59",
-        )
-    )
-
-
-    horario_restrito = not (
-        inicio == time(0, 0)
-        and
-        fim == time(23, 59)
-    )
-
-
-    precisa_data = (
-        bool(anos_selecionados)
-        or
-        bool(meses_selecionados)
-        or
-        bool(dias_selecionados)
-        or
-        horario_restrito
-    )
-
-
-    if precisa_data:
-
-        if col_data is None:
-
+    if existe_filtro_temporal:
+        if not coluna_data:
             raise ValueError(
-                "A planilha não possui uma coluna de data "
-                "identificável. A ferramenta procura "
-                "'DATA' ou 'Início do SLA'."
+                "Não foi encontrada uma coluna de data "
+                "para aplicar os filtros temporais."
             )
-
 
         datas = converter_datas_robusto(
-            df[col_data]
+            resultado[coluna_data]
         )
 
-
-        # ====================================================
-        # ANO
-        # ====================================================
-
-        if anos_selecionados:
-
-            anos = {
-                int(ano)
-                for ano
-                in anos_selecionados
-            }
-
-
-            mascara = (
-                datas.dt.year
-                .isin(anos)
-            )
-
-
-            df = df.loc[
-                mascara
+        if ano is not None:
+            resultado = resultado[
+                datas.dt.year == ano
             ]
 
-
-            datas = converter_datas_robusto(
-                df[col_data]
-            )
-
-
-            etapas.append(
-                (
-                    "Ano",
-                    len(df),
-                )
-            )
-
-
-        # ====================================================
-        # MÊS
-        # ====================================================
-
-        if meses_selecionados:
-
-            meses = {
-                int(mes)
-                for mes
-                in meses_selecionados
-            }
-
-
-            mascara = (
-                datas.dt.month
-                .isin(meses)
-            )
-
-
-            df = df.loc[
-                mascara
+            datas = datas.loc[
+                resultado.index
             ]
 
-
-            datas = converter_datas_robusto(
-                df[col_data]
-            )
-
-
-            etapas.append(
-                (
-                    "Mês",
-                    len(df),
-                )
-            )
-
-
-        # ====================================================
-        # DIA
-        # ====================================================
-
-        if dias_selecionados:
-
-            dias = {
-                int(dia)
-                for dia
-                in dias_selecionados
-            }
-
-
-            mascara = (
-                datas.dt.day
-                .isin(dias)
-            )
-
-
-            df = df.loc[
-                mascara
+        if meses:
+            resultado = resultado[
+                datas.dt.month.isin(meses)
             ]
 
+            datas = datas.loc[
+                resultado.index
+            ]
 
-            datas = converter_datas_robusto(
-                df[col_data]
-            )
+        if dias:
+            resultado = resultado[
+                datas.dt.day.isin(dias)
+            ]
 
+            datas = datas.loc[
+                resultado.index
+            ]
 
-            etapas.append(
-                (
-                    "Dia",
-                    len(df),
-                )
-            )
+        if (
+            hora_inicial is not None
+            or hora_final is not None
+        ):
+            horas = datas.dt.time
 
-
-        # ====================================================
-        # HORÁRIO
-        # ====================================================
-
-        if horario_restrito:
-
-            inicio_segundos = (
-                inicio.hour * 3600
-                +
-                inicio.minute * 60
-            )
-
-
-            fim_segundos = (
-                fim.hour * 3600
-                +
-                fim.minute * 60
-                +
-                59
-            )
-
-
-            segundos = (
-                datas.dt.hour * 3600
-                +
-                datas.dt.minute * 60
-                +
-                datas.dt.second
-            )
-
-
-            if inicio_segundos <= fim_segundos:
-
-                mascara_horario = (
-                    datas.notna()
-                    &
-                    (
-                        segundos
-                        >=
-                        inicio_segundos
+            if (
+                hora_inicial is not None
+                and hora_final is not None
+            ):
+                if hora_inicial <= hora_final:
+                    mascara_hora = (
+                        (horas >= hora_inicial)
+                        & (horas <= hora_final)
                     )
-                    &
-                    (
-                        segundos
-                        <=
-                        fim_segundos
+                else:
+                    mascara_hora = (
+                        (horas >= hora_inicial)
+                        | (horas <= hora_final)
                     )
+
+            elif hora_inicial is not None:
+                mascara_hora = (
+                    horas >= hora_inicial
                 )
 
             else:
-
-                mascara_horario = (
-                    datas.notna()
-                    &
-                    (
-                        (
-                            segundos
-                            >=
-                            inicio_segundos
-                        )
-                        |
-                        (
-                            segundos
-                            <=
-                            fim_segundos
-                        )
-                    )
+                mascara_hora = (
+                    horas <= hora_final
                 )
 
-
-            df = df.loc[
-                mascara_horario
+            resultado = resultado[
+                mascara_hora
             ]
 
-
-            etapas.append(
-                (
-                    "Horário",
-                    len(df),
-                )
-            )
-
-
-    df_filtrado_atual = (
-        df
-        .reset_index(drop=True)
-    )
-
-
-    return (
-        df_filtrado_atual,
-        etapas,
-        total_inicial,
-    )
+    return resultado.reset_index(drop=True)
 
 
 # ============================================================
 # GERAÇÃO DO LOTE
 # ============================================================
 
-def gerar_lote_filtragem():
-
-    modo = obter_modo_atual()
-
-
-    df_consolidado = (
-        obter_backlog_filtragem(
-            modo
-        )
-    )
-
-
-    if df_consolidado is None:
-
-        raise ValueError(
-            f"Nenhuma base do modo {modo} foi carregada."
+def gerar_lote_filtragem(
+    df_filtrado,
+    modo,
+    coluna_protocolo,
+    coluna_matricula,
+    coluna_cidade,
+):
+    if df_filtrado is None or df_filtrado.empty:
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
         )
 
-
-    if df_consolidado.empty:
-
-        raise ValueError(
-            f"A base {modo} está vazia."
-        )
-
-
-    # ========================================================
-    # APLICA FILTROS
-    # ========================================================
-
-    (
-        df_filtrado,
-        etapas,
-        total_inicial,
-    ) = aplicar_filtros_filtragem(
-        df_consolidado
-    )
-
-
-    st.session_state.filtragem_total_inicial = (
-        total_inicial
-    )
-
-    st.session_state.filtragem_etapas = (
-        etapas
-    )
-
-    st.session_state.filtragem_preview = (
-        df_filtrado.copy()
-    )
-
-
-    if df_filtrado.empty:
-
-        st.session_state.df_resultado = None
-        st.session_state.df_log = None
-        st.session_state.nome_arquivo_resultado = None
-
-        raise ValueError(
-            "Nenhuma O.S. foi encontrada "
-            "com os filtros selecionados."
-        )
-
-
-    # ========================================================
-    # LOCALIZA COLUNAS
-    # ========================================================
-
-    col_protocolo = localizar_coluna(
-        df_filtrado,
-        "protocolo",
-    )
-
-    col_matricula = localizar_coluna(
-        df_filtrado,
-        "matricula",
-    )
-
-    col_cidade = localizar_coluna(
-        df_filtrado,
-        "cidade",
-    )
-
-
-    if col_protocolo is None:
-
-        raise ValueError(
-            "A planilha não possui a coluna "
-            "'COD. PROTOCOLO ORIGEM'."
-        )
-
-
-    if col_matricula is None:
-
-        raise ValueError(
-            "A planilha não possui a coluna "
-            "'MATRICULA'."
-        )
-
-
-    if col_cidade is None:
-
-        raise ValueError(
-            "A planilha não possui a coluna "
-            "'CIDADE'."
-        )
-
-
-    # ========================================================
-    # OBSERVAÇÃO
-    # ========================================================
-
-    observacao = str(
-        st.session_state.get(
-            "observacoes_filtragem",
-            "",
-        )
-    ).strip()
-
-
-    cidades_sem_zona = []
-    protocolos_invalidos = []
-
-    resultados = []
-
-
-    # ========================================================
-    # PROCESSAMENTO
-    # ========================================================
+    registros = []
+    logs = []
 
     for _, linha in df_filtrado.iterrows():
 
-        matricula = linha[
-            col_matricula
-        ]
-
-        cidade = linha[
-            col_cidade
-        ]
-
-        protocolo = linha[
-            col_protocolo
-        ]
-
-
-        # ----------------------------------------------------
-        # PROTOCOLO
-        # ----------------------------------------------------
-
-        (
-            numero_pedido,
-            ano_pedido,
-            numero_int,
-        ) = parse_protocolo(
-            protocolo
+        protocolo_original = (
+            linha.get(coluna_protocolo)
+            if coluna_protocolo
+            else None
         )
 
+        matricula = (
+            linha.get(coluna_matricula)
+            if coluna_matricula
+            else ""
+        )
+
+        cidade = (
+            linha.get(coluna_cidade)
+            if coluna_cidade
+            else ""
+        )
+
+        cidade_texto = (
+            ""
+            if pd.isna(cidade)
+            else str(cidade).strip()
+        )
+
+        numero_str, ano_str, numero_int = (
+            parse_protocolo(
+                protocolo_original
+            )
+        )
 
         if numero_int is None:
-
-            protocolos_invalidos.append(
+            logs.append(
                 {
+                    "Tipo": "ERRO",
                     "Matrícula": matricula,
-                    "Protocolo": protocolo,
-                    "Cidade": cidade,
-                    "Motivo": (
-                        "Protocolo não está no formato "
-                        "número/ano."
-                    ),
+                    "Protocolo": protocolo_original,
+                    "Cidade": cidade_texto,
+                    "Motivo": "Protocolo inválido ou não localizado.",
                 }
             )
 
             continue
 
-
-        # ----------------------------------------------------
-        # ZONA
-        # ----------------------------------------------------
-
         if modo == "THE":
-
             zona = 1
-
         else:
-
-            zona = obter_zona(
-                cidade
-            )
-
+            zona = obter_zona(cidade_texto)
 
             if zona is None:
-
-                cidades_sem_zona.append(
+                logs.append(
                     {
+                        "Tipo": "ERRO",
                         "Matrícula": matricula,
-                        "Protocolo": protocolo,
-                        "Cidade": cidade,
-                        "Motivo": (
-                            "Cidade não possui zona "
-                            "definida no MAPA_ZONAS."
-                        ),
+                        "Protocolo": protocolo_original,
+                        "Cidade": cidade_texto,
+                        "Motivo": "Cidade sem zona definida.",
                     }
                 )
 
                 continue
 
-
-        # ----------------------------------------------------
-        # RESULTADO
-        # ----------------------------------------------------
-
-        resultados.append(
+        registros.append(
             {
                 "Matricula": matricula,
                 "Zona Ligacao": zona,
                 "Numero Do Pedido": numero_int,
-                "Ano Do Pedido": int(ano_pedido),
-                "Tipo Encerramento": 1,
-                "Observações": observacao,
+                "Ano Do Pedido": ano_str,
+                "Tipo Encerramento": "CANCELAMENTO",
+                "Observações": "",
             }
         )
 
-
-    # ========================================================
-    # DATAFRAME FINAL
-    # ========================================================
-
-    df_resultado = pd.DataFrame(
-        resultados,
+    resultado = pd.DataFrame(
+        registros,
         columns=[
             "Matricula",
             "Zona Ligacao",
@@ -1845,1281 +970,816 @@ def gerar_lote_filtragem():
         ],
     )
 
-
-    if df_resultado.empty:
-
-        st.session_state.df_resultado = None
-        st.session_state.df_log = None
-        st.session_state.nome_arquivo_resultado = None
-
-        raise ValueError(
-            "Nenhuma O.S. válida pôde ser convertida em lote."
-        )
-
-
-    # ========================================================
-    # TIPOS NUMÉRICOS
-    # ========================================================
-
-    for coluna in [
-        "Zona Ligacao",
-        "Numero Do Pedido",
-        "Ano Do Pedido",
-        "Tipo Encerramento",
-    ]:
-
-        df_resultado[coluna] = (
-            pd.to_numeric(
-                df_resultado[coluna],
-                errors="coerce",
-            )
-            .astype("Int64")
-        )
-
-
-    # ========================================================
-    # LOG
-    # ========================================================
-
-    linhas_log = []
-
-
-    for item in cidades_sem_zona:
-
-        linhas_log.append(
-            {
-                "Tipo": "Cidade sem zona",
-                "Matrícula": item["Matrícula"],
-                "Protocolo": item["Protocolo"],
-                "Cidade": item["Cidade"],
-                "Motivo": item["Motivo"],
-            }
-        )
-
-
-    for item in protocolos_invalidos:
-
-        linhas_log.append(
-            {
-                "Tipo": "Protocolo inválido",
-                "Matrícula": item["Matrícula"],
-                "Protocolo": item["Protocolo"],
-                "Cidade": item["Cidade"],
-                "Motivo": item["Motivo"],
-            }
-        )
-
-
-    if linhas_log:
-
-        df_log = pd.DataFrame(
-            linhas_log
-        )
-
-    else:
-
-        df_log = pd.DataFrame(
-            columns=[
-                "Tipo",
-                "Matrícula",
-                "Protocolo",
-                "Cidade",
-                "Motivo",
-            ]
-        )
-
-
-    # ========================================================
-    # NOME DO ARQUIVO
-    # ========================================================
-
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S_%f"
+    log = pd.DataFrame(
+        logs,
+        columns=[
+            "Tipo",
+            "Matrícula",
+            "Protocolo",
+            "Cidade",
+            "Motivo",
+        ],
     )
 
-
-    nome_arquivo = (
-        f"Lote_Cancelamento_"
-        f"{modo}_"
-        f"{timestamp}.xlsx"
-    )
-
-
-    # ========================================================
-    # SALVA RESULTADO
-    # ========================================================
-
-    st.session_state.df_resultado = (
-        df_resultado
-    )
-
-    st.session_state.df_log = (
-        df_log
-    )
-
-    st.session_state.nome_arquivo_resultado = (
-        nome_arquivo
-    )
-
-
-    st.session_state.filtragem_geracao_info = {
-
-        "modo": modo,
-
-        "total_inicial": total_inicial,
-
-        "total_filtrado": len(
-            df_filtrado
-        ),
-
-        "total_resultado": len(
-            df_resultado
-        ),
-
-        "cidades_sem_zona": len(
-            cidades_sem_zona
-        ),
-
-        "protocolos_invalidos": len(
-            protocolos_invalidos
-        ),
-
-        "etapas": etapas,
-    }
-
-
-    return (
-        df_resultado,
-        df_log,
-    )
+    return resultado, log
 
 
 # ============================================================
-# LOG PARA EXCEL
+# DEFINIÇÃO DAS BASES
 # ============================================================
 
-def log_para_excel_filtragem(
-    df_log,
-):
-
-    if df_log is None:
-
-        return None
-
-
-    if df_log.empty:
-
-        return None
-
-
-    buffer = io.BytesIO()
-
-
-    with pd.ExcelWriter(
-        buffer,
-        engine="openpyxl",
-    ) as writer:
-
-        df_log.to_excel(
-            writer,
-            index=False,
-            sheet_name="LOG",
-        )
-
-
-    buffer.seek(0)
-
-    return buffer.getvalue()
+CONFIG_BASES = {
+    "api": {
+        "titulo": "🔵 API",
+        "descricao": "Backlog de ordens API",
+    },
+    "the": {
+        "titulo": "🟢 THE",
+        "descricao": "Backlog de ordens THE",
+    },
+    "servicos_api": {
+        "titulo": "🟣 Serviços API",
+        "descricao": "Base de serviços API",
+    },
+    "servicos_the": {
+        "titulo": "🟠 Serviços THE",
+        "descricao": "Base de serviços THE",
+    },
+    "eventos": {
+        "titulo": "🟡 Eventos",
+        "descricao": "Base de eventos",
+    },
+    "lotes": {
+        "titulo": "🔴 Lotes",
+        "descricao": "Base de lotes",
+    },
+}
 
 
 # ============================================================
-# LIMPA RESULTADO
+# SIDEBAR
 # ============================================================
 
-def limpar_resultado_filtragem():
+with st.sidebar:
+    st.markdown("### 📦 Gerador de Lotes")
 
-    st.session_state.df_resultado = None
-
-    st.session_state.df_log = None
-
-    st.session_state.nome_arquivo_resultado = None
-
-    st.session_state.filtragem_preview = None
-
-    st.session_state.filtragem_etapas = []
-
-    st.session_state.filtragem_total_inicial = 0
-
-    st.session_state.filtragem_geracao_info = None
-
-
-# ============================================================
-# LIMPA FILTROS
-# ============================================================
-
-def limpar_filtros_filtragem():
-
-    st.session_state.filtro_cidades = []
-    st.session_state.filtro_bairros = []
-    st.session_state.filtro_anos = []
-    st.session_state.filtro_meses = []
-    st.session_state.filtro_dias = []
-
-    st.session_state.hora_inicio = "00:00"
-    st.session_state.hora_fim = "23:59"
-
-    st.session_state.observacoes_filtragem = ""
-
-    st.session_state.filtragem_preview = None
-    st.session_state.filtragem_etapas = []
-    st.session_state.filtragem_total_inicial = 0
-    st.session_state.filtragem_geracao_info = None
-
-    for chave in [
-        "ui_filtro_cidades",
-        "ui_filtro_bairros",
-        "ui_filtro_anos",
-        "ui_filtro_meses",
-        "ui_filtro_dias",
-        "ui_hora_inicio",
-        "ui_hora_fim",
-        "ui_observacoes_filtragem",
-    ]:
-
-        st.session_state.pop(
-            chave,
-            None,
-        )
-
-
-# ============================================================
-# RENDERIZAÇÃO
-# ============================================================
-
-def render_filtragem_cancelamento():
-
-    inicializar_estado_filtragem()
-
-
-    # ========================================================
-    # SIDEBAR
-    # ========================================================
-
-    with st.sidebar:
-
-        st.markdown(
-            "### 🛠️ Ferramentas Operacionais"
-        )
-
-        st.caption(
-            "Usuário: **"
-            f"{st.session_state.get('usuario_logado', '')}"
-            "**"
-        )
-
-        st.caption(
-            "Perfil: **"
-            f"{st.session_state.get('perfil', '').upper()}"
-            "**"
-        )
-
-        st.divider()
-
-
-        if st.button(
-            "🏠 Voltar ao Menu Principal",
-            use_container_width=True,
-        ):
-
-            limpar_resultado_filtragem()
-
-            st.switch_page(
-                "app.py"
-            )
-
-
-        if st.button(
-            "↩️ Voltar às Ferramentas",
-            use_container_width=True,
-        ):
-
-            limpar_resultado_filtragem()
-
-            st.switch_page(
-                "pages/4_Ferramentas_Operacionais.py"
-            )
-
-
-    # ========================================================
-    # MODO ATIVO
-    # ========================================================
-
-    modo = obter_modo_atual()
-
-    df = obter_backlog_filtragem(
-        modo
-    )
-
-
-    # ========================================================
-    # CABEÇALHO
-    # ========================================================
-
-    st.title(
-        "📦 Gerador de Lotes — Cancelamento"
+    st.caption(
+        f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
     )
 
     st.caption(
-        "Filtre o backlog carregado no Hub Central "
-        "e gere o lote de cancelamento."
+        f"Perfil: **{st.session_state.get('perfil', '').upper()}**"
     )
 
+    st.divider()
 
-    # ========================================================
-    # AVISO SOBRE ORIGEM DA BASE
-    # ========================================================
-
-    st.info(
-        "ℹ️ As bases utilizadas por esta ferramenta "
-        "são carregadas exclusivamente no **Hub Central**. "
-        "Não é necessário realizar upload nesta página."
-    )
-
-
-    # ========================================================
-    # BASE INEXISTENTE
-    # ========================================================
-
-    if df is None:
-
-        st.warning(
-            f"Nenhuma base **{modo}** foi carregada no Hub Central."
+    if st.button(
+        "🛠️ Voltar às Ferramentas",
+        use_container_width=True,
+    ):
+        st.switch_page(
+            "pages/4_Ferramentas_Operacionais.py"
         )
 
-        st.markdown(
-            "Retorne ao Hub, carregue a base correspondente "
-            "e depois abra novamente esta ferramenta."
-        )
+    if st.button(
+        "🏠 Menu Principal",
+        use_container_width=True,
+    ):
+        st.switch_page("app.py")
 
-        if st.button(
-            "🏠 Ir para o Hub Central",
-            type="primary",
-            use_container_width=True,
-        ):
+    st.divider()
 
-            st.switch_page(
-                "app.py"
+    if st.button(
+        "🗑️ Limpar todas as bases",
+        use_container_width=True,
+    ):
+        limpar_bases()
+        st.rerun()
+
+
+# ============================================================
+# CABEÇALHO
+# ============================================================
+
+st.title("📦 Gerador de Lotes")
+st.caption(
+    "Hub de carregamento das bases e geração de lotes operacionais."
+)
+
+
+# ============================================================
+# CARREGAMENTO DAS BASES
+# ============================================================
+
+st.subheader("📥 Carregamento das Bases")
+
+st.info(
+    "As seis bases são carregadas neste Hub. "
+    "Você pode enviar apenas um arquivo ou vários arquivos "
+    "para cada base. A consolidação é automática."
+)
+
+
+bases_lista = list(CONFIG_BASES.keys())
+
+for inicio in range(0, len(bases_lista), 2):
+    linha_bases = bases_lista[
+        inicio:inicio + 2
+    ]
+
+    colunas = st.columns(2)
+
+    for coluna, nome_base in zip(
+        colunas,
+        linha_bases,
+    ):
+        config = CONFIG_BASES[nome_base]
+
+        with coluna:
+            st.markdown(
+                f"#### {config['titulo']}"
             )
 
-        return
+            st.caption(
+                config["descricao"]
+            )
+
+            versao_upload = st.session_state.get(
+                f"versao_upload_{nome_base}",
+                0,
+            )
+
+            arquivos = st.file_uploader(
+                "Selecione arquivo(s) Excel",
+                type=["xlsx", "xlsm"],
+                accept_multiple_files=True,
+                key=(
+                    f"upload_{nome_base}_"
+                    f"{versao_upload}"
+                ),
+            )
+
+            if arquivos:
+                try:
+                    processar_upload_multiplo(
+                        nome_base,
+                        arquivos,
+                    )
+                except Exception as erro:
+                    st.error(
+                        f"Erro ao carregar a base "
+                        f"{config['titulo']}: {erro}"
+                    )
+
+            if base_carregada(nome_base):
+                df_base = obter_base(nome_base)
+                arquivos_base = st.session_state.get(
+                    f"arquivos_{nome_base}",
+                    [],
+                )
+
+                st.markdown(
+                    '<span class="status-ok">● Base carregada</span>',
+                    unsafe_allow_html=True,
+                )
+
+                metrica1, metrica2 = st.columns(2)
+
+                with metrica1:
+                    st.metric(
+                        "Registros",
+                        f"{len(df_base):,}".replace(
+                            ",", "."
+                        ),
+                    )
+
+                with metrica2:
+                    st.metric(
+                        "Colunas",
+                        len(df_base.columns),
+                    )
+
+                if arquivos_base:
+                    st.caption(
+                        "Arquivo(s): "
+                        + ", ".join(arquivos_base)
+                    )
+
+                if st.button(
+                    "Limpar esta base",
+                    key=f"limpar_base_{nome_base}",
+                    use_container_width=True,
+                ):
+                    limpar_base(nome_base)
+                    limpar_resultado()
+                    st.rerun()
+
+            else:
+                st.markdown(
+                    '<span class="status-off">● Não carregada</span>',
+                    unsafe_allow_html=True,
+                )
 
 
-    # ========================================================
-    # BASE VAZIA
-    # ========================================================
+# ============================================================
+# STATUS GERAL
+# ============================================================
 
-    if df.empty:
+st.divider()
 
-        st.error(
-            f"A base **{modo}** está vazia."
-        )
+quantidade_bases = sum(
+    base_carregada(base)
+    for base in CONFIG_BASES
+)
 
-        return
+col_status1, col_status2 = st.columns(2)
 
+with col_status1:
+    st.metric(
+        "Bases carregadas",
+        f"{quantidade_bases} / 6",
+    )
 
-    # ========================================================
-    # COLUNAS
-    # ========================================================
+with col_status2:
+    modo_status = obter_modo_atual()
 
-    colunas = obter_colunas_filtragem(
-        df
+    st.metric(
+        "Modo de operação",
+        modo_status,
     )
 
 
-    # ========================================================
-    # RESUMO
-    # ========================================================
+# ============================================================
+# FILTRAGEM / CANCELAMENTO
+# ============================================================
 
-    col1, col2, col3, col4 = st.columns(4)
+st.divider()
+
+st.subheader("🔎 Filtragem / Cancelamento")
+
+modo_anterior = st.session_state.get(
+    "modo_operacao",
+    "API",
+)
+
+modo = st.radio(
+    "Base para operação",
+    options=["API", "THE"],
+    horizontal=True,
+    key="modo_operacao",
+)
+
+if modo != modo_anterior:
+    limpar_resultado()
 
 
-    with col1:
+df_backlog = obter_backlog_filtragem(modo)
 
-        st.metric(
-            "Modo ativo",
-            modo,
+
+if df_backlog is None or df_backlog.empty:
+    st.warning(
+        f"A base **{modo}** ainda não foi carregada. "
+        "Carregue a base acima para utilizar a filtragem."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# COLUNAS
+# ============================================================
+
+coluna_protocolo = localizar_coluna(
+    df_backlog,
+    "protocolo",
+)
+
+coluna_matricula = localizar_coluna(
+    df_backlog,
+    "matricula",
+)
+
+coluna_cidade = localizar_coluna(
+    df_backlog,
+    "cidade",
+)
+
+coluna_bairro = localizar_coluna(
+    df_backlog,
+    "bairro",
+)
+
+coluna_data = localizar_coluna(
+    df_backlog,
+    "data",
+)
+
+
+with st.expander(
+    "🔍 Colunas identificadas",
+    expanded=False,
+):
+    info_colunas = pd.DataFrame(
+        {
+            "Campo": [
+                "Protocolo",
+                "Matrícula",
+                "Cidade",
+                "Bairro",
+                "Data",
+            ],
+            "Coluna encontrada": [
+                coluna_protocolo or "Não encontrada",
+                coluna_matricula or "Não encontrada",
+                coluna_cidade or "Não encontrada",
+                coluna_bairro or "Não encontrada",
+                coluna_data or "Não encontrada",
+            ],
+        }
+    )
+
+    st.dataframe(
+        info_colunas,
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+# ============================================================
+# FILTROS DE CIDADE E BAIRRO
+# ============================================================
+
+cidades_disponiveis = (
+    obter_valores_unicos(
+        df_backlog,
+        coluna_cidade,
+    )
+    if coluna_cidade
+    else []
+)
+
+bairros_disponiveis = (
+    obter_valores_unicos(
+        df_backlog,
+        coluna_bairro,
+    )
+    if coluna_bairro
+    else []
+)
+
+
+col1, col2 = st.columns(2)
+
+with col1:
+    filtro_cidades = st.multiselect(
+        "🏙️ Cidade",
+        options=cidades_disponiveis,
+        key="ui_filtro_cidades",
+    )
+
+with col2:
+    filtro_bairros = st.multiselect(
+        "🏘️ Bairro",
+        options=bairros_disponiveis,
+        key="ui_filtro_bairros",
+    )
+
+
+# ============================================================
+# FILTROS TEMPORAIS
+# ============================================================
+
+anos_disponiveis = []
+meses_disponiveis = []
+dias_disponiveis = []
+
+datas_backlog = None
+
+if coluna_data:
+    datas_backlog = converter_datas_robusto(
+        df_backlog[coluna_data]
+    )
+
+    anos_disponiveis = sorted(
+        datas_backlog.dropna()
+        .dt.year
+        .unique()
+        .tolist()
+    )
+
+    meses_disponiveis = list(
+        range(1, 13)
+    )
+
+    dias_disponiveis = list(
+        range(1, 32)
+    )
+
+
+col3, col4, col5 = st.columns(3)
+
+with col3:
+    filtro_ano = st.selectbox(
+        "📅 Ano",
+        options=["Todos"] + anos_disponiveis,
+        key="ui_filtro_ano",
+    )
+
+with col4:
+    filtro_meses = st.multiselect(
+        "🗓️ Mês",
+        options=meses_disponiveis,
+        key="ui_filtro_meses",
+    )
+
+with col5:
+    filtro_dias = st.multiselect(
+        "📆 Dia",
+        options=dias_disponiveis,
+        key="ui_filtro_dias",
+    )
+
+
+# ============================================================
+# HORÁRIOS
+# ============================================================
+
+col6, col7 = st.columns(2)
+
+with col6:
+    hora_inicial_texto = st.text_input(
+        "🕐 Hora Inicial",
+        placeholder="HH:MM",
+        key="ui_hora_inicial",
+    )
+
+with col7:
+    hora_final_texto = st.text_input(
+        "🕐 Hora Final",
+        placeholder="HH:MM",
+        key="ui_hora_final",
+    )
+
+
+hora_inicial = None
+hora_final = None
+
+
+try:
+    if hora_inicial_texto.strip():
+        hora_inicial = converter_hora(
+            hora_inicial_texto
         )
 
+    if hora_final_texto.strip():
+        hora_final = converter_hora(
+            hora_final_texto
+        )
 
-    with col2:
+except ValueError as erro:
+    st.error(str(erro))
+    st.stop()
 
+
+# ============================================================
+# OBSERVAÇÃO
+# ============================================================
+
+observacao_filtro = st.text_input(
+    "📝 Observação",
+    placeholder="Filtro opcional por texto...",
+    key="ui_filtro_observacao",
+)
+
+
+# ============================================================
+# APLICAÇÃO DOS FILTROS
+# ============================================================
+
+filtro_ano_valor = (
+    None
+    if filtro_ano == "Todos"
+    else filtro_ano
+)
+
+try:
+    df_filtrado = aplicar_filtros_filtragem(
+        df=df_backlog,
+        coluna_cidade=coluna_cidade,
+        coluna_bairro=coluna_bairro,
+        coluna_data=coluna_data,
+        cidades=filtro_cidades,
+        bairros=filtro_bairros,
+        ano=filtro_ano_valor,
+        meses=filtro_meses,
+        dias=filtro_dias,
+        hora_inicial=hora_inicial,
+        hora_final=hora_final,
+    )
+
+except ValueError as erro:
+    st.error(str(erro))
+    st.stop()
+
+
+# ============================================================
+# FILTRO DE OBSERVAÇÃO
+# ============================================================
+
+if (
+    observacao_filtro
+    and observacao_filtro.strip()
+):
+    termo = normalizar_texto(
+        observacao_filtro
+    )
+
+    mascara_observacao = (
+        df_filtrado.astype(str)
+        .apply(
+            lambda coluna: coluna.apply(
+                lambda valor: termo
+                in normalizar_texto(valor)
+            )
+        )
+        .any(axis=1)
+    )
+
+    df_filtrado = df_filtrado[
+        mascara_observacao
+    ].reset_index(drop=True)
+
+
+# ============================================================
+# RESUMO DA FILTRAGEM
+# ============================================================
+
+st.divider()
+
+resumo1, resumo2, resumo3 = st.columns(3)
+
+with resumo1:
+    st.metric(
+        "Registros na base",
+        f"{len(df_backlog):,}".replace(
+            ",", "."
+        ),
+    )
+
+with resumo2:
+    st.metric(
+        "Registros filtrados",
+        f"{len(df_filtrado):,}".replace(
+            ",", "."
+        ),
+    )
+
+with resumo3:
+    if len(df_backlog) > 0:
+        percentual = (
+            len(df_filtrado)
+            / len(df_backlog)
+            * 100
+        )
+    else:
+        percentual = 0
+
+    st.metric(
+        "Percentual",
+        f"{percentual:.1f}%",
+    )
+
+
+# ============================================================
+# PRÉVIA
+# ============================================================
+
+st.subheader("👁️ Prévia")
+
+quantidade_previa = min(
+    100,
+    len(df_filtrado),
+)
+
+if quantidade_previa > 0:
+    st.caption(
+        f"Exibindo os primeiros "
+        f"{quantidade_previa} registros."
+    )
+
+    st.dataframe(
+        df_filtrado.head(100),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+else:
+    st.info(
+        "Nenhum registro encontrado com os filtros atuais."
+    )
+
+
+# ============================================================
+# AÇÕES
+# ============================================================
+
+st.divider()
+
+acao1, acao2 = st.columns(2)
+
+
+with acao1:
+    gerar = st.button(
+        "📦 Gerar Lote de Cancelamento",
+        type="primary",
+        use_container_width=True,
+        disabled=df_filtrado.empty,
+    )
+
+
+with acao2:
+    limpar = st.button(
+        "🧹 Limpar Resultado",
+        use_container_width=True,
+    )
+
+
+if limpar:
+    limpar_resultado()
+    st.rerun()
+
+
+# ============================================================
+# GERAÇÃO
+# ============================================================
+
+if gerar:
+
+    if not coluna_protocolo:
+        st.error(
+            "A coluna de protocolo não foi encontrada na base."
+        )
+        st.stop()
+
+    if not coluna_matricula:
+        st.error(
+            "A coluna de matrícula não foi encontrada na base."
+        )
+        st.stop()
+
+    if not coluna_cidade:
+        st.error(
+            "A coluna de cidade não foi encontrada na base."
+        )
+        st.stop()
+
+    with st.spinner(
+        "Gerando lote de cancelamento..."
+    ):
+        resultado, log = gerar_lote_filtragem(
+            df_filtrado=df_filtrado,
+            modo=modo,
+            coluna_protocolo=coluna_protocolo,
+            coluna_matricula=coluna_matricula,
+            coluna_cidade=coluna_cidade,
+        )
+
+    st.session_state.df_resultado = resultado
+    st.session_state.df_log = log
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    st.session_state.nome_arquivo_resultado = (
+        f"Lote_Cancelamento_{modo}_"
+        f"{timestamp}.xlsx"
+    )
+
+    st.rerun()
+
+
+# ============================================================
+# RESULTADO
+# ============================================================
+
+df_resultado = st.session_state.get(
+    "df_resultado"
+)
+
+df_log = st.session_state.get(
+    "df_log"
+)
+
+nome_arquivo_resultado = st.session_state.get(
+    "nome_arquivo_resultado"
+)
+
+
+if df_resultado is not None:
+
+    st.divider()
+
+    st.subheader("📦 Lote Gerado")
+
+    resultado_col1, resultado_col2 = st.columns(2)
+
+    with resultado_col1:
         st.metric(
-            "Registros na base",
-            f"{len(df):,}".replace(
-                ",",
-                ".",
+            "Registros gerados",
+            f"{len(df_resultado):,}".replace(
+                ",", "."
             ),
         )
 
-
-    with col3:
+    with resultado_col2:
+        quantidade_erros = (
+            len(df_log)
+            if df_log is not None
+            else 0
+        )
 
         st.metric(
-            "Coluna Cidade",
-            colunas["cidade"]
-            or "Não encontrada",
+            "Ocorrências no LOG",
+            f"{quantidade_erros:,}".replace(
+                ",", "."
+            ),
         )
 
-
-    with col4:
-
-        st.metric(
-            "Coluna temporal",
-            colunas["data"]
-            or "Não encontrada",
-        )
-
-
-    st.divider()
-
-
-    # ========================================================
-    # LOCALIZAÇÃO
-    # ========================================================
-
-    st.markdown(
-        "### 📍 Localização"
-    )
-
-
-    cidades_disponiveis = (
-        obter_cidades_filtragem(
-            df
-        )
-    )
-
-
-    cidades_atuais = (
-        st.session_state.get(
-            "filtro_cidades",
-            [],
-        )
-    )
-
-
-    cidades_validas = [
-        cidade
-        for cidade
-        in cidades_atuais
-        if cidade in cidades_disponiveis
-    ]
-
-
-    cidades_selecionadas = st.multiselect(
-        "Cidade",
-        options=cidades_disponiveis,
-        default=cidades_validas,
-        key="ui_filtro_cidades",
-        help=(
-            "Selecione uma ou mais cidades. "
-            "Sem seleção, todas as cidades serão consideradas."
-        ),
-    )
-
-
-    st.session_state.filtro_cidades = (
-        cidades_selecionadas
-    )
-
-
-    # ========================================================
-    # BAIRROS
-    # ========================================================
-
-    bairros_disponiveis = (
-        obter_bairros_filtragem(
-            df,
-            cidades_selecionadas,
-        )
-    )
-
-
-    bairros_atuais = (
-        st.session_state.get(
-            "filtro_bairros",
-            [],
-        )
-    )
-
-
-    bairros_validos = [
-        bairro
-        for bairro
-        in bairros_atuais
-        if bairro in bairros_disponiveis
-    ]
-
-
-    bairros_selecionados = st.multiselect(
-        "Bairro",
-        options=bairros_disponiveis,
-        default=bairros_validos,
-        key="ui_filtro_bairros",
-        help=(
-            "Selecione um ou mais bairros. "
-            "Sem seleção, todos os bairros serão considerados."
-        ),
-    )
-
-
-    st.session_state.filtro_bairros = (
-        bairros_selecionados
-    )
-
-
-    st.divider()
-
-
-    # ========================================================
-    # DATA
-    # ========================================================
-
-    st.markdown(
-        "### 📅 Data"
-    )
-
-
-    if colunas["data"] is None:
-
+    if df_resultado.empty:
         st.warning(
-            "A base não possui uma coluna identificável "
-            "como DATA ou Início do SLA. "
-            "Os filtros temporais ficarão indisponíveis."
+            "Nenhum lote foi gerado. "
+            "Verifique o LOG abaixo."
         )
 
     else:
-
-        anos_disponiveis = (
-            obter_anos_filtragem(
-                df
-            )
-        )
-
-
-        anos_atuais = (
-            st.session_state.get(
-                "filtro_anos",
-                [],
-            )
-        )
-
-
-        anos_validos = [
-            ano
-            for ano
-            in anos_atuais
-            if ano in anos_disponiveis
-        ]
-
-
-        anos_selecionados = st.multiselect(
-            "Ano",
-            options=anos_disponiveis,
-            default=anos_validos,
-            key="ui_filtro_anos",
-            help=(
-                "Filtra pelo ano da coluna temporal identificada."
-            ),
-        )
-
-
-        st.session_state.filtro_anos = (
-            anos_selecionados
-        )
-
-
-        col_mes, col_dia = st.columns(2)
-
-
-        with col_mes:
-
-            meses_disponiveis = (
-                obter_meses_filtragem()
-            )
-
-
-            meses_atuais = (
-                st.session_state.get(
-                    "filtro_meses",
-                    [],
-                )
-            )
-
-
-            meses_validos = [
-                mes
-                for mes
-                in meses_atuais
-                if mes in meses_disponiveis
-            ]
-
-
-            meses_selecionados = st.multiselect(
-                "Mês",
-                options=meses_disponiveis,
-                default=meses_validos,
-                format_func=lambda x:
-                    f"{x:02d} — {MESES_FILTRAGEM[x]}",
-                key="ui_filtro_meses",
-                help=(
-                    "Filtra pelo mês da coluna temporal."
-                ),
-            )
-
-
-            st.session_state.filtro_meses = (
-                meses_selecionados
-            )
-
-
-        with col_dia:
-
-            dias_disponiveis = (
-                obter_dias_filtragem()
-            )
-
-
-            dias_atuais = (
-                st.session_state.get(
-                    "filtro_dias",
-                    [],
-                )
-            )
-
-
-            dias_validos = [
-                dia
-                for dia
-                in dias_atuais
-                if dia in dias_disponiveis
-            ]
-
-
-            dias_selecionados = st.multiselect(
-                "Dia",
-                options=dias_disponiveis,
-                default=dias_validos,
-                key="ui_filtro_dias",
-                help=(
-                    "Filtra pelo dia da coluna temporal."
-                ),
-            )
-
-
-            st.session_state.filtro_dias = (
-                dias_selecionados
-            )
-
-
-        # ====================================================
-        # HORÁRIO
-        # ====================================================
-
-        st.markdown(
-            "#### ⏰ Horário"
-        )
-
-
-        col_hora1, col_hora2 = st.columns(2)
-
-
-        with col_hora1:
-
-            hora_inicio = st.text_input(
-                "Hora inicial",
-                value=st.session_state.get(
-                    "hora_inicio",
-                    "00:00",
-                ),
-                key="ui_hora_inicio",
-                placeholder="HH:MM",
-            )
-
-
-            st.session_state.hora_inicio = (
-                hora_inicio
-            )
-
-
-        with col_hora2:
-
-            hora_fim = st.text_input(
-                "Hora final",
-                value=st.session_state.get(
-                    "hora_fim",
-                    "23:59",
-                ),
-                key="ui_hora_fim",
-                placeholder="HH:MM",
-            )
-
-
-            st.session_state.hora_fim = (
-                hora_fim
-            )
-
-
-        st.caption(
-            "Use 00:00 → 23:59 para não restringir "
-            "o horário. Também é permitido atravessar "
-            "a meia-noite, por exemplo, 22:00 → 02:00."
-        )
-
-
-    st.divider()
-
-
-    # ========================================================
-    # OBSERVAÇÃO
-    # ========================================================
-
-    st.markdown(
-        "### 📝 Observação do cancelamento"
-    )
-
-
-    observacao = st.text_area(
-        "Observações",
-        value=st.session_state.get(
-            "observacoes_filtragem",
-            "",
-        ),
-        key="ui_observacoes_filtragem",
-        placeholder=(
-            "Digite a observação que será gravada "
-            "no lote de cancelamento."
-        ),
-        height=100,
-    )
-
-
-    st.session_state.observacoes_filtragem = (
-        observacao
-    )
-
-
-    st.divider()
-
-
-    # ========================================================
-    # BOTÕES
-    # ========================================================
-
-    col_preview, col_generate, col_clear = st.columns(
-        [1, 1, 1]
-    )
-
-
-    # ========================================================
-    # PRÉVIA
-    # ========================================================
-
-    with col_preview:
-
-        if st.button(
-            "👁️ Prévia",
-            key="btn_filtragem_preview",
-            use_container_width=True,
-        ):
-
-            try:
-
-                (
-                    df_preview,
-                    etapas,
-                    total_inicial,
-                ) = aplicar_filtros_filtragem(
-                    df
-                )
-
-
-                st.session_state.filtragem_preview = (
-                    df_preview.copy()
-                )
-
-                st.session_state.filtragem_etapas = (
-                    etapas
-                )
-
-                st.session_state.filtragem_total_inicial = (
-                    total_inicial
-                )
-
-
-                st.success(
-                    "Prévia atualizada."
-                )
-
-
-            except Exception as erro:
-
-                st.error(
-                    str(erro)
-                )
-
-
-    # ========================================================
-    # GERAR LOTE
-    # ========================================================
-
-    with col_generate:
-
-        if st.button(
-            "📦 Gerar lote",
-            key="btn_filtragem_gerar",
-            type="primary",
-            use_container_width=True,
-        ):
-
-            try:
-
-                gerar_lote_filtragem()
-
-                st.success(
-                    "✓ Lote gerado com sucesso."
-                )
-
-
-            except Exception as erro:
-
-                st.error(
-                    str(erro)
-                )
-
-
-    # ========================================================
-    # LIMPAR
-    # ========================================================
-
-    with col_clear:
-
-        if st.button(
-            "🧹 Limpar resultado",
-            key="btn_filtragem_limpar",
-            use_container_width=True,
-        ):
-
-            limpar_resultado_filtragem()
-
-            st.rerun()
-
-
-    # ========================================================
-    # PRÉVIA
-    # ========================================================
-
-    df_preview = (
-        st.session_state.get(
-            "filtragem_preview"
-        )
-    )
-
-
-    if df_preview is not None:
-
-        st.divider()
-
-
-        st.markdown(
-            "### 👁️ Prévia da filtragem"
-        )
-
-
-        total_inicial = (
-            st.session_state.get(
-                "filtragem_total_inicial",
-                len(df),
-            )
-        )
-
-
-        total_filtrado = len(
-            df_preview
-        )
-
-
-        c1, c2, c3 = st.columns(3)
-
-
-        with c1:
-
-            st.metric(
-                "Total inicial",
-                f"{total_inicial:,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-
-        with c2:
-
-            st.metric(
-                "Após filtros",
-                f"{total_filtrado:,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-
-        with c3:
-
-            if total_inicial:
-
-                percentual = (
-                    total_filtrado
-                    /
-                    total_inicial
-                    *
-                    100
-                )
-
-                st.metric(
-                    "Percentual restante",
-                    f"{percentual:.2f}%",
-                )
-
-            else:
-
-                st.metric(
-                    "Percentual restante",
-                    "0%",
-                )
-
-
-        # ====================================================
-        # ETAPAS
-        # ====================================================
-
-        etapas = (
-            st.session_state.get(
-                "filtragem_etapas",
-                [],
-            )
-        )
-
-
-        if etapas:
-
-            st.markdown(
-                "#### Etapas do filtro"
-            )
-
-
-            dados_etapas = []
-
-            anterior = total_inicial
-
-
-            for nome, quantidade in etapas:
-
-                dados_etapas.append(
-                    {
-                        "Filtro": nome,
-                        "Registros após filtro": quantidade,
-                        "Redução": (
-                            anterior
-                            -
-                            quantidade
-                        ),
-                    }
-                )
-
-                anterior = quantidade
-
-
-            st.dataframe(
-                pd.DataFrame(
-                    dados_etapas
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-
-        # ====================================================
-        # REGISTROS
-        # ====================================================
-
-        st.markdown(
-            "#### Registros encontrados"
-        )
-
-
         st.dataframe(
-            df_preview.head(100),
-            use_container_width=True,
+            df_resultado,
             hide_index=True,
-        )
-
-
-        if len(df_preview) > 100:
-
-            st.caption(
-                "Exibindo os primeiros 100 de "
-                f"{len(df_preview):,} registros."
-            )
-
-
-    # ========================================================
-    # RESULTADO FINAL
-    # ========================================================
-
-    df_resultado = (
-        st.session_state.get(
-            "df_resultado"
-        )
-    )
-
-
-    if df_resultado is not None:
-
-        st.divider()
-
-
-        st.markdown(
-            "### ✅ Lote gerado"
-        )
-
-
-        info = (
-            st.session_state.get(
-                "filtragem_geracao_info",
-                {},
-            )
-        )
-
-
-        c1, c2, c3, c4 = st.columns(4)
-
-
-        with c1:
-
-            st.metric(
-                "Base",
-                info.get(
-                    "modo",
-                    modo,
-                ),
-            )
-
-
-        with c2:
-
-            st.metric(
-                "Filtrados",
-                f"{info.get('total_filtrado', 0):,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-
-        with c3:
-
-            st.metric(
-                "Incluídos no lote",
-                f"{info.get('total_resultado', 0):,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-
-        with c4:
-
-            df_log_atual = (
-                st.session_state.get(
-                    "df_log"
-                )
-            )
-
-
-            qtd_log = (
-                len(df_log_atual)
-                if df_log_atual is not None
-                else 0
-            )
-
-
-            st.metric(
-                "Ocorrências no LOG",
-                f"{qtd_log:,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-
-        # ====================================================
-        # AVISOS
-        # ====================================================
-
-        qtd_sem_zona = info.get(
-            "cidades_sem_zona",
-            0,
-        )
-
-
-        qtd_protocolos = info.get(
-            "protocolos_invalidos",
-            0,
-        )
-
-
-        if qtd_sem_zona:
-
-            st.warning(
-                f"{qtd_sem_zona} registro(s) "
-                "não incluído(s) por cidade sem zona definida."
-            )
-
-
-        if qtd_protocolos:
-
-            st.warning(
-                f"{qtd_protocolos} registro(s) "
-                "não incluído(s) por protocolo inválido."
-            )
-
-
-        # ====================================================
-        # CONTEÚDO DO LOTE
-        # ====================================================
-
-        st.markdown(
-            "#### Conteúdo do lote"
-        )
-
-
-        st.dataframe(
-            df_resultado.head(100),
             use_container_width=True,
-            hide_index=True,
         )
 
-
-        if len(df_resultado) > 100:
-
-            st.caption(
-                "Exibindo os primeiros 100 de "
-                f"{len(df_resultado):,} registros."
-            )
-
-
-        # ====================================================
-        # DOWNLOAD DO LOTE
-        # ====================================================
-
-        nome_arquivo = (
-            st.session_state.get(
-                "nome_arquivo_resultado",
-                "Lote_Cancelamento.xlsx",
-            )
-        )
-
-
-        excel_bytes = dataframe_para_excel(
+        arquivo_resultado = dataframe_para_excel(
             df_resultado,
             nome_aba="Lote",
         )
 
-
-        st.download_button(
-            label="⬇️ Baixar lote de cancelamento",
-            data=excel_bytes,
-            file_name=nome_arquivo,
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            key="download_lote_filtragem",
-            use_container_width=True,
-        )
-
-
-        # ====================================================
-        # LOG
-        # ====================================================
-
-        df_log = (
-            st.session_state.get(
-                "df_log"
-            )
-        )
-
-
-        if (
-            df_log is not None
-            and
-            not df_log.empty
-        ):
-
-            st.markdown(
-                "#### LOG de processamento"
-            )
-
-
-            st.dataframe(
-                df_log,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-
-            log_bytes = (
-                log_para_excel_filtragem(
-                    df_log
-                )
-            )
-
-
-            timestamp_log = datetime.now().strftime(
-                "%Y%m%d_%H%M%S_%f"
-            )
-
-
-            nome_log = (
-                f"LOG_Lote_Cancelamento_"
-                f"{modo}_"
-                f"{timestamp_log}.xlsx"
-            )
-
-
+        if arquivo_resultado:
             st.download_button(
-                label="⬇️ Baixar LOG",
-                data=log_bytes,
-                file_name=nome_log,
+                label="⬇️ Baixar Lote de Cancelamento",
+                data=arquivo_resultado,
+                file_name=nome_arquivo_resultado,
                 mime=(
                     "application/vnd.openxmlformats-officedocument."
                     "spreadsheetml.sheet"
                 ),
-                key="download_log_filtragem",
+                type="primary",
                 use_container_width=True,
             )
 
 
-        else:
+# ============================================================
+# LOG
+# ============================================================
 
-            st.success(
-                "✓ Nenhuma ocorrência foi registrada no LOG."
+if df_log is not None:
+
+    st.divider()
+
+    st.subheader("📋 LOG")
+
+    if df_log.empty:
+        st.success(
+            "Nenhuma ocorrência foi registrada no LOG."
+        )
+
+    else:
+        st.dataframe(
+            df_log,
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        arquivo_log = dataframe_para_excel(
+            df_log,
+            nome_aba="LOG",
+        )
+
+        if arquivo_log:
+            timestamp_log = datetime.now().strftime(
+                "%Y%m%d_%H%M%S"
             )
 
-
-# ============================================================
-# EXECUÇÃO DA PÁGINA
-# ============================================================
-
-render_filtragem_cancelamento()
-```
+            st.download_button(
+                label="⬇️ Baixar LOG",
+                data=arquivo_log,
+                file_name=(
+                    f"LOG_Cancelamento_{modo}_"
+                    f"{timestamp_log}.xlsx"
+                ),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+            )
