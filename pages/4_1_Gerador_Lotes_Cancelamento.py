@@ -19,10 +19,11 @@ from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
-    page_icon="📦",
+    page_icon="GL",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 
 st.markdown(
     """
@@ -37,7 +38,7 @@ st.markdown(
 
 
 if not verificar_autenticacao():
-    st.warning("Sessão não iniciada ou expirada.")
+    st.warning("Sessao nao iniciada ou expirada.")
 
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
@@ -48,9 +49,7 @@ if not verificar_autenticacao():
 inicializar_estado()
 
 
-ferramenta_atual = st.session_state.get(
-    "ferramenta_atual"
-)
+ferramenta_atual = st.session_state.get("ferramenta_atual")
 
 
 if ferramenta_atual == "filtragem":
@@ -65,10 +64,10 @@ if ferramenta_atual == "duplicidade":
 
 with st.sidebar:
 
-    st.markdown("### 📦 Gerador de Lotes")
+    st.markdown("### Gerador de Lotes")
 
     st.caption(
-        f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
+        f"Usuario: **{st.session_state.get('usuario_logado', '')}**"
     )
 
     st.caption(
@@ -78,7 +77,7 @@ with st.sidebar:
     st.divider()
 
     if st.button(
-        "⬅️ Voltar às Ferramentas",
+        "Voltar as Ferramentas",
         use_container_width=True,
     ):
         st.switch_page(
@@ -86,7 +85,7 @@ with st.sidebar:
         )
 
     if st.button(
-        "🏠 Menu Principal",
+        "Menu Principal",
         use_container_width=True,
     ):
         st.switch_page("app.py")
@@ -94,14 +93,14 @@ with st.sidebar:
     st.divider()
 
     if st.button(
-        "🗑️ Limpar todas as bases",
+        "Limpar todas as bases",
         use_container_width=True,
     ):
         limpar_bases()
         st.rerun()
 
 
-st.title("📦 Gerador de Lotes")
+st.title("Gerador de Lotes")
 
 st.caption(
     "Hub central para carregamento e gerenciamento das bases "
@@ -111,38 +110,38 @@ st.caption(
 st.divider()
 
 
-st.markdown("## 🗂️ Bases de Dados")
+st.markdown("## Bases de Dados")
 
 
 bases = [
     (
         "api",
-        "🔵 API",
+        "API",
         "Base principal de API.",
     ),
     (
         "the",
-        "🟢 THE",
+        "THE",
         "Base principal de THE.",
     ),
     (
         "servicos_api",
-        "🔧 Serviços API",
-        "Base de serviços relacionados à API.",
+        "Servicos API",
+        "Base de servicos relacionados a API.",
     ),
     (
         "servicos_the",
-        "🔧 Serviços THE",
-        "Base de serviços relacionados à THE.",
+        "Servicos THE",
+        "Base de servicos relacionados a THE.",
     ),
     (
         "eventos",
-        "📋 Eventos",
+        "Eventos",
         "Base de eventos operacionais.",
     ),
     (
         "lotes",
-        "📦 Lotes",
+        "Lotes",
         "Base de lotes.",
     ),
 ]
@@ -160,7 +159,7 @@ for nome_base, titulo_base, descricao_base in bases:
     )
 
     arquivos = st.file_uploader(
-        f"Carregar arquivo(s) — {titulo_base}",
+        f"Carregar arquivo(s) - {titulo_base}",
         type=["xlsx", "xlsm"],
         accept_multiple_files=True,
         key=f"upload_{nome_base}_{versao}",
@@ -241,7 +240,7 @@ for nome_base, titulo_base, descricao_base in bases:
     st.divider()
 
 
-st.markdown("## 🛠️ Ferramentas")
+st.markdown("## Ferramentas")
 
 st.caption(
     "As ferramentas utilizam as bases carregadas acima."
@@ -253,10 +252,10 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.markdown("### 🔎 Filtragem")
+    st.markdown("### Filtragem")
 
     st.caption(
-        "Filtragem e preparação de registros."
+        "Filtragem e preparacao de registros."
     )
 
     pode_filtrar = (
@@ -278,10 +277,10 @@ with col1:
 
 with col2:
 
-    st.markdown("### ♻️ Duplicidade")
+    st.markdown("### Duplicidade")
 
     st.caption(
-        "Análise de registros duplicados."
+        "Analise de registros duplicados."
     )
 
     pode_analisar_duplicidade = (
@@ -303,10 +302,10 @@ with col2:
 
 with col3:
 
-    st.markdown("### 🛠️ Serviços")
+    st.markdown("### Servicos")
 
     st.caption(
-        "Ferramenta em estruturação."
+        "Ferramenta em estruturacao."
     )
 
     st.button(
@@ -319,10 +318,12 @@ with col3:
 
 st.divider()
 
-st.markdown("## 📊 Status das Bases")
+
+st.markdown("## Status das Bases")
 
 
 status_colunas = st.columns(3)
+
 
 for indice, (nome_base, titulo_base, _) in enumerate(bases):
 
@@ -342,6 +343,6 @@ for indice, (nome_base, titulo_base, _) in enumerate(bases):
         else:
 
             st.warning(
-                f"{titulo_base}: não carregada"
+                f"{titulo_base}: nao carregada"
             )
 ```
