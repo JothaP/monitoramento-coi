@@ -319,27 +319,7 @@ with col2:
 
         st.rerun()
 
-with col4:
 
-    st.markdown("### 📋 Eventos")
-
-    st.caption(
-        "Análise da base de eventos operacionais."
-    )
-
-    pode_analisar_eventos = base_carregada("eventos")
-
-    if st.button(
-        "Acessar Eventos",
-        type="primary",
-        use_container_width=True,
-        disabled=not pode_analisar_eventos,
-        key="btn_acessar_eventos",
-    ):
-
-        st.session_state.ferramenta_atual = "eventos"
-
-        st.rerun()
 # ============================================================
 # SERVIÇOS
 # ============================================================
@@ -361,6 +341,10 @@ with col3:
 
 
 st.divider()
+
+# ============================================================
+# EVENTOS
+# ============================================================
 
 with col4:
 
