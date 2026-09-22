@@ -11,10 +11,10 @@ from gerador_lotes import (
 )
 
 from gerador_lotes.carregamento import processar_upload_multiplo
-from gerador_lotes.ferramentas.eventos import render_eventos
+
 from gerador_lotes.ferramentas.filtragem import render_filtragem
 from gerador_lotes.ferramentas.duplicidade import render_duplicidade
-
+from gerador_lotes.ferramentas.eventos import render_eventos
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
