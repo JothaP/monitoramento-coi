@@ -14,7 +14,7 @@ from gerador_lotes import (
 from gerador_lotes.carregamento import processar_upload_multiplo
 
 from gerador_lotes.ferramentas.filtragem import render_filtragem
-from gerador_lotes.ferramentas.duplicidade import render_duplicidade
+
 
 
 st.set_page_config(
@@ -56,10 +56,6 @@ if ferramenta_atual == "filtragem":
     render_filtragem()
     st.stop()
 
-
-if ferramenta_atual == "duplicidade":
-    render_duplicidade()
-    st.stop()
 
 
 with st.sidebar:
