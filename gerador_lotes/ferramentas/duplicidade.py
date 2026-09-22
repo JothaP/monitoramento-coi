@@ -1,29 +1,16 @@
-```python
 import streamlit as st
 
-from ..estado import (
-    obter_base,
-    base_carregada,
-    limpar_resultado,
-)
+from ..estado import limpar_resultado
 from .componentes import selecionar_modo_api_the
 
 
 def render_duplicidade():
-    # ============================================================
-    # CABEÇALHO
-    # ============================================================
-
     st.title("♻️ Análise de Duplicidade")
     st.caption(
         "Estrutura inicial da ferramenta para análise de registros duplicados."
     )
 
     st.divider()
-
-    # ============================================================
-    # SELEÇÃO DA BASE
-    # ============================================================
 
     modo, df = selecionar_modo_api_the(
         key="duplicidade_modo_api_the",
@@ -34,19 +21,12 @@ def render_duplicidade():
     if modo is None or df is None:
         st.stop()
 
-    # ============================================================
-    # INFORMAÇÕES DA BASE
-    # ============================================================
-
     st.markdown("### 📊 Base selecionada")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric(
-            "Base",
-            modo,
-        )
+        st.metric("Base", modo)
 
     with col2:
         st.metric(
@@ -61,10 +41,6 @@ def render_duplicidade():
         )
 
     st.divider()
-
-    # ============================================================
-    # CONFIGURAÇÃO DA ANÁLISE
-    # ============================================================
 
     st.markdown("### ⚙️ Configuração da análise")
 
@@ -88,17 +64,11 @@ def render_duplicidade():
     with col_config_2:
         st.selectbox(
             "Tipo de análise",
-            options=[
-                "Análise de duplicidade",
-            ],
+            options=["Análise de duplicidade"],
             key="duplicidade_tipo_analise",
         )
 
     st.divider()
-
-    # ============================================================
-    # AÇÃO PRINCIPAL
-    # ============================================================
 
     st.markdown("### 🔍 Análise")
 
@@ -109,10 +79,6 @@ def render_duplicidade():
         key="btn_analisar_duplicidades",
     ):
         st.session_state["duplicidade_analisada"] = True
-
-    # ============================================================
-    # RESULTADOS
-    # ============================================================
 
     if st.session_state.get("duplicidade_analisada", False):
 
@@ -155,10 +121,6 @@ def render_duplicidade():
 
         st.divider()
 
-        # ========================================================
-        # AÇÕES DO RESULTADO
-        # ========================================================
-
         st.markdown("### 📤 Ações")
 
         col_acao_1, col_acao_2 = st.columns(2)
@@ -183,10 +145,6 @@ def render_duplicidade():
 
     st.divider()
 
-    # ============================================================
-    # VOLTAR
-    # ============================================================
-
     if st.button(
         "⬅️ Voltar ao Hub",
         use_container_width=True,
@@ -196,4 +154,3 @@ def render_duplicidade():
         limpar_resultado()
         st.session_state["duplicidade_analisada"] = False
         st.rerun()
-```
