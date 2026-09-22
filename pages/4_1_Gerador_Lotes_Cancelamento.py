@@ -11,7 +11,7 @@ from gerador_lotes import (
 )
 
 from gerador_lotes.carregamento import processar_upload_multiplo
-
+from gerador_lotes.ferramentas.eventos import render_eventos
 from gerador_lotes.ferramentas.filtragem import render_filtragem
 from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 
@@ -58,6 +58,10 @@ if ferramenta_atual == "filtragem":
 
 if ferramenta_atual == "duplicidade":
     render_duplicidade()
+    st.stop()
+
+if ferramenta_atual == "eventos":
+    render_eventos()
     st.stop()
 
 
@@ -253,7 +257,7 @@ st.caption(
 )
 
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 
 # ============================================================
@@ -315,7 +319,27 @@ with col2:
 
         st.rerun()
 
+with col4:
 
+    st.markdown("### 📋 Eventos")
+
+    st.caption(
+        "Análise da base de eventos operacionais."
+    )
+
+    pode_analisar_eventos = base_carregada("eventos")
+
+    if st.button(
+        "Acessar Eventos",
+        type="primary",
+        use_container_width=True,
+        disabled=not pode_analisar_eventos,
+        key="btn_acessar_eventos",
+    ):
+
+        st.session_state.ferramenta_atual = "eventos"
+
+        st.rerun()
 # ============================================================
 # SERVIÇOS
 # ============================================================
@@ -338,6 +362,27 @@ with col3:
 
 st.divider()
 
+with col4:
+
+    st.markdown("### 📋 Eventos")
+
+    st.caption(
+        "Análise da base de eventos operacionais."
+    )
+
+    pode_analisar_eventos = base_carregada("eventos")
+
+    if st.button(
+        "Acessar Eventos",
+        type="primary",
+        use_container_width=True,
+        disabled=not pode_analisar_eventos,
+        key="btn_acessar_eventos",
+    ):
+
+        st.session_state.ferramenta_atual = "eventos"
+
+        st.rerun()
 
 # ============================================================
 # STATUS DAS BASES
