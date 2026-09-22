@@ -16,6 +16,7 @@ from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 from gerador_lotes.ferramentas.eventos import render_eventos
 from gerador_lotes.ferramentas.servicos import render_servicos
 from gerador_lotes.ferramentas.lotes import render_lotes
+from gerador_lotes.ferramentas.lista_rapida import render_lista_rapida
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
@@ -71,6 +72,10 @@ if ferramenta_atual == "eventos":
 
 if ferramenta_atual == "lotes":
     render_lotes()
+    st.stop()
+
+if ferramenta_atual == "lista_rapida":
+    render_lista_rapida()
     st.stop()
 
 
@@ -406,6 +411,29 @@ if st.button(
 
     st.rerun()
 
+st.markdown("### ⚡ Lista Rápida")
+
+st.caption(
+    "Geração rápida de listas operacionais."
+)
+
+pode_gerar_lista_rapida = (
+    base_carregada("api")
+    or base_carregada("the")
+)
+
+if st.button(
+    "Acessar Lista Rápida",
+    type="primary",
+    use_container_width=True,
+    disabled=not pode_gerar_lista_rapida,
+    key="btn_acessar_lista_rapida",
+):
+
+    st.session_state.ferramenta_atual = "lista_rapida"
+
+    st.rerun()
+    
 # ============================================================
 # STATUS DAS BASES
 # ============================================================
