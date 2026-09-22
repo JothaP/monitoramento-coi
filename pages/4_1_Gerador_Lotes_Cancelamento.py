@@ -11,10 +11,10 @@ from gerador_lotes import (
 )
 
 from gerador_lotes.carregamento import processar_upload_multiplo
-
 from gerador_lotes.ferramentas.filtragem import render_filtragem
 from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 from gerador_lotes.ferramentas.eventos import render_eventos
+from gerador_lotes.ferramentas.servicos import render_servicos
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
@@ -58,6 +58,10 @@ if ferramenta_atual == "filtragem":
 
 if ferramenta_atual == "duplicidade":
     render_duplicidade()
+    st.stop()
+
+if ferramenta_atual == "servicos":
+    render_servicos()
     st.stop()
 
 if ferramenta_atual == "eventos":
@@ -329,18 +333,25 @@ with col3:
     st.markdown("### 🛠️ Serviços")
 
     st.caption(
-        "Ferramenta em estruturação."
+        "Análise das bases de serviços."
     )
 
-    st.button(
-        "Em breve",
-        disabled=True,
+    pode_analisar_servicos = (
+        base_carregada("servicos_api")
+        or base_carregada("servicos_the")
+    )
+
+    if st.button(
+        "Acessar Serviços",
+        type="primary",
         use_container_width=True,
-        key="btn_servicos_breve",
-    )
+        disabled=not pode_analisar_servicos,
+        key="btn_acessar_servicos",
+    ):
 
+        st.session_state.ferramenta_atual = "servicos"
 
-st.divider()
+        st.rerun()
 
 # ============================================================
 # EVENTOS
