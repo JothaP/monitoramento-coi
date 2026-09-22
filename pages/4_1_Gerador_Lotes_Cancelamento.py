@@ -314,4 +314,3 @@ for indice, (nome_base, titulo_base, _) in enumerate(bases):
             st.warning(
                 f"{titulo_base}: nao carregada"
             )
-```
