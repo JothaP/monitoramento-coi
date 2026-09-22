@@ -274,7 +274,6 @@ def obter_anos_filtragem(df):
     )
 
     if col_data is None:
-
         return []
 
     datas = converter_datas_robusto(
@@ -290,9 +289,11 @@ def obter_anos_filtragem(df):
         .tolist()
     )
 
-    return sorted(
-        anos
-    )
+    anos = list(anos)
+
+    anos.sort()
+
+    return anos
 
 
 # ============================================================
