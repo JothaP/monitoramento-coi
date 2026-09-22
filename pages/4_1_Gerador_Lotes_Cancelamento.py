@@ -1,14 +1,14 @@
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
 
-from gerador_lotes.estado import (
+from gerador_lotes import (
     inicializar_estado,
     obter_base,
     base_carregada,
     limpar_base,
     limpar_bases,
-    limpar_resultado,
 )
 
 from gerador_lotes.carregamento import (
@@ -19,9 +19,13 @@ from gerador_lotes.ferramentas.filtragem import (
     render_filtragem,
 )
 
+from gerador_lotes.ferramentas.duplicidade import (
+    render_duplicidade,
+)
+
 
 # ============================================================
-# CONFIGURAÇÃO
+# CONFIGURAÇÃO DA PÁGINA
 # ============================================================
 
 st.set_page_config(
@@ -30,7 +34,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 
 st.markdown(
     """
@@ -49,10 +52,7 @@ st.markdown(
 # ============================================================
 
 if not verificar_autenticacao():
-
-    st.warning(
-        "Sessão não iniciada ou expirada."
-    )
+    st.warning("Sessão não iniciada ou expirada.")
 
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
@@ -68,14 +68,31 @@ inicializar_estado()
 
 
 # ============================================================
+# ROTEAMENTO INTERNO DAS FERRAMENTAS
+# ============================================================
+
+ferramenta_atual = st.session_state.get(
+    "ferramenta_atual"
+)
+
+
+if ferramenta_atual == "filtragem":
+    render_filtragem()
+    st.stop()
+
+
+if ferramenta_atual == "duplicidade":
+    render_duplicidade()
+    st.stop()
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
 with st.sidebar:
 
-    st.markdown(
-        "### 📦 Gerador de Lotes"
-    )
+    st.markdown("### 📦 Gerador de Lotes")
 
     st.caption(
         f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
@@ -90,11 +107,7 @@ with st.sidebar:
     if st.button(
         "⬅️ Voltar às Ferramentas",
         use_container_width=True,
-        key="hub_voltar_ferramentas",
     ):
-
-        st.session_state.ferramenta_atual = None
-
         st.switch_page(
             "pages/4_Ferramentas_Operacionais.py"
         )
@@ -102,50 +115,28 @@ with st.sidebar:
     if st.button(
         "🏠 Menu Principal",
         use_container_width=True,
-        key="hub_menu_principal",
     ):
-
-        st.session_state.ferramenta_atual = None
-
         st.switch_page("app.py")
 
     st.divider()
 
     if st.button(
-        "🧹 Limpar todas as bases",
+        "🗑️ Limpar todas as bases",
         use_container_width=True,
-        key="hub_limpar_todas",
     ):
-
         limpar_bases()
-
         st.rerun()
 
 
 # ============================================================
-# ROTEAMENTO INTERNO DAS FERRAMENTAS
+# CABEÇALHO
 # ============================================================
 
-if (
-    st.session_state.get("ferramenta_atual")
-    == "filtragem"
-):
-
-    render_filtragem()
-
-    st.stop()
-
-
-# ============================================================
-# HUB
-# ============================================================
-
-st.title(
-    "📦 Gerador de Lotes"
-)
+st.title("📦 Gerador de Lotes")
 
 st.caption(
-    "Hub central para carregamento e gerenciamento das bases operacionais."
+    "Hub central para carregamento e gerenciamento das bases "
+    "utilizadas pelas ferramentas operacionais."
 )
 
 st.divider()
@@ -155,234 +146,150 @@ st.divider()
 # BASES
 # ============================================================
 
-st.subheader(
-    "📂 Bases Operacionais"
-)
-
-st.caption(
-    "Carregue aqui as bases que ficarão disponíveis para as ferramentas."
-)
+st.markdown("## 🗂️ Bases de Dados")
 
 
-BASES_UI = [
+bases = [
     (
         "api",
         "🔵 API",
-        "Base API",
+        "Base principal de API.",
     ),
     (
         "the",
         "🟢 THE",
-        "Base THE",
+        "Base principal de THE.",
     ),
     (
         "servicos_api",
         "🔧 Serviços API",
-        "Base de Serviços API",
+        "Base de serviços relacionados à API.",
     ),
     (
         "servicos_the",
         "🔧 Serviços THE",
-        "Base de Serviços THE",
+        "Base de serviços relacionados à THE.",
     ),
     (
         "eventos",
         "📋 Eventos",
-        "Base de Eventos",
+        "Base de eventos operacionais.",
     ),
     (
         "lotes",
         "📦 Lotes",
-        "Base de Lotes",
+        "Base de lotes.",
     ),
 ]
 
 
-for inicio in range(
-    0,
-    len(BASES_UI),
-    2,
-):
+# ============================================================
+# UPLOAD DAS BASES
+# ============================================================
 
-    colunas = st.columns(2)
+for nome_base, titulo_base, descricao_base in bases:
 
-    for deslocamento, coluna in enumerate(
-        colunas
-    ):
+    st.markdown(f"### {titulo_base}")
 
-        indice = inicio + deslocamento
+    st.caption(descricao_base)
 
-        if indice >= len(BASES_UI):
-            continue
+    versao = st.session_state.get(
+        f"versao_upload_{nome_base}",
+        0,
+    )
 
-        nome_base, titulo, descricao = (
-            BASES_UI[indice]
+    arquivos = st.file_uploader(
+        f"Carregar arquivo(s) — {titulo_base}",
+        type=["xlsx", "xlsm"],
+        accept_multiple_files=True,
+        key=f"upload_{nome_base}_{versao}",
+    )
+
+    if arquivos:
+
+        try:
+
+            processar_upload_multiplo(
+                nome_base,
+                arquivos,
+            )
+
+        except Exception as erro:
+
+            st.error(
+                f"Erro ao carregar a base {titulo_base}: {erro}"
+            )
+
+    if base_carregada(nome_base):
+
+        df = obter_base(nome_base)
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.success("✅ Carregada")
+
+        with col2:
+            st.metric(
+                "Registros",
+                f"{len(df):,}".replace(",", "."),
+            )
+
+        with col3:
+            st.metric(
+                "Colunas",
+                f"{len(df.columns):,}".replace(",", "."),
+            )
+
+        with col4:
+
+            arquivos_carregados = st.session_state.get(
+                f"arquivos_{nome_base}",
+                [],
+            )
+
+            st.metric(
+                "Arquivos",
+                len(arquivos_carregados),
+            )
+
+        arquivos_carregados = st.session_state.get(
+            f"arquivos_{nome_base}",
+            [],
         )
 
-        with coluna:
-
-            st.markdown(
-                f"### {titulo}"
-            )
+        if arquivos_carregados:
 
             st.caption(
-                descricao
+                "Arquivo(s): "
+                + ", ".join(arquivos_carregados)
             )
 
-            versao = st.session_state.get(
-                f"versao_upload_{nome_base}",
-                0,
-            )
+        if st.button(
+            f"🗑️ Limpar {titulo_base}",
+            key=f"limpar_{nome_base}",
+        ):
 
-            arquivos = st.file_uploader(
-                "Selecione arquivo(s) Excel",
-                type=[
-                    "xlsx",
-                    "xlsm",
-                ],
-                accept_multiple_files=True,
-                key=(
-                    f"upload_{nome_base}_{versao}"
-                ),
-                help=(
-                    "Pode enviar um ou vários arquivos. "
-                    "O nome do arquivo não precisa seguir um padrão."
-                ),
-            )
+            limpar_base(nome_base)
+            st.rerun()
 
-            if arquivos:
+    else:
 
-                try:
+        st.info(
+            "Nenhum arquivo carregado."
+        )
 
-                    processado = (
-                        processar_upload_multiplo(
-                            nome_base,
-                            arquivos,
-                        )
-                    )
-
-                    if processado:
-
-                        st.success(
-                            f"{len(arquivos)} arquivo(s) carregado(s) com sucesso."
-                        )
-
-                except Exception as erro:
-
-                    st.error(
-                        f"Erro ao carregar {titulo}: {erro}"
-                    )
-
-            if base_carregada(nome_base):
-
-                df = obter_base(
-                    nome_base
-                )
-
-                nomes = st.session_state.get(
-                    f"arquivos_{nome_base}",
-                    [],
-                )
-
-                st.success(
-                    "✅ Base carregada — "
-                    + f"{len(df):,} registros".replace(
-                        ",",
-                        ".",
-                    )
-                )
-
-                st.caption(
-                    f"Colunas: {len(df.columns)}"
-                )
-
-                if nomes:
-
-                    st.caption(
-                        "Arquivo(s): "
-                        + ", ".join(nomes)
-                    )
-
-                if st.button(
-                    "🗑️ Limpar esta base",
-                    use_container_width=True,
-                    key=(
-                        f"limpar_{nome_base}"
-                    ),
-                ):
-
-                    limpar_base(
-                        nome_base
-                    )
-
-                    limpar_resultado()
-
-                    st.rerun()
-
-            else:
-
-                st.info(
-                    "Nenhum arquivo carregado."
-                )
-
-
-# ============================================================
-# STATUS
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "📊 Status das Bases"
-)
-
-colunas_status = st.columns(6)
-
-for coluna, (
-    nome_base,
-    titulo,
-    _,
-) in zip(
-    colunas_status,
-    BASES_UI,
-):
-
-    with coluna:
-
-        if base_carregada(nome_base):
-
-            df = obter_base(
-                nome_base
-            )
-
-            st.metric(
-                titulo,
-                f"{len(df):,}".replace(
-                    ",",
-                    ".",
-                ),
-            )
-
-        else:
-
-            st.metric(
-                titulo,
-                "—",
-            )
+    st.divider()
 
 
 # ============================================================
 # FERRAMENTAS
 # ============================================================
 
-st.divider()
-
-st.subheader(
-    "🛠️ Ferramentas"
-)
+st.markdown("## 🛠️ Ferramentas")
 
 st.caption(
-    "As ferramentas utilizam as bases carregadas acima. A seleção API/THE é feita dentro de cada ferramenta."
+    "As ferramentas utilizam as bases carregadas acima."
 )
 
 
@@ -390,20 +297,18 @@ col1, col2, col3 = st.columns(3)
 
 
 # ============================================================
-# FILTRAGEM / CANCELAMENTO
+# FILTRAGEM
 # ============================================================
 
 with col1:
 
-    st.markdown(
-        "### 🔎 Filtragem / Cancelamento"
-    )
+    st.markdown("### 🔎 Filtragem")
 
     st.caption(
-        "Filtragem das bases API/THE e geração de lotes de cancelamento."
+        "Filtragem e preparação de registros."
     )
 
-    pode_acessar = (
+    pode_filtrar = (
         base_carregada("api")
         or base_carregada("the")
     )
@@ -412,64 +317,127 @@ with col1:
         "Acessar Filtragem",
         type="primary",
         use_container_width=True,
-        disabled=not pode_acessar,
-        key="hub_acessar_filtragem",
+        disabled=not pode_filtrar,
+        key="btn_acessar_filtragem",
     ):
 
         st.session_state.ferramenta_atual = (
             "filtragem"
         )
 
-        limpar_resultado()
-
         st.rerun()
-
-    if not pode_acessar:
-
-        st.caption(
-            "🔒 Carregue API ou THE para habilitar."
-        )
 
 
 # ============================================================
-# SERVIÇOS
+# DUPLICIDADE
 # ============================================================
 
 with col2:
 
-    st.markdown(
-        "### 🔧 Serviços"
-    )
+    st.markdown("### ♻️ Duplicidade")
 
     st.caption(
-        "Ferramentas relacionadas às bases de serviços."
+        "Análise de registros duplicados."
     )
 
-    st.button(
-        "Em desenvolvimento",
-        disabled=True,
-        use_container_width=True,
-        key="hub_servicos",
+    pode_analisar_duplicidade = (
+        base_carregada("api")
+        or base_carregada("the")
     )
+
+    if st.button(
+        "Acessar Duplicidade",
+        type="primary",
+        use_container_width=True,
+        disabled=not pode_analisar_duplicidade,
+        key="btn_acessar_duplicidade",
+    ):
+
+        st.session_state.ferramenta_atual = (
+            "duplicidade"
+        )
+
+        st.rerun()
 
 
 # ============================================================
-# EVENTOS / LOTES
+# ESPAÇO PARA FUTURAS FERRAMENTAS
 # ============================================================
 
 with col3:
 
-    st.markdown(
-        "### 📋 Eventos / Lotes"
-    )
+    st.markdown("### 🛠️ Serviços")
 
     st.caption(
-        "Ferramentas para processamento de eventos e lotes."
+        "Ferramenta em estruturação."
     )
 
     st.button(
-        "Em desenvolvimento",
+        "Em breve",
         disabled=True,
         use_container_width=True,
-        key="hub_eventos_lotes",
+        key="btn_servicos_breve",
     )
+
+
+# ============================================================
+# STATUS DAS BASES
+# ============================================================
+
+st.divider()
+
+st.markdown("## 📊 Status das Bases")
+
+status_col1, status_col2, status_col3 = st.columns(3)
+
+for indice, (nome_base, titulo_base, _) in enumerate(bases):
+
+    coluna = [
+        status_col1,
+        status_col2,
+        status_col3,
+    ][indice % 3]
+
+    with coluna:
+
+        if base_carregada(nome_base):
+
+            df = obter_base(nome_base)
+
+            st.success(
+                f"{titulo_base}: "
+                f"{len(df):,} registros".replace(
+                    ",",
+                    ".",
+                )
+            )
+
+        else:
+
+            st.warning(
+                f"{titulo_base}: não carregada"
+            )
+```
+
+Depois de substituir o arquivo, **reinicie o aplicativo**.
+
+A tela do Hub deverá ficar com:
+
+```text
+📦 Gerador de Lotes
+
+🗂️ Bases de Dados
+├── 🔵 API
+├── 🟢 THE
+├── 🔧 Serviços API
+├── 🔧 Serviços THE
+├── 📋 Eventos
+└── 📦 Lotes
+
+🛠️ Ferramentas
+├── 🔎 Filtragem
+├── ♻️ Duplicidade
+└── 🛠️ Serviços
+```
+
+E a Duplicidade só ficará habilitada quando **API ou THE** estiver carregada.
