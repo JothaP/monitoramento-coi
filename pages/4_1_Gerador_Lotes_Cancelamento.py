@@ -15,6 +15,7 @@ from gerador_lotes.ferramentas.filtragem import render_filtragem
 from gerador_lotes.ferramentas.duplicidade import render_duplicidade
 from gerador_lotes.ferramentas.eventos import render_eventos
 from gerador_lotes.ferramentas.servicos import render_servicos
+from gerador_lotes.ferramentas.lotes import render_lotes
 
 st.set_page_config(
     page_title="Gerador de Lotes - COI",
@@ -66,6 +67,10 @@ if ferramenta_atual == "servicos":
 
 if ferramenta_atual == "eventos":
     render_eventos()
+    st.stop()
+
+if ferramenta_atual == "lotes":
+    render_lotes()
     st.stop()
 
 
@@ -378,6 +383,28 @@ with col4:
         st.session_state.ferramenta_atual = "eventos"
 
         st.rerun()
+
+st.divider()
+
+st.markdown("### 📦 Lotes")
+
+st.caption(
+    "Análise da base de lotes operacionais."
+)
+
+pode_analisar_lotes = base_carregada("lotes")
+
+if st.button(
+    "Acessar Lotes",
+    type="primary",
+    use_container_width=True,
+    disabled=not pode_analisar_lotes,
+    key="btn_acessar_lotes",
+):
+
+    st.session_state.ferramenta_atual = "lotes"
+
+    st.rerun()
 
 # ============================================================
 # STATUS DAS BASES
