@@ -1,4 +1,3 @@
-```python
 import re
 import unicodedata
 from datetime import datetime
@@ -1649,4 +1648,3 @@ def render_duplicidade():
         "Você pode alternar entre API e THE e gerar outro lote "
         "sem realizar novo upload."
     )
-```
