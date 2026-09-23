@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -276,4 +275,3 @@ def fazer_logout():
 
     for key in keys_to_delete:
         del st.session_state[key]
-```
