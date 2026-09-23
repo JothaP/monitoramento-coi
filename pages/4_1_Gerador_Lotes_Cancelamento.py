@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -583,6 +584,7 @@ MAPA_FERRAMENTAS = {
     "Lista Rápida": "lista_rapida",
 }
 
+
 # ============================================================
 # CONTROLE DE ACESSO
 # ============================================================
@@ -591,6 +593,7 @@ perfil_atual = st.session_state.get("perfil", "").lower()
 
 FERRAMENTAS_LIBERADAS_USUARIO = {
     "Filtragem",
+    "Duplicidade",
 }
 
 for indice, ferramenta in enumerate(FERRAMENTAS):
@@ -673,3 +676,21 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True
                 )
+```
+
+A **única alteração funcional** foi esta:
+
+```python
+FERRAMENTAS_LIBERADAS_USUARIO = {
+    "Filtragem",
+    "Duplicidade",
+}
+```
+
+Portanto:
+
+* 👤 **Usuário:** Filtragem + Duplicidade
+* 👑 **Admin:** todas as ferramentas
+* 🔒 Serviços, Eventos, Lotes e Lista Rápida: continuam restritos ao admin.
+
+Também não alterei a autenticação, o carregamento das bases, o tema ou o roteamento.
