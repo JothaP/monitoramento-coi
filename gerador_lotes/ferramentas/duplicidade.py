@@ -77,9 +77,21 @@ def aplicar_modo_visual():
                 background-color: #1f2937;
             }
 
-            div[data-testid="stDownloadButton"] button,
-            div[data-testid="stButton"] button {
-                color: #f9fafb;
+            div[data-testid="stSidebar"] div[data-testid="stButton"] button {
+    background-color: #1f2937 !important;
+    color: #f9fafb !important;
+    border: 1px solid #4b5563 !important;
+}
+
+div[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+    background-color: #374151 !important;
+    color: #ffffff !important;
+    border-color: #6b7280 !important;
+}
+
+div[data-testid="stSidebar"] div[data-testid="stButton"] button p {
+    color: #f9fafb !important;
+}
             }
             </style>
             """,
