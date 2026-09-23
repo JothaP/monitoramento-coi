@@ -108,8 +108,15 @@ def localizar_coluna(df, tipo):
 
     elif tipo == "data":
 
-        # A referência de data/hora deste módulo é
-        # exclusivamente INÍCIO DO SLA.
+        # ====================================================
+        # REGRA ESTRUTURAL:
+        #
+        # A única coluna utilizada para definir data e
+        # horário de abertura da O.S. é INÍCIO DO SLA.
+        #
+        # A coluna DATA não é utilizada.
+        # ====================================================
+
         for coluna in colunas:
 
             nome = normalizar_texto(coluna)
@@ -344,6 +351,21 @@ def converter_datas_robusto(serie):
 
 
 # ============================================================
+# CONVERSÃO DE MINUTOS
+# ============================================================
+
+def hora_para_minutos(valor_hora):
+
+    if valor_hora is None:
+        return None
+
+    return (
+        valor_hora.hour * 60
+        + valor_hora.minute
+    )
+
+
+# ============================================================
 # FILTRO DE HORÁRIO COM MARGEM OPERACIONAL
 # ============================================================
 
@@ -354,18 +376,24 @@ def aplicar_filtro_horario(
     hora_final=None,
 ):
     """
-    Aplica o filtro de horário usando a margem operacional:
+    Aplica o filtro de horário utilizando exclusivamente o
+    horário existente em INÍCIO DO SLA.
+
+    Margens operacionais:
 
     - 1 hora antes do horário inicial;
     - 3 horas depois do horário final.
 
     Exemplos:
 
-    Filtro 09:00 -> 15:00
-    Intervalo efetivo: 08:00 -> 18:00
+    09:00 -> 15:00
+    08:00 -> 18:00
 
-    Filtro 22:00 -> 02:00
-    Intervalo efetivo: 21:00 -> 05:00
+    22:00 -> 02:00
+    21:00 -> 05:00
+
+    00:30 -> 01:30
+    23:30 -> 04:30
 
     Os limites são inclusivos.
     """
@@ -379,131 +407,71 @@ def aplicar_filtro_horario(
     if datas.empty:
         return resultado
 
-    # --------------------------------------------------------
-    # Converte a hora inicial e final para minutos.
-    # --------------------------------------------------------
+    # ========================================================
+    # HORA DOS REGISTROS
+    # ========================================================
 
-    inicio_minutos = None
-    fim_minutos = None
+    horas = (
+        datas.dt.hour * 60
+        + datas.dt.minute
+    )
 
-    if hora_inicial is not None:
+    horas = horas.astype("Float64")
 
-        inicio_minutos = (
-            hora_inicial.hour * 60
-            + hora_inicial.minute
-        )
-
-    if hora_final is not None:
-
-        fim_minutos = (
-            hora_final.hour * 60
-            + hora_final.minute
-        )
-
-    # --------------------------------------------------------
-    # Caso somente a hora inicial tenha sido informada.
-    #
-    # Exemplo:
-    # 09:00
-    #
-    # Aceita a partir de 08:00.
-    # Não existe limite superior.
-    # --------------------------------------------------------
+    # ========================================================
+    # SOMENTE HORA INICIAL
+    # ========================================================
 
     if (
         hora_inicial is not None
         and hora_final is None
     ):
 
-        inicio_datetime = (
-            datetime.combine(
-                datetime.today(),
-                hora_inicial,
-            )
-            - MARGEM_HORA_INICIAL
+        inicio_minutos = hora_para_minutos(
+            hora_inicial
         )
 
-        inicio_margem = inicio_datetime.time()
+        inicio_efetivo = (
+            inicio_minutos - 60
+        ) % 1440
 
-        inicio_margem_minutos = (
-            inicio_margem.hour * 60
-            + inicio_margem.minute
-        )
-
-        horas = (
-            datas.dt.hour * 60
-            + datas.dt.minute
-        )
-
-        # Como o limite inferior pode atravessar a meia-noite,
-        # por exemplo 00:30 - 1h = 23:30,
-        # é necessário considerar os dois lados do relógio.
-        if inicio_margem_minutos > inicio_minutos:
-
-            mascara = (
-                horas.notna()
-                & (
-                    (horas >= inicio_margem_minutos)
-                    | (horas <= 1439)
-                )
+        # Como não existe limite superior,
+        # mantém-se a semântica "a partir de".
+        #
+        # A margem de 1 hora é aplicada ao início.
+        mascara = (
+            horas.notna()
+            & (
+                horas >= inicio_efetivo
             )
-
-        else:
-
-            mascara = (
-                horas.notna()
-                & (
-                    horas >= inicio_margem_minutos
-                )
-            )
+        )
 
         return resultado.loc[
             mascara
         ]
 
-    # --------------------------------------------------------
-    # Caso somente a hora final tenha sido informada.
-    #
-    # Exemplo:
-    # 15:00
-    #
-    # Aceita até 18:00.
-    # Não existe limite inferior.
-    # --------------------------------------------------------
+    # ========================================================
+    # SOMENTE HORA FINAL
+    # ========================================================
 
     if (
         hora_inicial is None
         and hora_final is not None
     ):
 
-        fim_datetime = (
-            datetime.combine(
-                datetime.today(),
-                hora_final,
-            )
-            + MARGEM_HORA_FINAL
+        fim_minutos = hora_para_minutos(
+            hora_final
         )
 
-        fim_margem_minutos = (
-            fim_datetime.hour * 60
-            + fim_datetime.minute
+        fim_efetivo = (
+            fim_minutos + 180
         )
 
-        # Se ultrapassou meia-noite.
-        ultrapassa_meia_noite = (
-            fim_datetime.date()
-            > datetime.today().date()
-        )
+        # Se a margem ultrapassar 23:59,
+        # não existe limite superior dentro
+        # do mesmo dia.
+        if fim_efetivo >= 1440:
 
-        horas = (
-            datas.dt.hour * 60
-            + datas.dt.minute
-        )
-
-        if ultrapassa_meia_noite:
-
-            # Se o limite final passou de 23:59,
-            # todas as horas do dia são aceitas.
             mascara = horas.notna()
 
         else:
@@ -511,7 +479,7 @@ def aplicar_filtro_horario(
             mascara = (
                 horas.notna()
                 & (
-                    horas <= fim_margem_minutos
+                    horas <= fim_efetivo
                 )
             )
 
@@ -519,148 +487,121 @@ def aplicar_filtro_horario(
             mascara
         ]
 
-    # --------------------------------------------------------
-    # Início e fim informados.
-    # --------------------------------------------------------
+    # ========================================================
+    # INÍCIO E FIM INFORMADOS
+    # ========================================================
 
-    inicio_datetime = (
-        datetime.combine(
-            datetime.today(),
-            hora_inicial,
-        )
-        - MARGEM_HORA_INICIAL
+    inicio_minutos = hora_para_minutos(
+        hora_inicial
     )
 
-    fim_datetime = (
-        datetime.combine(
-            datetime.today(),
-            hora_final,
-        )
-        + MARGEM_HORA_FINAL
+    fim_minutos = hora_para_minutos(
+        hora_final
     )
 
-    inicio_margem_minutos = (
-        inicio_datetime.hour * 60
-        + inicio_datetime.minute
-    )
-
-    fim_margem_minutos = (
-        fim_datetime.hour * 60
-        + fim_datetime.minute
-    )
-
-    # --------------------------------------------------------
-    # Determina se o intervalo original cruza a meia-noite.
-    # --------------------------------------------------------
-
-    intervalo_cruza_meia_noite = (
-        inicio_minutos > fim_minutos
-    )
-
-    # Também considera casos em que a margem criada
-    # ultrapassa o início/fim do dia.
-    margem_cruza_meia_noite = (
-        inicio_datetime.date()
-        < datetime.today().date()
-        or fim_datetime.date()
-        > datetime.today().date()
-    )
-
-    horas = (
-        datas.dt.hour * 60
-        + datas.dt.minute
-    )
-
-    # --------------------------------------------------------
-    # Intervalo normal.
+    # ========================================================
+    # INTERVALO ORIGINAL COMO INTERVALO CIRCULAR
     #
-    # Exemplo:
+    # Exemplo normal:
+    #
     # 09:00 -> 15:00
+    # duração = 360 minutos
     #
-    # Margem:
-    # 08:00 -> 18:00
-    # --------------------------------------------------------
+    # Exemplo atravessando meia-noite:
+    #
+    # 22:00 -> 02:00
+    # duração = 240 minutos
+    # ========================================================
 
-    if not intervalo_cruza_meia_noite:
+    duracao_original = (
+        fim_minutos - inicio_minutos
+    ) % 1440
 
-        # Caso a margem final ultrapasse meia-noite.
-        if fim_datetime.date() > datetime.today().date():
+    # ========================================================
+    # APLICA AS MARGENS
+    #
+    # -60 minutos no início
+    # +180 minutos no fim
+    #
+    # Total adicional = 240 minutos.
+    # ========================================================
 
-            limite_final = fim_margem_minutos
+    duracao_efetiva = (
+        duracao_original + 240
+    )
 
-            mascara = (
-                horas.notna()
-                & (
-                    (horas >= inicio_margem_minutos)
-                    | (horas <= limite_final)
-                )
-            )
+    inicio_efetivo = (
+        inicio_minutos - 60
+    ) % 1440
 
-        # Caso a margem inicial tenha voltado para o dia anterior.
-        elif inicio_datetime.date() < datetime.today().date():
+    fim_efetivo = (
+        fim_minutos + 180
+    ) % 1440
 
-            limite_inicio = inicio_margem_minutos
+    # ========================================================
+    # SE A JANELA EFETIVA COBRIR 24 HORAS OU MAIS,
+    # TODOS OS HORÁRIOS SÃO VÁLIDOS.
+    # ========================================================
 
-            mascara = (
-                horas.notna()
-                & (
-                    (horas >= limite_inicio)
-                    & (horas <= fim_margem_minutos)
-                )
-            )
+    if duracao_efetiva >= 1440:
 
-        else:
-
-            mascara = (
-                horas.notna()
-                & (
-                    horas >= inicio_margem_minutos
-                )
-                & (
-                    horas <= fim_margem_minutos
-                )
-            )
+        mascara = horas.notna()
 
         return resultado.loc[
             mascara
         ]
 
-    # --------------------------------------------------------
-    # Intervalo original cruza a meia-noite.
+    # ========================================================
+    # INTERVALO SEM CRUZAMENTO
     #
     # Exemplo:
-    # 22:00 -> 02:00
     #
-    # Margem:
-    # 21:00 -> 05:00
-    # --------------------------------------------------------
+    # 09:00 -> 15:00
+    # 08:00 -> 18:00
+    # ========================================================
 
-    if intervalo_cruza_meia_noite:
-
-        # Normalmente teremos:
-        # início = 21:00
-        # fim    = 05:00
-        #
-        # Portanto:
-        # hora >= 21:00 OU hora <= 05:00
+    if inicio_efetivo <= fim_efetivo:
 
         mascara = (
             horas.notna()
             & (
-                (horas >= inicio_margem_minutos)
-                | (horas <= fim_margem_minutos)
+                horas >= inicio_efetivo
+            )
+            & (
+                horas <= fim_efetivo
             )
         )
 
-        return resultado.loc[
-            mascara
-        ]
+    # ========================================================
+    # INTERVALO CRUZANDO MEIA-NOITE
+    #
+    # Exemplo:
+    #
+    # 22:00 -> 02:00
+    # 21:00 -> 05:00
+    #
+    # Aceita:
+    #
+    # 21:00 ... 23:59
+    # OU
+    # 00:00 ... 05:00
+    # ========================================================
 
-    # --------------------------------------------------------
-    # Fallback defensivo.
-    # --------------------------------------------------------
+    else:
 
-    return resultado
+        mascara = (
+            horas.notna()
+            & (
+                (horas >= inicio_efetivo)
+                | (
+                    horas <= fim_efetivo
+                )
+            )
+        )
+
+    return resultado.loc[
+        mascara
+    ]
 
 
 # ============================================================
@@ -693,9 +634,9 @@ def aplicar_filtros(
 
     resultado = df.copy()
 
-    # --------------------------------------------------------
+    # ========================================================
     # CIDADE
-    # --------------------------------------------------------
+    # ========================================================
 
     if coluna_cidade and cidades:
 
@@ -710,23 +651,23 @@ def aplicar_filtros(
             .isin(cidades_normalizadas)
         ]
 
-    # --------------------------------------------------------
+    # ========================================================
     # BAIRRO
     #
     # CORRESPONDÊNCIA EXATA NORMALIZADA.
     #
-    # Exemplo:
+    # "Parque Sul" entra.
     #
-    # "Parque Sul"      -> entra
-    # "PARQUE SUL"      -> entra
-    # "Parque  Sul"     -> entra
+    # "PARQUE SUL" entra.
     #
-    # "Parque Piauí"    -> não entra
-    # "Polo Empresarial Sul" -> não entra
+    # "Parque  Sul" entra.
     #
-    # Não usamos contains, startswith ou qualquer busca
-    # parcial para o bairro.
-    # --------------------------------------------------------
+    # "Parque Piauí" NÃO entra.
+    #
+    # "Polo Empresarial Sul" NÃO entra.
+    #
+    # Não é utilizada busca parcial.
+    # ========================================================
 
     if coluna_bairro and bairros:
 
@@ -741,12 +682,15 @@ def aplicar_filtros(
             .isin(bairros_normalizados)
         ]
 
-    # --------------------------------------------------------
-    # DATA
+    # ========================================================
+    # DATA / HORÁRIO
     #
-    # Referência exclusivamente:
-    # INÍCIO DO SLA
-    # --------------------------------------------------------
+    # REGRA:
+    #
+    # EXCLUSIVAMENTE INÍCIO DO SLA.
+    #
+    # A coluna DATA não é utilizada.
+    # ========================================================
 
     if coluna_data:
 
@@ -764,9 +708,9 @@ def aplicar_filtros(
                 resultado[coluna_data]
             )
 
-            # ------------------------------------------------
+            # =================================================
             # ANO
-            # ------------------------------------------------
+            # =================================================
 
             if anos:
 
@@ -782,9 +726,9 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
-            # ------------------------------------------------
+            # =================================================
             # MÊS
-            # ------------------------------------------------
+            # =================================================
 
             if meses:
 
@@ -800,9 +744,9 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
-            # ------------------------------------------------
+            # =================================================
             # DIA
-            # ------------------------------------------------
+            # =================================================
 
             if dias:
 
@@ -818,13 +762,9 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
-            # ------------------------------------------------
+            # =================================================
             # HORÁRIO
-            #
-            # Margem:
-            # -1h no início
-            # +3h no fim
-            # ------------------------------------------------
+            # =================================================
 
             if (
                 hora_inicial is not None
@@ -838,9 +778,9 @@ def aplicar_filtros(
                     hora_final,
                 )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PESQUISA GERAL
-    # --------------------------------------------------------
+    # ========================================================
 
     if observacao and observacao.strip():
 
@@ -1105,6 +1045,7 @@ def render_filtragem():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+
         st.metric(
             "Registros",
             f"{len(df_base):,}".replace(
@@ -1114,12 +1055,14 @@ def render_filtragem():
         )
 
     with col2:
+
         st.metric(
             "Colunas",
             len(df_base.columns),
         )
 
     with col3:
+
         st.metric(
             "Matrícula",
             "OK"
@@ -1128,6 +1071,7 @@ def render_filtragem():
         )
 
     with col4:
+
         st.metric(
             "Protocolo",
             "OK"
@@ -1250,8 +1194,8 @@ def render_filtragem():
 
     else:
 
-        st.info(
-            "Coluna INÍCIO DO SLA não encontrada."
+        st.error(
+            "A coluna 'INÍCIO DO SLA' não foi encontrada na base."
         )
 
     # ========================================================
@@ -1263,7 +1207,8 @@ def render_filtragem():
     )
 
     st.caption(
-        "O filtro considera automaticamente uma margem de "
+        "A referência do horário de abertura é exclusivamente "
+        "**INÍCIO DO SLA**. O filtro considera automaticamente "
         "**1 hora antes do início** e **3 horas após o fim**."
     )
 
@@ -1317,67 +1262,68 @@ def render_filtragem():
 
             erro_horario = True
 
-    # --------------------------------------------------------
+    # ========================================================
     # MOSTRA A JANELA EFETIVA
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         hora_inicial is not None
         and hora_final is not None
     ):
 
-        inicio_dt = (
-            datetime.combine(
-                datetime.today(),
-                hora_inicial,
-            )
-            - MARGEM_HORA_INICIAL
+        inicio_minutos = hora_para_minutos(
+            hora_inicial
         )
 
-        fim_dt = (
-            datetime.combine(
-                datetime.today(),
-                hora_final,
-            )
-            + MARGEM_HORA_FINAL
+        fim_minutos = hora_para_minutos(
+            hora_final
         )
+
+        inicio_efetivo = (
+            inicio_minutos - 60
+        ) % 1440
+
+        fim_efetivo = (
+            fim_minutos + 180
+        ) % 1440
 
         st.info(
             f"⏱️ Janela efetiva do filtro: "
-            f"**{inicio_dt.strftime('%H:%M')}** até "
-            f"**{fim_dt.strftime('%H:%M')}** "
+            f"**{inicio_efetivo // 60:02d}:{inicio_efetivo % 60:02d}** "
+            f"até "
+            f"**{fim_efetivo // 60:02d}:{fim_efetivo % 60:02d}** "
             f"(margem de -1h / +3h)."
         )
 
     elif hora_inicial is not None:
 
-        inicio_dt = (
-            datetime.combine(
-                datetime.today(),
-                hora_inicial,
-            )
-            - MARGEM_HORA_INICIAL
+        inicio_minutos = hora_para_minutos(
+            hora_inicial
         )
+
+        inicio_efetivo = (
+            inicio_minutos - 60
+        ) % 1440
 
         st.info(
             f"⏱️ O.S. abertas a partir de "
-            f"**{inicio_dt.strftime('%H:%M')}** "
+            f"**{inicio_efetivo // 60:02d}:{inicio_efetivo % 60:02d}** "
             f"(1h antes do horário inicial)."
         )
 
     elif hora_final is not None:
 
-        fim_dt = (
-            datetime.combine(
-                datetime.today(),
-                hora_final,
-            )
-            + MARGEM_HORA_FINAL
+        fim_minutos = hora_para_minutos(
+            hora_final
         )
+
+        fim_efetivo = (
+            fim_minutos + 180
+        ) % 1440
 
         st.info(
             f"⏱️ O.S. abertas até "
-            f"**{fim_dt.strftime('%H:%M')}** "
+            f"**{fim_efetivo // 60:02d}:{fim_efetivo % 60:02d}** "
             f"(3h após o horário final)."
         )
 
@@ -1429,6 +1375,7 @@ def render_filtragem():
             "filtragem_hora_final",
             "filtragem_pesquisa",
         ]:
+
             st.session_state.pop(
                 chave,
                 None,
