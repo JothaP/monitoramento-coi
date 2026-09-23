@@ -34,66 +34,195 @@ st.set_page_config(
 
 
 # ============================================================
+# ESTADO DO TEMA
+# ============================================================
+
+if "modo_escuro_gerador" not in st.session_state:
+    st.session_state.modo_escuro_gerador = False
+
+modo_escuro = st.session_state.modo_escuro_gerador
+
+
+# ============================================================
 # ESTILO
 # ============================================================
 
-st.markdown(
-    """
-    <style>
+if modo_escuro:
 
-    /* Oculta navegação padrão */
-    [data-testid="stSidebarNav"] {
-        display: none !important;
-    }
+    st.markdown(
+        """
+        <style>
 
-    /* Espaçamento geral */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
+        /* ====================================================
+           TEMA ESCURO
+           ==================================================== */
 
-    /* Títulos */
-    h1 {
-        margin-bottom: 0.2rem;
-    }
+        .stApp {
+            background-color: #0e1117;
+            color: #f1f5f9;
+        }
 
-    h2, h3 {
-        margin-top: 0.5rem;
-    }
+        [data-testid="stAppViewContainer"] {
+            background-color: #0e1117;
+        }
 
-    /* Cards */
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        border-radius: 12px;
-    }
+        [data-testid="stHeader"] {
+            background-color: #0e1117;
+        }
 
-    /* Texto pequeno */
-    .card-status {
-        font-size: 0.82rem;
-        margin-top: -0.15rem;
-        margin-bottom: 0.45rem;
-    }
+        [data-testid="stSidebar"] {
+            background-color: #161b22;
+            border-right: 1px solid #30363d;
+        }
 
-    .card-registros {
-        font-size: 0.78rem;
-        color: #6b7280;
-        margin-bottom: 0.35rem;
-    }
+        [data-testid="stSidebar"] * {
+            color: #f1f5f9;
+        }
 
-    /* Reduz espaço entre elementos */
-    div[data-testid="stVerticalBlock"] > div {
-        gap: 0.45rem;
-    }
+        /* Textos */
+        h1, h2, h3, h4, h5, h6,
+        p, label,
+        [data-testid="stMarkdownContainer"] {
+            color: #f1f5f9;
+        }
 
-    /* Separador */
-    hr {
-        margin-top: 1.2rem;
-        margin-bottom: 1.2rem;
-    }
+        /* Texto secundário */
+        .stCaption,
+        [data-testid="stCaptionContainer"] {
+            color: #aab4c3 !important;
+        }
 
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+        /* Cards */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+        }
+
+        /* File uploader */
+        [data-testid="stFileUploader"] {
+            background-color: #1b222c;
+            border-radius: 10px;
+        }
+
+        [data-testid="stFileUploaderDropzone"] {
+            background-color: #1b222c;
+            border: 1px dashed #4b5563;
+        }
+
+        [data-testid="stFileUploaderDropzone"] * {
+            color: #dbe4ee !important;
+        }
+
+        /* Botões */
+        .stButton > button {
+            border-radius: 8px;
+            border: 1px solid #3b4654;
+        }
+
+        /* Inputs */
+        input,
+        textarea,
+        select {
+            background-color: #1b222c !important;
+            color: #f1f5f9 !important;
+            border-color: #3b4654 !important;
+        }
+
+        /* Divisores */
+        hr {
+            border-color: #30363d;
+        }
+
+        /* Métricas */
+        [data-testid="stMetric"] {
+            background-color: #161b22;
+        }
+
+        /* Status */
+        .card-status {
+            font-size: 0.82rem;
+            margin-top: -0.15rem;
+            margin-bottom: 0.45rem;
+        }
+
+        .card-registros {
+            font-size: 0.78rem;
+            color: #9ca8b7 !important;
+            margin-bottom: 0.35rem;
+        }
+
+        /* Espaçamento */
+        div[data-testid="stVerticalBlock"] > div {
+            gap: 0.45rem;
+        }
+
+        hr {
+            margin-top: 1.2rem;
+            margin-bottom: 1.2rem;
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+else:
+
+    st.markdown(
+        """
+        <style>
+
+        /* ====================================================
+           TEMA CLARO
+           ==================================================== */
+
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+
+        h1 {
+            margin-bottom: 0.2rem;
+        }
+
+        h2, h3 {
+            margin-top: 0.5rem;
+        }
+
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border-radius: 12px;
+        }
+
+        .card-status {
+            font-size: 0.82rem;
+            margin-top: -0.15rem;
+            margin-bottom: 0.45rem;
+        }
+
+        .card-registros {
+            font-size: 0.78rem;
+            color: #6b7280;
+            margin-bottom: 0.35rem;
+        }
+
+        div[data-testid="stVerticalBlock"] > div {
+            gap: 0.45rem;
+        }
+
+        hr {
+            margin-top: 1.2rem;
+            margin-bottom: 1.2rem;
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================
@@ -101,6 +230,7 @@ st.markdown(
 # ============================================================
 
 if not verificar_autenticacao():
+
     st.warning("Sessão não iniciada ou expirada.")
 
     if st.button(
@@ -172,37 +302,31 @@ FERRAMENTAS = [
         "nome": "Filtragem",
         "icone": "🔎",
         "descricao": "Filtragem e geração de lotes de cancelamento.",
-        "funcao": render_filtragem,
     },
     {
         "nome": "Duplicidade",
         "icone": "♻️",
         "descricao": "Análise de registros duplicados.",
-        "funcao": render_duplicidade,
     },
     {
         "nome": "Serviços",
         "icone": "🛠️",
         "descricao": "Análise e tratamento de serviços.",
-        "funcao": render_servicos,
     },
     {
         "nome": "Eventos",
         "icone": "📋",
         "descricao": "Consulta e análise de eventos.",
-        "funcao": render_eventos,
     },
     {
         "nome": "Lotes",
         "icone": "📦",
         "descricao": "Consulta e análise de lotes.",
-        "funcao": render_lotes,
     },
     {
         "nome": "Lista Rápida",
         "icone": "⚡",
         "descricao": "Operações rápidas sobre as bases.",
-        "funcao": render_lista_rapida,
     },
 ]
 
@@ -256,6 +380,26 @@ with st.sidebar:
 
     st.divider()
 
+    # --------------------------------------------------------
+    # TEMA
+    # --------------------------------------------------------
+
+    novo_modo_escuro = st.toggle(
+        "🌙 Modo escuro",
+        value=modo_escuro,
+        key="toggle_modo_escuro_gerador",
+    )
+
+    if novo_modo_escuro != modo_escuro:
+        st.session_state.modo_escuro_gerador = novo_modo_escuro
+        st.rerun()
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # NAVEGAÇÃO
+    # --------------------------------------------------------
+
     if st.button(
         "🛠️ Ferramentas Operacionais",
         use_container_width=True,
@@ -269,6 +413,10 @@ with st.sidebar:
         st.switch_page("app.py")
 
     st.divider()
+
+    # --------------------------------------------------------
+    # LIMPAR BASES
+    # --------------------------------------------------------
 
     if st.button(
         "🗑️ Limpar todas as bases",
@@ -294,12 +442,14 @@ st.caption(
 # ============================================================
 
 total_bases_carregadas = sum(
-    1 for base in BASES_CONFIG
+    1
+    for base in BASES_CONFIG
     if base_carregada(base["chave"])
 )
 
 st.markdown(
-    f"**Bases carregadas:** {total_bases_carregadas} de {len(BASES_CONFIG)}"
+    f"**Bases carregadas:** "
+    f"{total_bases_carregadas} de {len(BASES_CONFIG)}"
 )
 
 
@@ -323,26 +473,20 @@ for indice, base in enumerate(BASES_CONFIG):
 
         with st.container(border=True):
 
-            # ------------------------------------------------
-            # TÍTULO
-            # ------------------------------------------------
-
             st.markdown(
                 f"#### {base['icone']} {base['nome']}"
             )
 
             st.caption(base["descricao"])
 
-            # ------------------------------------------------
-            # STATUS
-            # ------------------------------------------------
-
             if carregada:
 
                 quantidade = len(df)
 
                 st.markdown(
-                    '<div class="card-status">🟢 <strong>Carregada</strong></div>',
+                    '<div class="card-status">'
+                    '🟢 <strong>Carregada</strong>'
+                    '</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -357,7 +501,9 @@ for indice, base in enumerate(BASES_CONFIG):
             else:
 
                 st.markdown(
-                    '<div class="card-status">⚪ <strong>Não carregada</strong></div>',
+                    '<div class="card-status">'
+                    '⚪ <strong>Não carregada</strong>'
+                    '</div>',
                     unsafe_allow_html=True,
                 )
 
@@ -365,10 +511,6 @@ for indice, base in enumerate(BASES_CONFIG):
                     '<div class="card-registros">&nbsp;</div>',
                     unsafe_allow_html=True,
                 )
-
-            # ------------------------------------------------
-            # UPLOAD
-            # ------------------------------------------------
 
             versao = st.session_state.get(
                 f"versao_upload_{chave}",
@@ -396,10 +538,6 @@ for indice, base in enumerate(BASES_CONFIG):
 
                 if processado:
                     st.rerun()
-
-            # ------------------------------------------------
-            # ARQUIVOS / LIMPAR
-            # ------------------------------------------------
 
             arquivos_carregados = st.session_state.get(
                 f"arquivos_{chave}",
@@ -433,6 +571,15 @@ st.caption(
 
 colunas_ferramentas = st.columns(3)
 
+MAPA_FERRAMENTAS = {
+    "Filtragem": "filtragem",
+    "Duplicidade": "duplicidade",
+    "Serviços": "servicos",
+    "Eventos": "eventos",
+    "Lotes": "lotes",
+    "Lista Rápida": "lista_rapida",
+}
+
 for indice, ferramenta in enumerate(FERRAMENTAS):
 
     coluna = colunas_ferramentas[indice % 3]
@@ -460,17 +607,8 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                 use_container_width=True,
             ):
 
-                mapa_ferramentas = {
-                    "Filtragem": "filtragem",
-                    "Duplicidade": "duplicidade",
-                    "Serviços": "servicos",
-                    "Eventos": "eventos",
-                    "Lotes": "lotes",
-                    "Lista Rápida": "lista_rapida",
-                }
-
                 st.session_state.ferramenta_atual = (
-                    mapa_ferramentas[ferramenta["nome"]]
+                    MAPA_FERRAMENTAS[ferramenta["nome"]]
                 )
 
                 st.rerun()
