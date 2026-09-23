@@ -6,6 +6,7 @@ folium
 streamlit-folium
 simplekml
 streamlit-autorefresh
+streamlit-cookies-controller
 plotly
 openpyxl
 matplotlib
