@@ -54,9 +54,7 @@ if not st.session_state.get("autenticado"):
 
 
 perfil_atual = st.session_state.perfil.upper()
-st.write(
-    f"DEBUG - perfil recebido: `{repr(st.session_state.get('perfil'))}`"
-)
+
 st.write(
     f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**"
 )
@@ -148,33 +146,14 @@ with col4:
     st.markdown("#### 🛠️ Módulo 4")
     st.markdown("**Ferramentas Operacionais**")
 
-    if st.session_state.perfil == "admin":
+    st.caption("Status: Ativo")
 
-        st.caption("Status: Ativo (Admin)")
-
-        if st.button(
-            "Acessar Ferramentas",
-            type="primary",
-            use_container_width=True
-        ):
-            st.switch_page("pages/4_Ferramentas_Operacionais.py")
-
-    else:
-
-        st.caption("Status: Em desenvolvimento")
-
-        st.button(
-            "Acessar Ferramentas",
-            disabled=True,
-            use_container_width=True
-        )
-
-        st.markdown(
-            "<p style='font-size:12px; color:gray;'>"
-            "🔒 Restrito a administradores"
-            "</p>",
-            unsafe_allow_html=True
-        )
+    if st.button(
+        "Acessar Ferramentas",
+        type="primary",
+        use_container_width=True
+    ):
+        st.switch_page("pages/4_Ferramentas_Operacionais.py")
 
 
 # ============================================================
