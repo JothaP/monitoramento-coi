@@ -79,16 +79,37 @@ with col1:
 with col2:
     st.markdown("#### 📊 Gerador de Painel")
     st.markdown("**Painéis Operacionais**")
-    st.caption("Status: Ativo")
 
-    if st.button(
-        "Acessar Gerador de Painel",
-        type="primary",
-        use_container_width=True,
-        key="btn_gerador_painel",
-    ):
-        st.switch_page(
-            "pages/4_2_Gerador_de_Painel.py"
+    if st.session_state.get("perfil") == "admin":
+
+        st.caption("Status: Ativo (Admin)")
+
+        if st.button(
+            "Acessar Gerador de Painel",
+            type="primary",
+            use_container_width=True,
+            key="btn_gerador_painel",
+        ):
+            st.switch_page(
+                "pages/4_2_Gerador_de_Painel.py"
+            )
+
+    else:
+
+        st.caption("Status: Restrito")
+
+        st.button(
+            "Acessar Gerador de Painel",
+            disabled=True,
+            use_container_width=True,
+            key="btn_gerador_painel_bloqueado",
+        )
+
+        st.markdown(
+            "<p style='font-size:12px; color:gray;'>"
+            "🔒 Restrito a administradores"
+            "</p>",
+            unsafe_allow_html=True
         )
 
 
