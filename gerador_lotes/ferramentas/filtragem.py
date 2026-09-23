@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -23,6 +23,17 @@ from .componentes import (
 
 
 # ============================================================
+# CONFIGURAÇÕES DO FILTRO DE HORÁRIO
+# ============================================================
+
+# A O.S. pode ser aberta até 1 hora antes do início informado.
+MARGEM_HORA_INICIAL = timedelta(hours=1)
+
+# A O.S. pode ser aberta até 3 horas depois do fim informado.
+MARGEM_HORA_FINAL = timedelta(hours=3)
+
+
+# ============================================================
 # LOCALIZAÇÃO DE COLUNAS
 # ============================================================
 
@@ -36,7 +47,7 @@ def localizar_coluna(df, tipo):
         "matricula": "MATRICULA",
         "cidade": "CIDADE",
         "bairro": "BAIRRO",
-        "data": "DATA",
+        "data": "INÍCIO DO SLA",
     }
 
     alvo = mapa.get(tipo)
@@ -77,6 +88,15 @@ def localizar_coluna(df, tipo):
             if "MATRICULA" in nome:
                 return coluna
 
+    elif tipo == "cidade":
+
+        for coluna in colunas:
+
+            nome = normalizar_texto(coluna)
+
+            if "CIDADE" in nome:
+                return coluna
+
     elif tipo == "bairro":
 
         for coluna in colunas:
@@ -88,18 +108,16 @@ def localizar_coluna(df, tipo):
 
     elif tipo == "data":
 
+        # A referência de data/hora deste módulo é
+        # exclusivamente INÍCIO DO SLA.
         for coluna in colunas:
 
             nome = normalizar_texto(coluna)
 
-            if nome.startswith("DATA "):
-                return coluna
-
-        for coluna in colunas:
-
-            nome = normalizar_texto(coluna)
-
-            if "DATA" in nome:
+            if (
+                "INICIO" in nome
+                and "SLA" in nome
+            ):
                 return coluna
 
     return None
@@ -326,6 +344,326 @@ def converter_datas_robusto(serie):
 
 
 # ============================================================
+# FILTRO DE HORÁRIO COM MARGEM OPERACIONAL
+# ============================================================
+
+def aplicar_filtro_horario(
+    resultado,
+    datas,
+    hora_inicial=None,
+    hora_final=None,
+):
+    """
+    Aplica o filtro de horário usando a margem operacional:
+
+    - 1 hora antes do horário inicial;
+    - 3 horas depois do horário final.
+
+    Exemplos:
+
+    Filtro 09:00 -> 15:00
+    Intervalo efetivo: 08:00 -> 18:00
+
+    Filtro 22:00 -> 02:00
+    Intervalo efetivo: 21:00 -> 05:00
+
+    Os limites são inclusivos.
+    """
+
+    if (
+        hora_inicial is None
+        and hora_final is None
+    ):
+        return resultado
+
+    if datas.empty:
+        return resultado
+
+    # --------------------------------------------------------
+    # Converte a hora inicial e final para minutos.
+    # --------------------------------------------------------
+
+    inicio_minutos = None
+    fim_minutos = None
+
+    if hora_inicial is not None:
+
+        inicio_minutos = (
+            hora_inicial.hour * 60
+            + hora_inicial.minute
+        )
+
+    if hora_final is not None:
+
+        fim_minutos = (
+            hora_final.hour * 60
+            + hora_final.minute
+        )
+
+    # --------------------------------------------------------
+    # Caso somente a hora inicial tenha sido informada.
+    #
+    # Exemplo:
+    # 09:00
+    #
+    # Aceita a partir de 08:00.
+    # Não existe limite superior.
+    # --------------------------------------------------------
+
+    if (
+        hora_inicial is not None
+        and hora_final is None
+    ):
+
+        inicio_datetime = (
+            datetime.combine(
+                datetime.today(),
+                hora_inicial,
+            )
+            - MARGEM_HORA_INICIAL
+        )
+
+        inicio_margem = inicio_datetime.time()
+
+        inicio_margem_minutos = (
+            inicio_margem.hour * 60
+            + inicio_margem.minute
+        )
+
+        horas = (
+            datas.dt.hour * 60
+            + datas.dt.minute
+        )
+
+        # Como o limite inferior pode atravessar a meia-noite,
+        # por exemplo 00:30 - 1h = 23:30,
+        # é necessário considerar os dois lados do relógio.
+        if inicio_margem_minutos > inicio_minutos:
+
+            mascara = (
+                horas.notna()
+                & (
+                    (horas >= inicio_margem_minutos)
+                    | (horas <= 1439)
+                )
+            )
+
+        else:
+
+            mascara = (
+                horas.notna()
+                & (
+                    horas >= inicio_margem_minutos
+                )
+            )
+
+        return resultado.loc[
+            mascara
+        ]
+
+    # --------------------------------------------------------
+    # Caso somente a hora final tenha sido informada.
+    #
+    # Exemplo:
+    # 15:00
+    #
+    # Aceita até 18:00.
+    # Não existe limite inferior.
+    # --------------------------------------------------------
+
+    if (
+        hora_inicial is None
+        and hora_final is not None
+    ):
+
+        fim_datetime = (
+            datetime.combine(
+                datetime.today(),
+                hora_final,
+            )
+            + MARGEM_HORA_FINAL
+        )
+
+        fim_margem_minutos = (
+            fim_datetime.hour * 60
+            + fim_datetime.minute
+        )
+
+        # Se ultrapassou meia-noite.
+        ultrapassa_meia_noite = (
+            fim_datetime.date()
+            > datetime.today().date()
+        )
+
+        horas = (
+            datas.dt.hour * 60
+            + datas.dt.minute
+        )
+
+        if ultrapassa_meia_noite:
+
+            # Se o limite final passou de 23:59,
+            # todas as horas do dia são aceitas.
+            mascara = horas.notna()
+
+        else:
+
+            mascara = (
+                horas.notna()
+                & (
+                    horas <= fim_margem_minutos
+                )
+            )
+
+        return resultado.loc[
+            mascara
+        ]
+
+    # --------------------------------------------------------
+    # Início e fim informados.
+    # --------------------------------------------------------
+
+    inicio_datetime = (
+        datetime.combine(
+            datetime.today(),
+            hora_inicial,
+        )
+        - MARGEM_HORA_INICIAL
+    )
+
+    fim_datetime = (
+        datetime.combine(
+            datetime.today(),
+            hora_final,
+        )
+        + MARGEM_HORA_FINAL
+    )
+
+    inicio_margem_minutos = (
+        inicio_datetime.hour * 60
+        + inicio_datetime.minute
+    )
+
+    fim_margem_minutos = (
+        fim_datetime.hour * 60
+        + fim_datetime.minute
+    )
+
+    # --------------------------------------------------------
+    # Determina se o intervalo original cruza a meia-noite.
+    # --------------------------------------------------------
+
+    intervalo_cruza_meia_noite = (
+        inicio_minutos > fim_minutos
+    )
+
+    # Também considera casos em que a margem criada
+    # ultrapassa o início/fim do dia.
+    margem_cruza_meia_noite = (
+        inicio_datetime.date()
+        < datetime.today().date()
+        or fim_datetime.date()
+        > datetime.today().date()
+    )
+
+    horas = (
+        datas.dt.hour * 60
+        + datas.dt.minute
+    )
+
+    # --------------------------------------------------------
+    # Intervalo normal.
+    #
+    # Exemplo:
+    # 09:00 -> 15:00
+    #
+    # Margem:
+    # 08:00 -> 18:00
+    # --------------------------------------------------------
+
+    if not intervalo_cruza_meia_noite:
+
+        # Caso a margem final ultrapasse meia-noite.
+        if fim_datetime.date() > datetime.today().date():
+
+            limite_final = fim_margem_minutos
+
+            mascara = (
+                horas.notna()
+                & (
+                    (horas >= inicio_margem_minutos)
+                    | (horas <= limite_final)
+                )
+            )
+
+        # Caso a margem inicial tenha voltado para o dia anterior.
+        elif inicio_datetime.date() < datetime.today().date():
+
+            limite_inicio = inicio_margem_minutos
+
+            mascara = (
+                horas.notna()
+                & (
+                    (horas >= limite_inicio)
+                    & (horas <= fim_margem_minutos)
+                )
+            )
+
+        else:
+
+            mascara = (
+                horas.notna()
+                & (
+                    horas >= inicio_margem_minutos
+                )
+                & (
+                    horas <= fim_margem_minutos
+                )
+            )
+
+        return resultado.loc[
+            mascara
+        ]
+
+    # --------------------------------------------------------
+    # Intervalo original cruza a meia-noite.
+    #
+    # Exemplo:
+    # 22:00 -> 02:00
+    #
+    # Margem:
+    # 21:00 -> 05:00
+    # --------------------------------------------------------
+
+    if intervalo_cruza_meia_noite:
+
+        # Normalmente teremos:
+        # início = 21:00
+        # fim    = 05:00
+        #
+        # Portanto:
+        # hora >= 21:00 OU hora <= 05:00
+
+        mascara = (
+            horas.notna()
+            & (
+                (horas >= inicio_margem_minutos)
+                | (horas <= fim_margem_minutos)
+            )
+        )
+
+        return resultado.loc[
+            mascara
+        ]
+
+    # --------------------------------------------------------
+    # Fallback defensivo.
+    # --------------------------------------------------------
+
+    return resultado
+
+
+# ============================================================
 # FILTROS
 # ============================================================
 
@@ -374,6 +712,20 @@ def aplicar_filtros(
 
     # --------------------------------------------------------
     # BAIRRO
+    #
+    # CORRESPONDÊNCIA EXATA NORMALIZADA.
+    #
+    # Exemplo:
+    #
+    # "Parque Sul"      -> entra
+    # "PARQUE SUL"      -> entra
+    # "Parque  Sul"     -> entra
+    #
+    # "Parque Piauí"    -> não entra
+    # "Polo Empresarial Sul" -> não entra
+    #
+    # Não usamos contains, startswith ou qualquer busca
+    # parcial para o bairro.
     # --------------------------------------------------------
 
     if coluna_bairro and bairros:
@@ -391,6 +743,9 @@ def aplicar_filtros(
 
     # --------------------------------------------------------
     # DATA
+    #
+    # Referência exclusivamente:
+    # INÍCIO DO SLA
     # --------------------------------------------------------
 
     if coluna_data:
@@ -409,6 +764,10 @@ def aplicar_filtros(
                 resultado[coluna_data]
             )
 
+            # ------------------------------------------------
+            # ANO
+            # ------------------------------------------------
+
             if anos:
 
                 mascara = datas.dt.year.isin(
@@ -422,6 +781,10 @@ def aplicar_filtros(
                 datas = datas.loc[
                     resultado.index
                 ]
+
+            # ------------------------------------------------
+            # MÊS
+            # ------------------------------------------------
 
             if meses:
 
@@ -437,6 +800,10 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
+            # ------------------------------------------------
+            # DIA
+            # ------------------------------------------------
+
             if dias:
 
                 mascara = datas.dt.day.isin(
@@ -451,65 +818,25 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
+            # ------------------------------------------------
+            # HORÁRIO
+            #
+            # Margem:
+            # -1h no início
+            # +3h no fim
+            # ------------------------------------------------
+
             if (
                 hora_inicial is not None
                 or hora_final is not None
             ):
 
-                horas = datas.dt.time
-
-                if (
-                    hora_inicial is not None
-                    and hora_final is not None
-                ):
-
-                    if hora_inicial <= hora_final:
-
-                        mascara = (
-                            horas.notna()
-                            & (
-                                horas
-                                >= hora_inicial
-                            )
-                            & (
-                                horas
-                                <= hora_final
-                            )
-                        )
-
-                    else:
-
-                        mascara = (
-                            horas.notna()
-                            & (
-                                (horas >= hora_inicial)
-                                | (horas <= hora_final)
-                            )
-                        )
-
-                elif hora_inicial is not None:
-
-                    mascara = (
-                        horas.notna()
-                        & (
-                            horas
-                            >= hora_inicial
-                        )
-                    )
-
-                else:
-
-                    mascara = (
-                        horas.notna()
-                        & (
-                            horas
-                            <= hora_final
-                        )
-                    )
-
-                resultado = resultado.loc[
-                    mascara
-                ]
+                resultado = aplicar_filtro_horario(
+                    resultado,
+                    datas,
+                    hora_inicial,
+                    hora_final,
+                )
 
     # --------------------------------------------------------
     # PESQUISA GERAL
@@ -671,7 +998,7 @@ def gerar_lote_cancelamento(
                 "Zona Ligacao": zona,
                 "Numero Do Pedido": numero_int,
                 "Ano Do Pedido": ano,
-                "Tipo Encerramento": "CANCELAMENTO",
+                "Tipo Encerramento": 6,
                 "Observações": "",
             }
         )
@@ -924,12 +1251,21 @@ def render_filtragem():
     else:
 
         st.info(
-            "Coluna DATA não encontrada."
+            "Coluna INÍCIO DO SLA não encontrada."
         )
 
     # ========================================================
     # HORÁRIO
     # ========================================================
+
+    st.markdown(
+        "#### 🕐 Horário de abertura da O.S."
+    )
+
+    st.caption(
+        "O filtro considera automaticamente uma margem de "
+        "**1 hora antes do início** e **3 horas após o fim**."
+    )
 
     col6, col7 = st.columns(2)
 
@@ -980,6 +1316,70 @@ def render_filtragem():
             st.error(str(erro))
 
             erro_horario = True
+
+    # --------------------------------------------------------
+    # MOSTRA A JANELA EFETIVA
+    # --------------------------------------------------------
+
+    if (
+        hora_inicial is not None
+        and hora_final is not None
+    ):
+
+        inicio_dt = (
+            datetime.combine(
+                datetime.today(),
+                hora_inicial,
+            )
+            - MARGEM_HORA_INICIAL
+        )
+
+        fim_dt = (
+            datetime.combine(
+                datetime.today(),
+                hora_final,
+            )
+            + MARGEM_HORA_FINAL
+        )
+
+        st.info(
+            f"⏱️ Janela efetiva do filtro: "
+            f"**{inicio_dt.strftime('%H:%M')}** até "
+            f"**{fim_dt.strftime('%H:%M')}** "
+            f"(margem de -1h / +3h)."
+        )
+
+    elif hora_inicial is not None:
+
+        inicio_dt = (
+            datetime.combine(
+                datetime.today(),
+                hora_inicial,
+            )
+            - MARGEM_HORA_INICIAL
+        )
+
+        st.info(
+            f"⏱️ O.S. abertas a partir de "
+            f"**{inicio_dt.strftime('%H:%M')}** "
+            f"(1h antes do horário inicial)."
+        )
+
+    elif hora_final is not None:
+
+        fim_dt = (
+            datetime.combine(
+                datetime.today(),
+                hora_final,
+            )
+            + MARGEM_HORA_FINAL
+        )
+
+        st.info(
+            f"⏱️ O.S. abertas até "
+            f"**{fim_dt.strftime('%H:%M')}** "
+            f"(3h após o horário final)."
+        )
 
     # ========================================================
     # PESQUISA
