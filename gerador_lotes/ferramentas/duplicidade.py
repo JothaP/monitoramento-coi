@@ -1,3 +1,4 @@
+```python
 import re
 import unicodedata
 from datetime import datetime
@@ -35,21 +36,48 @@ def aplicar_modo_visual():
         st.markdown(
             """
             <style>
+
+            /* =====================================================
+               FUNDO PRINCIPAL
+               ===================================================== */
+
             .stApp {
-                background-color: #111827;
+                background-color: #111827 !important;
+            }
+
+            [data-testid="stAppViewContainer"] {
+                background-color: #111827 !important;
+            }
+
+            [data-testid="stMain"] {
+                background-color: #111827 !important;
             }
 
             [data-testid="stHeader"] {
-                background-color: #111827;
+                background-color: #111827 !important;
             }
 
+
+            /* =====================================================
+               SIDEBAR
+               ===================================================== */
+
             [data-testid="stSidebar"] {
-                background-color: #1f2937;
+                background-color: #1f2937 !important;
+            }
+
+            [data-testid="stSidebar"] > div {
+                background-color: #1f2937 !important;
             }
 
             [data-testid="stSidebar"] * {
                 color: #f9fafb !important;
             }
+
+
+            /* =====================================================
+               TEXTOS
+               ===================================================== */
 
             .stMarkdown,
             .stText,
@@ -61,53 +89,174 @@ def aplicar_modo_visual():
             h4,
             h5,
             h6 {
-                color: #f9fafb;
-            }
-
-            [data-testid="stMetricValue"],
-            [data-testid="stMetricLabel"] {
                 color: #f9fafb !important;
             }
 
-            [data-testid="stExpander"] {
-                background-color: #1f2937;
+
+            /* =====================================================
+               MÉTRICAS
+               ===================================================== */
+
+            [data-testid="stMetricValue"],
+            [data-testid="stMetricLabel"],
+            [data-testid="stMetricDelta"] {
+                color: #f9fafb !important;
             }
+
+
+            /* =====================================================
+               EXPANDERS
+               ===================================================== */
+
+            [data-testid="stExpander"] {
+                background-color: #1f2937 !important;
+                border-color: #374151 !important;
+            }
+
+            [data-testid="stExpander"] summary {
+                background-color: #1f2937 !important;
+                color: #f9fafb !important;
+            }
+
+
+            /* =====================================================
+               DATAFRAME
+               ===================================================== */
 
             [data-testid="stDataFrame"] {
-                background-color: #1f2937;
+                background-color: #1f2937 !important;
             }
 
-           div[data-testid="stSidebar"] div[data-testid="stButton"] > button {
-    background-color: #1f2937 !important;
-    color: #f9fafb !important;
-    border: 1px solid #4b5563 !important;
-    box-shadow: none !important;
-}
 
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
-    background-color: #374151 !important;
-    color: #ffffff !important;
-    border: 1px solid #6b7280 !important;
-}
+            /* =====================================================
+               BOTÕES DA SIDEBAR
+               ===================================================== */
 
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button:focus,
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button:active {
-    background-color: #374151 !important;
-    color: #ffffff !important;
-    border: 1px solid #6b7280 !important;
-    box-shadow: none !important;
-}
-
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button p,
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button span {
-    color: #f9fafb !important;
-}
-
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover p,
-div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover span {
-    color: #ffffff !important;
-}
+            [data-testid="stSidebar"] [data-testid="stButton"] {
+                width: 100% !important;
             }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button {
+                background: #1f2937 !important;
+                background-color: #1f2937 !important;
+                color: #ffffff !important;
+                border: 1px solid #4b5563 !important;
+                box-shadow: none !important;
+                opacity: 1 !important;
+            }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button:hover {
+                background: #374151 !important;
+                background-color: #374151 !important;
+                color: #ffffff !important;
+                border-color: #6b7280 !important;
+            }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button:focus,
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button:active {
+                background: #374151 !important;
+                background-color: #374151 !important;
+                color: #ffffff !important;
+                border-color: #6b7280 !important;
+                box-shadow: none !important;
+            }
+
+            /* Container interno do botão */
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button > div {
+                background: transparent !important;
+                color: #ffffff !important;
+            }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button > div > div {
+                background: transparent !important;
+                color: #ffffff !important;
+            }
+
+            /* Texto do botão */
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button p {
+                color: #ffffff !important;
+                background: transparent !important;
+                opacity: 1 !important;
+            }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button span {
+                color: #ffffff !important;
+                background: transparent !important;
+                opacity: 1 !important;
+            }
+
+            [data-testid="stSidebar"]
+            [data-testid="stButton"]
+            button div {
+                color: #ffffff !important;
+            }
+
+
+            /* =====================================================
+               DOWNLOAD
+               ===================================================== */
+
+            [data-testid="stDownloadButton"] button {
+                background: #1f2937 !important;
+                background-color: #1f2937 !important;
+                color: #ffffff !important;
+                border: 1px solid #4b5563 !important;
+            }
+
+            [data-testid="stDownloadButton"] button:hover {
+                background: #374151 !important;
+                background-color: #374151 !important;
+                color: #ffffff !important;
+                border-color: #6b7280 !important;
+            }
+
+            [data-testid="stDownloadButton"] button p,
+            [data-testid="stDownloadButton"] button span {
+                color: #ffffff !important;
+                background: transparent !important;
+            }
+
+
+            /* =====================================================
+               INPUTS
+               ===================================================== */
+
+            [data-testid="stSelectbox"] label,
+            [data-testid="stMultiSelect"] label,
+            [data-testid="stTextInput"] label,
+            [data-testid="stNumberInput"] label,
+            [data-testid="stDateInput"] label,
+            [data-testid="stTimeInput"] label {
+                color: #f9fafb !important;
+            }
+
+
+            /* =====================================================
+               DIVISORES
+               ===================================================== */
+
+            hr {
+                border-color: #374151 !important;
+            }
+
             </style>
             """,
             unsafe_allow_html=True,
@@ -1500,3 +1649,4 @@ def render_duplicidade():
         "Você pode alternar entre API e THE e gerar outro lote "
         "sem realizar novo upload."
     )
+```
