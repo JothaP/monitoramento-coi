@@ -14,9 +14,7 @@ import extra_streamlit_components as stx
 # ============================================================
 
 TEMPO_SESSAO_HORAS = 8
-
 COOKIE_NAME = "coi_auth_token"
-
 COOKIE_MANAGER_KEY = "coi_cookie_manager"
 
 # ============================================================
@@ -57,13 +55,11 @@ return str(chave)
 
 def get_manager():
 """
-Cria o CookieManager uma única vez por sessão do Streamlit.
-
-```
-O objeto permanece no session_state para evitar a criação
-repetida do componente durante os reruns.
+Cria o CookieManager uma única vez durante a sessão
+atual do Streamlit.
 """
 
+```
 if "cookie_manager" not in st.session_state:
     st.session_state["cookie_manager"] = stx.CookieManager(
         key=COOKIE_MANAGER_KEY
@@ -81,12 +77,9 @@ return st.session_state["cookie_manager"]
 def gerar_assinatura(conteudo: str) -> str:
 """
 Gera uma assinatura HMAC-SHA256 para o conteúdo do token.
-
-```
-Isso impede que o usuário altere manualmente os dados
-armazenados no cookie sem possuir a chave secreta.
 """
 
+```
 chave = obter_secret_key()
 
 return hmac.new(
@@ -105,14 +98,9 @@ return hmac.new(
 def criar_token(usuario: str, perfil: str) -> str:
 """
 Cria um token de autenticação válido por 8 horas.
-
-```
-Cada novo login gera:
-- nova expiração;
-- novo nonce;
-- nova assinatura.
 """
 
+```
 agora = datetime.now(timezone.utc)
 
 expiracao = agora + timedelta(
@@ -154,17 +142,11 @@ return json.dumps(
 
 def validar_token(token: str):
 """
-Valida:
+Valida a assinatura e a validade do token.
 
 ```
-1. estrutura do token;
-2. assinatura HMAC;
-3. validade temporal;
-4. existência do usuário;
-5. existência do perfil.
-
-Retorna os dados do usuário quando válido.
-Retorna None quando inválido ou expirado.
+Retorna os dados do usuário quando o token é válido.
+Retorna None quando o token é inválido ou expirado.
 """
 
 try:
@@ -182,9 +164,7 @@ try:
     if not conteudo or not assinatura_recebida:
         return None
 
-    assinatura_correta = gerar_assinatura(
-        conteudo
-    )
+    assinatura_correta = gerar_assinatura(conteudo)
 
     if not hmac.compare_digest(
         str(assinatura_recebida),
@@ -237,12 +217,9 @@ except Exception:
 def fazer_login(usuario: str, perfil: str):
 """
 Realiza o login e inicia uma nova sessão de 8 horas.
-
-```
-Um novo login sempre cria um novo token e uma nova
-validade de 8 horas.
 """
 
+```
 cookie_manager = get_manager()
 
 token = criar_token(
@@ -268,9 +245,6 @@ st.session_state["autenticado"] = True
 st.session_state["usuario_logado"] = usuario
 st.session_state["perfil"] = perfil
 
-# Marca que a autenticação acabou de ser realizada.
-# Isso evita que uma leitura prematura do componente
-# tente substituir a sessão recém-criada.
 st.session_state["login_realizado"] = True
 
 return True
@@ -278,31 +252,20 @@ return True
 
 # ============================================================
 
-# LEITURA DOS COOKIES
+# OBTENÇÃO DO COOKIE
 
 # ============================================================
 
 def obter_cookie_autenticacao():
 """
-Tenta recuperar o cookie de autenticação.
+Recupera o cookie de autenticação do navegador.
 
 ```
-Primeiro utiliza get_all(), quando disponível,
-pois isso permite verificar o conjunto de cookies
-retornado pelo componente.
-
-Em seguida utiliza get() como fallback.
-
-Retorna:
-    token válido como string
-    ou None
+Tenta primeiro obter todos os cookies e depois utiliza
+get() como fallback.
 """
 
 cookie_manager = get_manager()
-
-# --------------------------------------------------------
-# Tentativa 1 — obter todos os cookies
-# --------------------------------------------------------
 
 try:
     cookies = cookie_manager.get_all()
@@ -315,10 +278,6 @@ try:
 
 except Exception:
     pass
-
-# --------------------------------------------------------
-# Tentativa 2 — obter diretamente pelo nome
-# --------------------------------------------------------
 
 try:
     token = cookie_manager.get(COOKIE_NAME)
@@ -343,33 +302,23 @@ def verificar_autenticacao() -> bool:
 Verifica se existe uma sessão autenticada.
 
 ```
-Ordem de verificação:
+Primeiro verifica o session_state.
 
-1. session_state;
-2. cookie persistente do navegador;
-3. validação criptográfica;
-4. validade de 8 horas.
+Caso o session_state tenha sido perdido, tenta recuperar
+a sessão através do cookie persistente do navegador.
 
-O cookie permite recuperar a autenticação depois de:
-- atualizar a página;
-- acessar outra página da aplicação;
-- criar uma nova sessão do Streamlit no navegador.
-
-O tempo NÃO é renovado automaticamente durante a navegação.
-
-A renovação acontece somente quando o usuário realiza
-um novo login.
+A sessão possui validade de 8 horas a partir do login.
 """
 
 # --------------------------------------------------------
-# Sessão atual ainda está ativa
+# Sessão atual
 # --------------------------------------------------------
 
 if st.session_state.get("autenticado") is True:
     return True
 
 # --------------------------------------------------------
-# Se acabou de fazer login, mantém a sessão atual
+# Login recém-realizado
 # --------------------------------------------------------
 
 if st.session_state.get("login_realizado") is True:
@@ -386,15 +335,13 @@ if not cookie:
     return False
 
 # --------------------------------------------------------
-# Validação criptográfica e temporal
+# Validação
 # --------------------------------------------------------
 
 dados = validar_token(cookie)
 
 if not dados:
-    # Token inválido ou expirado.
-    # Remove o cookie para impedir novas tentativas
-    # com um token que já não pode ser utilizado.
+
     try:
         cookie_manager = get_manager()
         cookie_manager.delete(COOKIE_NAME)
@@ -430,33 +377,18 @@ return True
 
 def fazer_logout():
 """
-Encerra completamente a sessão atual.
+Encerra a sessão atual.
 
 ```
-Remove:
-- cookie persistente;
-- dados da sessão do Streamlit;
-- bases carregadas;
-- estado das ferramentas.
-
-O CookieManager é preservado para que possa ser
-reutilizado caso o usuário faça novo login.
+Remove o cookie de autenticação e limpa o session_state.
 """
 
 cookie_manager = get_manager()
-
-# --------------------------------------------------------
-# Remove o cookie
-# --------------------------------------------------------
 
 try:
     cookie_manager.delete(COOKIE_NAME)
 except Exception:
     pass
-
-# --------------------------------------------------------
-# Limpa o session_state
-# --------------------------------------------------------
 
 keys_to_delete = [
     key
