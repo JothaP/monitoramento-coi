@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -6,7 +7,6 @@ from gerador_lotes import (
     inicializar_estado,
     base_carregada,
     obter_base,
-    limpar_base,
     limpar_bases,
     processar_upload_multiplo,
 )
@@ -141,6 +141,29 @@ if modo_escuro:
 
         div[data-testid="stVerticalBlock"] > div {
             gap: 0.45rem;
+        }
+
+        /* Botões da barra lateral */
+
+        [data-testid="stSidebar"] .stButton > button {
+            background-color: #212833 !important;
+            color: #f1f5f9 !important;
+            border: 1px solid #3b4654 !important;
+            border-radius: 8px !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background-color: #2b3441 !important;
+            color: #ffffff !important;
+            border-color: #64748b !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button p {
+            color: #f1f5f9 !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover p {
+            color: #ffffff !important;
         }
 
         </style>
@@ -361,46 +384,28 @@ with st.sidebar:
     if novo_modo_escuro != modo_escuro:
         st.session_state.modo_escuro_gerador = novo_modo_escuro
         st.rerun()
-        /* Botões da barra lateral */
-        [data-testid="stSidebar"] .stButton > button {
-            background-color: #212833 !important;
-            color: #f1f5f9 !important;
-            border: 1px solid #3b4654 !important;
-            border-radius: 8px !important;
-        }
 
-        [data-testid="stSidebar"] .stButton > button:hover {
-            background-color: #2b3441 !important;
-            color: #ffffff !important;
-            border-color: #64748b !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button p {
-            color: #f1f5f9 !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button:hover p {
-            color: #ffffff !important;
-        }
     st.divider()
 
     # --------------------------------------------------------
     # NAVEGAÇÃO
     # --------------------------------------------------------
 
-if st.button(
-    "🛠️  Ferramentas Operacionais",
-    key="btn_voltar_ferramentas",
-    use_container_width=True,
-):
-    st.switch_page("pages/4_Ferramentas_Operacionais.py")
+    if st.button(
+        "🛠️  Ferramentas Operacionais",
+        key="btn_voltar_ferramentas",
+        use_container_width=True,
+    ):
+        st.session_state.ferramenta_atual = None
+        st.switch_page("pages/4_Ferramentas_Operacionais.py")
 
-if st.button(
-    "🏠  Menu Principal",
-    key="btn_voltar_principal",
-    use_container_width=True,
-):
-    st.switch_page("app.py")
+    if st.button(
+        "🏠  Menu Principal",
+        key="btn_voltar_principal",
+        use_container_width=True,
+    ):
+        st.session_state.ferramenta_atual = None
+        st.switch_page("app.py")
 
     st.divider()
 
@@ -546,7 +551,15 @@ for indice, base in enumerate(BASES_CONFIG):
                     key=f"limpar_base_{chave}",
                     use_container_width=True,
                 ):
-                    limpar_base(chave)
+
+                    st.session_state[f"df_{chave}"] = None
+                    st.session_state[f"arquivos_{chave}"] = []
+
+                    if f"versao_upload_{chave}" not in st.session_state:
+                        st.session_state[f"versao_upload_{chave}"] = 0
+
+                    st.session_state[f"versao_upload_{chave}"] += 1
+
                     st.rerun()
 
 
@@ -603,3 +616,4 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                 )
 
                 st.rerun()
+```
