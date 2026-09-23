@@ -4,33 +4,49 @@ import hashlib
 import hmac
 import json
 import secrets
-import extra_streamlit_components as stx
+import time
 
+from streamlit_cookies_controller import CookieController
+
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
 
 TEMPO_SESSAO_HORAS = 8
 COOKIE_NAME = "coi_auth_token"
-COOKIE_MANAGER_KEY = "coi_cookie_manager"
 
+
+# ============================================================
+# COOKIE CONTROLLER
+# ============================================================
+
+def get_controller():
+    if "cookie_controller" not in st.session_state:
+        st.session_state["cookie_controller"] = CookieController()
+
+    return st.session_state["cookie_controller"]
+
+
+# ============================================================
+# CHAVE DE SEGURANÇA
+# ============================================================
 
 def obter_secret_key():
     chave = st.secrets.get("COI_SECRET_KEY")
 
     if not chave:
         raise RuntimeError(
-            "A chave COI_SECRET_KEY não foi configurada nos Secrets do Streamlit."
+            "A chave COI_SECRET_KEY não foi configurada "
+            "nos Secrets do Streamlit."
         )
 
     return str(chave)
 
 
-def get_manager():
-    if "cookie_manager" not in st.session_state:
-        st.session_state["cookie_manager"] = stx.CookieManager(
-            key=COOKIE_MANAGER_KEY
-        )
-
-    return st.session_state["cookie_manager"]
-
+# ============================================================
+# ASSINATURA
+# ============================================================
 
 def gerar_assinatura(conteudo):
     chave = obter_secret_key()
@@ -42,9 +58,16 @@ def gerar_assinatura(conteudo):
     ).hexdigest()
 
 
+# ============================================================
+# CRIAÇÃO DO TOKEN
+# ============================================================
+
 def criar_token(usuario, perfil):
     agora = datetime.now(timezone.utc)
-    expiracao = agora + timedelta(hours=TEMPO_SESSAO_HORAS)
+
+    expiracao = agora + timedelta(
+        hours=TEMPO_SESSAO_HORAS
+    )
 
     dados = {
         "usuario": str(usuario),
@@ -72,6 +95,10 @@ def criar_token(usuario, perfil):
         separators=(",", ":"),
     )
 
+
+# ============================================================
+# VALIDAÇÃO DO TOKEN
+# ============================================================
 
 def validar_token(token):
     try:
@@ -107,7 +134,9 @@ def validar_token(token):
         if not expira_em_texto:
             return None
 
-        expira_em = datetime.fromisoformat(expira_em_texto)
+        expira_em = datetime.fromisoformat(
+            expira_em_texto
+        )
 
         if expira_em.tzinfo is None:
             expira_em = expira_em.replace(
@@ -131,24 +160,23 @@ def validar_token(token):
         return None
 
 
+# ============================================================
+# LOGIN
+# ============================================================
+
 def fazer_login(usuario, perfil):
-    cookie_manager = get_manager()
+    controller = get_controller()
 
     token = criar_token(
         usuario=usuario,
         perfil=perfil,
     )
 
-    expiracao_cookie = (
-        datetime.now(timezone.utc)
-        + timedelta(hours=TEMPO_SESSAO_HORAS)
-    )
-
     try:
-        cookie_manager.set(
+        controller.set(
             COOKIE_NAME,
             token,
-            expires_at=expiracao_cookie,
+            maxAge=TEMPO_SESSAO_HORAS * 60 * 60,
         )
     except Exception:
         return False
@@ -156,28 +184,19 @@ def fazer_login(usuario, perfil):
     st.session_state["autenticado"] = True
     st.session_state["usuario_logado"] = usuario
     st.session_state["perfil"] = perfil
-    st.session_state["login_realizado"] = True
 
     return True
 
 
-def obter_cookie_autenticacao():
-    cookie_manager = get_manager()
+# ============================================================
+# RECUPERAÇÃO DO COOKIE
+# ============================================================
+
+def obter_cookie():
+    controller = get_controller()
 
     try:
-        cookies = cookie_manager.get_all()
-
-        if isinstance(cookies, dict):
-            token = cookies.get(COOKIE_NAME)
-
-            if token:
-                return token
-
-    except Exception:
-        pass
-
-    try:
-        token = cookie_manager.get(COOKIE_NAME)
+        token = controller.get(COOKIE_NAME)
 
         if token:
             return token
@@ -188,49 +207,84 @@ def obter_cookie_autenticacao():
     return None
 
 
+# ============================================================
+# VERIFICAÇÃO DA AUTENTICAÇÃO
+# ============================================================
+
 def verificar_autenticacao():
+    # --------------------------------------------------------
+    # Sessão atual
+    # --------------------------------------------------------
+
     if st.session_state.get("autenticado") is True:
         return True
 
-    if st.session_state.get("login_realizado") is True:
-        st.session_state["autenticado"] = True
-        return True
+    # --------------------------------------------------------
+    # Recuperação pelo cookie
+    # --------------------------------------------------------
 
-    cookie = obter_cookie_autenticacao()
+    token = obter_cookie()
 
-    if not cookie:
-        return False
+    if token:
+        dados = validar_token(token)
 
-    dados = validar_token(cookie)
+        if dados:
+            st.session_state["autenticado"] = True
+            st.session_state["usuario_logado"] = dados.get(
+                "usuario",
+                "",
+            )
+            st.session_state["perfil"] = dados.get(
+                "perfil",
+                "",
+            )
 
-    if not dados:
+            return True
+
+        # Token inválido/expirado
         try:
-            cookie_manager = get_manager()
-            cookie_manager.delete(COOKIE_NAME)
+            get_controller().remove(COOKIE_NAME)
         except Exception:
             pass
 
         return False
 
-    st.session_state["autenticado"] = True
-    st.session_state["usuario_logado"] = dados.get("usuario", "")
-    st.session_state["perfil"] = dados.get("perfil", "")
+    # --------------------------------------------------------
+    # O componente pode precisar de um pequeno intervalo
+    # para devolver o cookie após um refresh.
+    # --------------------------------------------------------
 
-    return True
+    tentativas = st.session_state.get(
+        "_auth_tentativas_cookie",
+        0,
+    )
 
+    if tentativas < 3:
+        st.session_state["_auth_tentativas_cookie"] = tentativas + 1
+
+        time.sleep(0.5)
+
+        st.rerun()
+
+    st.session_state["_auth_tentativas_cookie"] = 0
+
+    return False
+
+
+# ============================================================
+# LOGOUT
+# ============================================================
 
 def fazer_logout():
-    cookie_manager = get_manager()
-
     try:
-        cookie_manager.delete(COOKIE_NAME)
+        get_controller().remove(COOKIE_NAME)
     except Exception:
         pass
 
     keys_to_delete = [
         key
         for key in list(st.session_state.keys())
-        if key != "cookie_manager"
+        if key != "cookie_controller"
     ]
 
     for key in keys_to_delete:
