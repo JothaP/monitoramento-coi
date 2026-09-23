@@ -77,20 +77,35 @@ def aplicar_modo_visual():
                 background-color: #1f2937;
             }
 
-            div[data-testid="stSidebar"] div[data-testid="stButton"] button {
+           div[data-testid="stSidebar"] div[data-testid="stButton"] > button {
     background-color: #1f2937 !important;
     color: #f9fafb !important;
     border: 1px solid #4b5563 !important;
+    box-shadow: none !important;
 }
 
-div[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
     background-color: #374151 !important;
     color: #ffffff !important;
-    border-color: #6b7280 !important;
+    border: 1px solid #6b7280 !important;
 }
 
-div[data-testid="stSidebar"] div[data-testid="stButton"] button p {
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button:focus,
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button:active {
+    background-color: #374151 !important;
+    color: #ffffff !important;
+    border: 1px solid #6b7280 !important;
+    box-shadow: none !important;
+}
+
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button p,
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button span {
     color: #f9fafb !important;
+}
+
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover p,
+div[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover span {
+    color: #ffffff !important;
 }
             }
             </style>
