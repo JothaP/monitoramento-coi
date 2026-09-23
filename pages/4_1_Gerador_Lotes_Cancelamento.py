@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -616,4 +615,3 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                 )
 
                 st.rerun()
-```
