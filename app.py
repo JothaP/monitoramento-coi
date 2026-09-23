@@ -54,7 +54,9 @@ if not st.session_state.get("autenticado"):
 
 
 perfil_atual = st.session_state.perfil.upper()
-
+st.write(
+    f"DEBUG - perfil recebido: `{repr(st.session_state.get('perfil'))}`"
+)
 st.write(
     f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**"
 )
