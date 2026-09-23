@@ -53,10 +53,6 @@ if modo_escuro:
         """
         <style>
 
-        /* ====================================================
-           TEMA ESCURO
-           ==================================================== */
-
         .stApp {
             background-color: #0e1117;
             color: #f1f5f9;
@@ -79,27 +75,23 @@ if modo_escuro:
             color: #f1f5f9;
         }
 
-        /* Textos */
         h1, h2, h3, h4, h5, h6,
         p, label,
         [data-testid="stMarkdownContainer"] {
             color: #f1f5f9;
         }
 
-        /* Texto secundário */
         .stCaption,
         [data-testid="stCaptionContainer"] {
             color: #aab4c3 !important;
         }
 
-        /* Cards */
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background-color: #161b22;
             border: 1px solid #30363d;
             border-radius: 12px;
         }
 
-        /* File uploader */
         [data-testid="stFileUploader"] {
             background-color: #1b222c;
             border-radius: 10px;
@@ -114,13 +106,15 @@ if modo_escuro:
             color: #dbe4ee !important;
         }
 
-        /* Botões */
         .stButton > button {
             border-radius: 8px;
             border: 1px solid #3b4654;
         }
 
-        /* Inputs */
+        .stButton > button:hover {
+            border-color: #64748b;
+        }
+
         input,
         textarea,
         select {
@@ -129,17 +123,10 @@ if modo_escuro:
             border-color: #3b4654 !important;
         }
 
-        /* Divisores */
         hr {
             border-color: #30363d;
         }
 
-        /* Métricas */
-        [data-testid="stMetric"] {
-            background-color: #161b22;
-        }
-
-        /* Status */
         .card-status {
             font-size: 0.82rem;
             margin-top: -0.15rem;
@@ -152,14 +139,8 @@ if modo_escuro:
             margin-bottom: 0.35rem;
         }
 
-        /* Espaçamento */
         div[data-testid="stVerticalBlock"] > div {
             gap: 0.45rem;
-        }
-
-        hr {
-            margin-top: 1.2rem;
-            margin-bottom: 1.2rem;
         }
 
         </style>
@@ -172,14 +153,6 @@ else:
     st.markdown(
         """
         <style>
-
-        /* ====================================================
-           TEMA CLARO
-           ==================================================== */
-
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
 
         .block-container {
             padding-top: 2rem;
@@ -212,11 +185,6 @@ else:
 
         div[data-testid="stVerticalBlock"] > div {
             gap: 0.45rem;
-        }
-
-        hr {
-            margin-top: 1.2rem;
-            margin-bottom: 1.2rem;
         }
 
         </style>
@@ -401,13 +369,15 @@ with st.sidebar:
     # --------------------------------------------------------
 
     if st.button(
-        "🛠️ Ferramentas Operacionais",
+        "←  Ferramentas Operacionais",
+        key="btn_voltar_ferramentas",
         use_container_width=True,
     ):
         st.switch_page("pages/4_Ferramentas_Operacionais.py")
 
     if st.button(
-        "🏠 Menu Principal",
+        "⌂  Menu Principal",
+        key="btn_voltar_principal",
         use_container_width=True,
     ):
         st.switch_page("app.py")
@@ -419,7 +389,8 @@ with st.sidebar:
     # --------------------------------------------------------
 
     if st.button(
-        "🗑️ Limpar todas as bases",
+        "🗑️  Limpar todas as bases",
+        key="btn_limpar_todas_bases",
         use_container_width=True,
     ):
         limpar_bases()
