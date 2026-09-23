@@ -216,18 +216,16 @@ def converter_datas_robusto(serie):
             .str.strip()
         )
 
-        # Formato brasileiro
+        # Formato brasileiro com segundos
         resultado.loc[mascara_texto] = pd.to_datetime(
             valores_texto,
             format="%d/%m/%Y %H:%M:%S",
             errors="coerce",
         )
 
-        faltantes = (
-            mascara_texto
-            & resultado.isna()
-        )
+        faltantes = mascara_texto & resultado.isna()
 
+        # Formato brasileiro sem segundos
         if faltantes.any():
             valores_texto = (
                 serie.loc[faltantes]
@@ -243,6 +241,7 @@ def converter_datas_robusto(serie):
 
         faltantes = resultado.isna() & mascara_texto
 
+        # Somente data brasileira
         if faltantes.any():
             valores_texto = (
                 serie.loc[faltantes]
@@ -258,6 +257,7 @@ def converter_datas_robusto(serie):
 
         faltantes = resultado.isna() & mascara_texto
 
+        # ISO com segundos
         if faltantes.any():
             valores_texto = (
                 serie.loc[faltantes]
@@ -273,6 +273,7 @@ def converter_datas_robusto(serie):
 
         faltantes = resultado.isna() & mascara_texto
 
+        # ISO sem segundos
         if faltantes.any():
             valores_texto = (
                 serie.loc[faltantes]
@@ -288,6 +289,7 @@ def converter_datas_robusto(serie):
 
         faltantes = resultado.isna() & mascara_texto
 
+        # Última tentativa para formatos mistos
         if faltantes.any():
             valores_texto = (
                 serie.loc[faltantes]
@@ -736,7 +738,9 @@ def gerar_lote_cancelamento(
             if pd.isna(cidade):
                 cidade = ""
 
-            zona = obter_zona(str(cidade).strip())
+            zona = obter_zona(
+                str(cidade).strip()
+            )
 
         registros_lote.append(
             {
@@ -798,6 +802,7 @@ def render_botoes_retorno(modo):
 
 def render_duplicidade():
     st.title("🔄 Duplicidade")
+
     st.caption(
         "Identificação de O.S. duplicadas por matrícula, "
         "mantendo a ocorrência mais antiga e gerando lote "
@@ -1138,7 +1143,9 @@ def render_duplicidade():
 
     duplicados = resultado["duplicados"]
 
-    st.markdown("### 🔴 O.S. identificadas como duplicadas")
+    st.markdown(
+        "### 🔴 O.S. identificadas como duplicadas"
+    )
 
     if duplicados.empty:
         st.info(
@@ -1190,5 +1197,47 @@ def render_duplicidade():
     else:
         st.dataframe(
             lote,
-            width="stretch"
+            width="stretch",
+            hide_index=True,
+        )
+
+        arquivo_excel = dataframe_para_excel(
+            lote,
+            nome_aba="Duplicidade",
+        )
+
+        if arquivo_excel is not None:
+            nome_arquivo = (
+                NOME_ARQUIVO_API
+                if modo == "API"
+                else NOME_ARQUIVO_THE
+            )
+
+            st.download_button(
+                label="📥 Baixar Lote de Cancelamento",
+                data=arquivo_excel,
+                file_name=nome_arquivo,
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
+                width="stretch",
+                key=f"duplicidade_download_{modo.lower()}",
+            )
+
+    # ========================================================
+    # OBSERVAÇÃO FINAL
+    # ========================================================
+
+    st.caption(
+        "A base original permanece preservada durante a sessão. "
+        "Você pode alternar entre API e THE e executar uma nova "
+        "análise sem reenviar ou recarregar as bases."
+    )
+
+    # ========================================================
+    # NAVEGAÇÃO
+    # ========================================================
+
+    render_botoes_retorno(modo)
 ```
