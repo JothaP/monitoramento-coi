@@ -1190,5 +1190,5 @@ def render_duplicidade():
     else:
         st.dataframe(
             lote,
-            width="stretch
+            width="stretch"
 ```
