@@ -407,10 +407,6 @@ def aplicar_filtro_horario(
     if datas.empty:
         return resultado
 
-    # ========================================================
-    # HORA DOS REGISTROS
-    # ========================================================
-
     horas = (
         datas.dt.hour * 60
         + datas.dt.minute
@@ -435,10 +431,6 @@ def aplicar_filtro_horario(
             inicio_minutos - 60
         ) % 1440
 
-        # Como não existe limite superior,
-        # mantém-se a semântica "a partir de".
-        #
-        # A margem de 1 hora é aplicada ao início.
         mascara = (
             horas.notna()
             & (
@@ -467,9 +459,6 @@ def aplicar_filtro_horario(
             fim_minutos + 180
         )
 
-        # Se a margem ultrapassar 23:59,
-        # não existe limite superior dentro
-        # do mesmo dia.
         if fim_efetivo >= 1440:
 
             mascara = horas.notna()
@@ -499,32 +488,9 @@ def aplicar_filtro_horario(
         hora_final
     )
 
-    # ========================================================
-    # INTERVALO ORIGINAL COMO INTERVALO CIRCULAR
-    #
-    # Exemplo normal:
-    #
-    # 09:00 -> 15:00
-    # duração = 360 minutos
-    #
-    # Exemplo atravessando meia-noite:
-    #
-    # 22:00 -> 02:00
-    # duração = 240 minutos
-    # ========================================================
-
     duracao_original = (
         fim_minutos - inicio_minutos
     ) % 1440
-
-    # ========================================================
-    # APLICA AS MARGENS
-    #
-    # -60 minutos no início
-    # +180 minutos no fim
-    #
-    # Total adicional = 240 minutos.
-    # ========================================================
 
     duracao_efetiva = (
         duracao_original + 240
@@ -539,8 +505,7 @@ def aplicar_filtro_horario(
     ) % 1440
 
     # ========================================================
-    # SE A JANELA EFETIVA COBRIR 24 HORAS OU MAIS,
-    # TODOS OS HORÁRIOS SÃO VÁLIDOS.
+    # JANELA EFETIVA COBRINDO 24 HORAS OU MAIS
     # ========================================================
 
     if duracao_efetiva >= 1440:
@@ -553,11 +518,6 @@ def aplicar_filtro_horario(
 
     # ========================================================
     # INTERVALO SEM CRUZAMENTO
-    #
-    # Exemplo:
-    #
-    # 09:00 -> 15:00
-    # 08:00 -> 18:00
     # ========================================================
 
     if inicio_efetivo <= fim_efetivo:
@@ -574,17 +534,6 @@ def aplicar_filtro_horario(
 
     # ========================================================
     # INTERVALO CRUZANDO MEIA-NOITE
-    #
-    # Exemplo:
-    #
-    # 22:00 -> 02:00
-    # 21:00 -> 05:00
-    #
-    # Aceita:
-    #
-    # 21:00 ... 23:59
-    # OU
-    # 00:00 ... 05:00
     # ========================================================
 
     else:
@@ -620,7 +569,6 @@ def aplicar_filtros(
     dias=None,
     hora_inicial=None,
     hora_final=None,
-    observacao="",
 ):
 
     if df is None or df.empty:
@@ -655,18 +603,6 @@ def aplicar_filtros(
     # BAIRRO
     #
     # CORRESPONDÊNCIA EXATA NORMALIZADA.
-    #
-    # "Parque Sul" entra.
-    #
-    # "PARQUE SUL" entra.
-    #
-    # "Parque  Sul" entra.
-    #
-    # "Parque Piauí" NÃO entra.
-    #
-    # "Polo Empresarial Sul" NÃO entra.
-    #
-    # Não é utilizada busca parcial.
     # ========================================================
 
     if coluna_bairro and bairros:
@@ -685,11 +621,7 @@ def aplicar_filtros(
     # ========================================================
     # DATA / HORÁRIO
     #
-    # REGRA:
-    #
     # EXCLUSIVAMENTE INÍCIO DO SLA.
-    #
-    # A coluna DATA não é utilizada.
     # ========================================================
 
     if coluna_data:
@@ -778,33 +710,6 @@ def aplicar_filtros(
                     hora_final,
                 )
 
-    # ========================================================
-    # PESQUISA GERAL
-    # ========================================================
-
-    if observacao and observacao.strip():
-
-        termo = normalizar_texto(
-            observacao
-        )
-
-        mascara = resultado.apply(
-            lambda linha:
-                linha.astype(str)
-                .map(normalizar_texto)
-                .str.contains(
-                    termo,
-                    regex=False,
-                    na=False,
-                )
-                .any(),
-            axis=1,
-        )
-
-        resultado = resultado.loc[
-            mascara
-        ]
-
     return resultado.reset_index(
         drop=True
     )
@@ -817,6 +722,7 @@ def aplicar_filtros(
 def gerar_lote_cancelamento(
     df_filtrado,
     modo,
+    observacao="",
 ):
 
     if (
@@ -863,6 +769,16 @@ def gerar_lote_cancelamento(
 
     registros = []
     logs = []
+
+    # ========================================================
+    # NORMALIZA A OBSERVAÇÃO DO LOTE
+    # ========================================================
+
+    observacao_lote = (
+        str(observacao).strip()
+        if observacao is not None
+        else ""
+    )
 
     for _, linha in df_filtrado.iterrows():
 
@@ -939,7 +855,7 @@ def gerar_lote_cancelamento(
                 "Numero Do Pedido": numero_int,
                 "Ano Do Pedido": ano,
                 "Tipo Encerramento": 6,
-                "Observações": "",
+                "Observações": observacao_lote,
             }
         )
 
@@ -1328,15 +1244,24 @@ def render_filtragem():
         )
 
     # ========================================================
-    # PESQUISA
+    # OBSERVAÇÃO DO LOTE
     # ========================================================
 
-    observacao = st.text_input(
-        "🔍 Pesquisa geral",
+    st.markdown(
+        "#### 📝 Observação do lote"
+    )
+
+    st.caption(
+        "A observação informada será adicionada ao campo "
+        "**Observações** de todas as O.S. incluídas no lote."
+    )
+
+    observacao_lote = st.text_input(
+        "Observação",
         placeholder=(
-            "Digite um valor para pesquisar em qualquer coluna..."
+            "Digite a observação que será gravada no lote..."
         ),
-        key="filtragem_pesquisa",
+        key="filtragem_observacao_lote",
     )
 
     # ========================================================
@@ -1373,7 +1298,7 @@ def render_filtragem():
             "filtragem_dias",
             "filtragem_hora_inicial",
             "filtragem_hora_final",
-            "filtragem_pesquisa",
+            "filtragem_observacao_lote",
         ]:
 
             st.session_state.pop(
@@ -1403,7 +1328,6 @@ def render_filtragem():
             dias=dias,
             hora_inicial=hora_inicial,
             hora_final=hora_final,
-            observacao=observacao,
         )
 
         st.session_state.df_resultado = (
@@ -1507,6 +1431,7 @@ def render_filtragem():
             lote, log = gerar_lote_cancelamento(
                 df_resultado,
                 modo,
+                observacao=observacao_lote,
             )
 
             st.session_state.df_resultado_lote = lote
