@@ -8,7 +8,6 @@ simplekml
 streamlit-autorefresh
 plotly
 openpyxl
-extra-streamlit-components
 matplotlib
 pillow
 numpy
