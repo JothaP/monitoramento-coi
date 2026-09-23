@@ -361,26 +361,46 @@ with st.sidebar:
     if novo_modo_escuro != modo_escuro:
         st.session_state.modo_escuro_gerador = novo_modo_escuro
         st.rerun()
+        /* Botões da barra lateral */
+        [data-testid="stSidebar"] .stButton > button {
+            background-color: #212833 !important;
+            color: #f1f5f9 !important;
+            border: 1px solid #3b4654 !important;
+            border-radius: 8px !important;
+        }
 
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background-color: #2b3441 !important;
+            color: #ffffff !important;
+            border-color: #64748b !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button p {
+            color: #f1f5f9 !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover p {
+            color: #ffffff !important;
+        }
     st.divider()
 
     # --------------------------------------------------------
     # NAVEGAÇÃO
     # --------------------------------------------------------
 
-    if st.button(
-        "←  Ferramentas Operacionais",
-        key="btn_voltar_ferramentas",
-        use_container_width=True,
-    ):
-        st.switch_page("pages/4_Ferramentas_Operacionais.py")
+if st.button(
+    "🛠️  Ferramentas Operacionais",
+    key="btn_voltar_ferramentas",
+    use_container_width=True,
+):
+    st.switch_page("pages/4_Ferramentas_Operacionais.py")
 
-    if st.button(
-        "⌂  Menu Principal",
-        key="btn_voltar_principal",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
+if st.button(
+    "🏠  Menu Principal",
+    key="btn_voltar_principal",
+    use_container_width=True,
+):
+    st.switch_page("app.py")
 
     st.divider()
 
