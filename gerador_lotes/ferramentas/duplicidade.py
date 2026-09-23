@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from datetime import datetime
 
 import pandas as pd
@@ -17,48 +18,106 @@ from .componentes import selecionar_modo_api_the
 NOME_ARQUIVO_API = "Duplicidade API.xlsx"
 NOME_ARQUIVO_THE = "Duplicidade THE.xlsx"
 
-COLUNA_PROTOCOLO = "COD. PROTOCOLO ORIGEM"
-COLUNA_MATRICULA = "MATRICULA"
-COLUNA_DATA = "INÍCIO DO SLA"
-COLUNA_CIDADE = "CIDADE"
+COL_MATRICULA_PADRAO = "Matrícula"
+COL_PROTOCOLO_PADRAO = "Cód. Protocolo Origem"
+COL_DATA_PADRAO = "INÍCIO DO SLA"
+COL_CIDADE_PADRAO = "Cidade"
 
 
 # ============================================================
-# LOCALIZAÇÃO DE COLUNAS
+# NORMALIZAÇÃO DE TEXTO
+# ============================================================
+
+def normalizar_texto(texto):
+    if pd.isna(texto):
+        return ""
+
+    texto = str(texto)
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto,
+    )
+
+    texto = "".join(
+        caractere
+        for caractere in texto
+        if not unicodedata.combining(caractere)
+    )
+
+    texto = texto.upper().strip()
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto,
+    )
+
+    return texto
+
+
+# ============================================================
+# LOCALIZAÇÃO DAS COLUNAS
+#
+# Usa a mesma lógica conceitual da ferramenta original:
+# - ignora diferenças de maiúsculas/minúsculas
+# - ignora acentuação
+# - permite localizar nomes reais da base
+#
+# IMPORTANTE:
+# "DATA" NÃO É PROCURADA.
+# A única coluna temporal aceita é INÍCIO DO SLA.
 # ============================================================
 
 def localizar_coluna(df, tipo):
-    """
-    Localiza as colunas necessárias sem alterar os nomes
-    existentes no DataFrame.
-    """
+    colunas = list(df.columns)
 
-    mapa = {
-        "protocolo": COLUNA_PROTOCOLO,
-        "matricula": COLUNA_MATRICULA,
-        "data": COLUNA_DATA,
-        "cidade": COLUNA_CIDADE,
+    normalizadas = {
+        coluna: normalizar_texto(coluna)
+        for coluna in colunas
     }
 
-    procurada = mapa[tipo]
+    if tipo == "matricula":
+        for coluna, nome in normalizadas.items():
+            if nome == "MATRICULA":
+                return coluna
 
-    # Primeiro tenta encontrar exatamente.
-    for coluna in df.columns:
-        if str(coluna).strip().upper() == procurada.upper():
-            return coluna
+        for coluna, nome in normalizadas.items():
+            if "MATRICULA" in nome:
+                return coluna
 
-    # Depois aceita pequenas diferenças de espaços.
-    procurada_norm = re.sub(r"\s+", " ", procurada).strip().upper()
+    elif tipo == "protocolo":
+        for coluna, nome in normalizadas.items():
+            if nome == "COD. PROTOCOLO ORIGEM":
+                return coluna
 
-    for coluna in df.columns:
-        coluna_norm = re.sub(
-            r"\s+",
-            " ",
-            str(coluna),
-        ).strip().upper()
+        for coluna, nome in normalizadas.items():
+            if (
+                "PROTOCOLO" in nome
+                and "ORIGEM" in nome
+            ):
+                return coluna
 
-        if coluna_norm == procurada_norm:
-            return coluna
+    elif tipo == "cidade":
+        for coluna, nome in normalizadas.items():
+            if nome == "CIDADE":
+                return coluna
+
+    elif tipo == "data":
+        # REGRA INQUEBRÁVEL:
+        # somente INÍCIO DO SLA pode ser utilizado.
+        for coluna, nome in normalizadas.items():
+            if nome == "INICIO DO SLA":
+                return coluna
+
+        for coluna, nome in normalizadas.items():
+            if (
+                "INICIO DO SLA" in nome
+                or "INICIO SLA" in nome
+            ):
+                return coluna
+
+        return None
 
     return None
 
@@ -69,121 +128,192 @@ def localizar_coluna(df, tipo):
 
 def normalizar_matricula(valor):
     """
-    Normaliza a matrícula exclusivamente para a regra deste módulo.
+    Retorna somente matrículas que representam exatamente
+    a sequência numérica existente na base.
 
-    A matrícula válida deve possuir somente dígitos.
-    Não são aceitos pontos, hífens, espaços ou outros caracteres.
+    A quantidade de dígitos válida é definida posteriormente
+    de acordo com o modo:
+        API = 9 dígitos
+        THE = 8 dígitos
     """
 
     if pd.isna(valor):
         return ""
+
+    if isinstance(valor, bool):
+        return ""
+
+    if isinstance(valor, int):
+        return str(valor)
+
+    if isinstance(valor, float):
+        if not valor.is_integer():
+            return ""
+
+        return str(int(valor))
 
     texto = str(valor).strip()
 
     if not texto:
         return ""
 
-    # Trata valores numéricos vindos do Excel como 123456789.0.
-    if re.fullmatch(r"\d+\.0", texto):
-        texto = texto[:-2]
-
+    # Não aceita pontuação, espaços internos ou outros caracteres.
     if not texto.isdigit():
         return ""
 
     return texto
 
 
-def matricula_valida(matricula, modo):
-    """
-    API  = exatamente 9 dígitos.
-    THE  = exatamente 8 dígitos.
-    """
+def matricula_valida(valor, modo):
+    matricula = normalizar_matricula(valor)
 
     tamanho = 9 if modo == "API" else 8
 
     return (
-        bool(matricula)
-        and matricula.isdigit()
+        matricula != ""
         and len(matricula) == tamanho
     )
 
 
 # ============================================================
-# DATA / HORA
+# CONVERSÃO ROBUSTA DO INÍCIO DO SLA
+#
+# NUNCA utiliza a coluna "Data".
 # ============================================================
 
 def converter_datas_robusto(serie):
-    """
-    Converte INÍCIO DO SLA de forma robusta.
-
-    Valores impossíveis ou vazios tornam-se NaT.
-    Datas inválidas não provocam erro na análise.
-    """
-
     resultado = pd.Series(
         pd.NaT,
         index=serie.index,
         dtype="datetime64[ns]",
     )
 
-    for indice, valor in serie.items():
+    # --------------------------------------------------------
+    # DATETIME / TIMESTAMP
+    # --------------------------------------------------------
 
-        if pd.isna(valor):
-            continue
+    mascara_datetime = serie.map(
+        lambda valor: isinstance(
+            valor,
+            (datetime, pd.Timestamp),
+        )
+    )
 
-        if isinstance(valor, pd.Timestamp):
-            if not pd.isna(valor):
-                resultado.loc[indice] = valor
-            continue
+    if mascara_datetime.any():
+        resultado.loc[mascara_datetime] = pd.to_datetime(
+            serie.loc[mascara_datetime],
+            errors="coerce",
+        )
 
-        if isinstance(valor, datetime):
-            resultado.loc[indice] = pd.Timestamp(valor)
-            continue
+    # --------------------------------------------------------
+    # NÚMEROS DO EXCEL
+    # --------------------------------------------------------
 
-        texto = str(valor).strip()
+    restantes = resultado.isna()
 
-        if not texto:
-            continue
+    valores_numericos = pd.to_numeric(
+        serie.loc[restantes],
+        errors="coerce",
+    )
 
-        formatos = [
-            "%d/%m/%Y %H:%M:%S",
-            "%d/%m/%Y %H:%M",
-            "%d/%m/%Y",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d",
+    mascara_excel = (
+        valores_numericos.notna()
+        & valores_numericos.between(
+            1,
+            100000,
+        )
+    )
+
+    if mascara_excel.any():
+        indices = valores_numericos.index[
+            mascara_excel
         ]
 
-        convertido = None
+        resultado.loc[indices] = pd.to_datetime(
+            valores_numericos.loc[indices],
+            unit="D",
+            origin="1899-12-30",
+            errors="coerce",
+        )
 
-        for formato in formatos:
-            try:
-                convertido = datetime.strptime(
-                    texto,
-                    formato,
-                )
-                break
-            except ValueError:
-                continue
+    # --------------------------------------------------------
+    # DATAS BRASILEIRAS
+    # --------------------------------------------------------
 
-        if convertido is not None:
-            resultado.loc[indice] = pd.Timestamp(convertido)
-            continue
+    restantes = resultado.isna()
 
-        try:
-            convertido = pd.to_datetime(
-                texto,
-                dayfirst=True,
-                errors="coerce",
-            )
+    textos = (
+        serie.loc[restantes]
+        .astype(str)
+        .str.strip()
+    )
 
-            if not pd.isna(convertido):
-                resultado.loc[indice] = pd.Timestamp(
-                    convertido
-                )
+    mascara_br = textos.str.match(
+        r"^\d{1,2}/\d{1,2}/\d{4}"
+        r"(?:\s+\d{1,2}:\d{2}"
+        r"(?::\d{2})?)?$",
+        na=False,
+    )
 
-        except Exception:
-            pass
+    if mascara_br.any():
+        indices = textos.index[
+            mascara_br
+        ]
+
+        resultado.loc[indices] = pd.to_datetime(
+            textos.loc[indices],
+            format="mixed",
+            dayfirst=True,
+            errors="coerce",
+        )
+
+    # --------------------------------------------------------
+    # ISO
+    # --------------------------------------------------------
+
+    restantes = resultado.isna()
+
+    textos = (
+        serie.loc[restantes]
+        .astype(str)
+        .str.strip()
+    )
+
+    mascara_iso = textos.str.match(
+        r"^\d{4}-\d{1,2}-\d{1,2}",
+        na=False,
+    )
+
+    if mascara_iso.any():
+        indices = textos.index[
+            mascara_iso
+        ]
+
+        resultado.loc[indices] = pd.to_datetime(
+            textos.loc[indices],
+            format="mixed",
+            errors="coerce",
+        )
+
+    # --------------------------------------------------------
+    # ÚLTIMA TENTATIVA
+    # --------------------------------------------------------
+
+    restantes = resultado.isna()
+
+    if restantes.any():
+        textos = (
+            serie.loc[restantes]
+            .astype(str)
+            .str.strip()
+        )
+
+        resultado.loc[restantes] = pd.to_datetime(
+            textos,
+            format="mixed",
+            dayfirst=True,
+            errors="coerce",
+        )
 
     return resultado
 
@@ -194,14 +324,13 @@ def converter_datas_robusto(serie):
 
 def parse_protocolo(valor):
     """
-    Retorna:
-        número do pedido,
-        ano,
-        número inteiro usado para ordenação.
+    Espera protocolo no formato:
+        numero/ano
 
-    Exemplo:
-        1275203/2026
-        -> ("1275203", "2026", 1275203)
+    Retorna:
+        numero_str
+        ano_str
+        numero_int
     """
 
     if pd.isna(valor):
@@ -209,23 +338,27 @@ def parse_protocolo(valor):
 
     texto = str(valor).strip()
 
-    match = re.fullmatch(
-        r"\s*(\d+)\s*/\s*(\d{4})\s*",
+    match = re.search(
+        r"(\d+)\s*/\s*(\d{4})",
         texto,
     )
 
     if not match:
         return "", "", None
 
-    numero = match.group(1)
-    ano = match.group(2)
+    numero_str = match.group(1)
+    ano_str = match.group(2)
 
     try:
-        numero_int = int(numero)
-    except Exception:
+        numero_int = int(numero_str)
+    except (TypeError, ValueError):
         numero_int = None
 
-    return numero, ano, numero_int
+    return (
+        numero_str,
+        ano_str,
+        numero_int,
+    )
 
 
 # ============================================================
@@ -233,29 +366,18 @@ def parse_protocolo(valor):
 # ============================================================
 
 def identificar_duplicidades(df, modo):
-    """
-    Identifica O.S. duplicadas por matrícula.
-
-    Retorna:
-        duplicidades
-        mantidos
-        estatísticas
-        avisos
-    """
-
     if df is None or df.empty:
         raise ValueError(
-            f"A base {modo} está vazia."
+            "Não existem dados no backlog ativo."
         )
+
+    # --------------------------------------------------------
+    # COLUNAS OBRIGATÓRIAS
+    # --------------------------------------------------------
 
     col_matricula = localizar_coluna(
         df,
         "matricula",
-    )
-
-    col_data = localizar_coluna(
-        df,
-        "data",
     )
 
     col_protocolo = localizar_coluna(
@@ -263,47 +385,62 @@ def identificar_duplicidades(df, modo):
         "protocolo",
     )
 
+    col_data = localizar_coluna(
+        df,
+        "data",
+    )
+
     if col_matricula is None:
         raise ValueError(
-            "A base não possui a coluna obrigatória "
-            f"'{COLUNA_MATRICULA}'."
-        )
-
-    if col_data is None:
-        raise ValueError(
-            "A base não possui a coluna obrigatória "
-            f"'{COLUNA_DATA}'."
+            "Não foi encontrada a coluna obrigatória "
+            "'Matrícula'."
         )
 
     if col_protocolo is None:
         raise ValueError(
-            "A base não possui a coluna obrigatória "
-            f"'{COLUNA_PROTOCOLO}'."
+            "Não foi encontrada a coluna obrigatória "
+            "'Cód. Protocolo Origem'."
         )
+
+    if col_data is None:
+        raise ValueError(
+            "Não foi encontrada a coluna obrigatória "
+            "'INÍCIO DO SLA'. "
+            "A análise de duplicidade utiliza "
+            "exclusivamente 'INÍCIO DO SLA'."
+        )
+
+    col_cidade = None
+
+    if modo == "API":
+        col_cidade = localizar_coluna(
+            df,
+            "cidade",
+        )
+
+        if col_cidade is None:
+            raise ValueError(
+                "A base API não possui a coluna obrigatória "
+                "'Cidade', necessária para determinar a zona."
+            )
+
+    # --------------------------------------------------------
+    # PREPARAÇÃO
+    # --------------------------------------------------------
 
     trabalho = df.copy()
 
-    # --------------------------------------------------------
-    # Ordem original da planilha.
-    # --------------------------------------------------------
-
-    trabalho["_ORDEM_ORIGINAL_DUP"] = range(
+    trabalho["_ORDEM_ORIGINAL"] = range(
         len(trabalho)
     )
 
-    # --------------------------------------------------------
-    # Matrícula normalizada.
-    # --------------------------------------------------------
-
-    trabalho["_MATRICULA_NORMALIZADA_DUP"] = (
+    trabalho["_MATRICULA_NORMALIZADA"] = (
         trabalho[col_matricula]
         .map(normalizar_matricula)
     )
 
-    total_analisado = len(trabalho)
-
-    mascara_matricula_valida = (
-        trabalho["_MATRICULA_NORMALIZADA_DUP"]
+    trabalho["_MATRICULA_VALIDA"] = (
+        trabalho[col_matricula]
         .map(
             lambda valor: matricula_valida(
                 valor,
@@ -312,549 +449,504 @@ def identificar_duplicidades(df, modo):
         )
     )
 
-    qtd_ignoradas = int(
-        (~mascara_matricula_valida).sum()
+    # --------------------------------------------------------
+    # MATRÍCULAS INVÁLIDAS / IGNORADAS
+    # --------------------------------------------------------
+
+    registros_ignorados = trabalho.loc[
+        ~trabalho["_MATRICULA_VALIDA"]
+    ].copy()
+
+    trabalho_validos = trabalho.loc[
+        trabalho["_MATRICULA_VALIDA"]
+    ].copy()
+
+    if trabalho_validos.empty:
+        return {
+            "df_duplicidades": pd.DataFrame(
+                columns=df.columns
+            ),
+            "df_mantidos": pd.DataFrame(
+                columns=df.columns
+            ),
+            "df_lote": pd.DataFrame(),
+            "df_ignorados": registros_ignorados.drop(
+                columns=[
+                    "_ORDEM_ORIGINAL",
+                    "_MATRICULA_NORMALIZADA",
+                    "_MATRICULA_VALIDA",
+                ],
+                errors="ignore",
+            ),
+            "qtd_matriculas_duplicadas": 0,
+            "qtd_duplicidades": 0,
+            "qtd_mantidos": 0,
+            "qtd_datas_invalidas": 0,
+            "avisos_data": [],
+        }
+
+    # --------------------------------------------------------
+    # DATA — EXCLUSIVAMENTE INÍCIO DO SLA
+    # --------------------------------------------------------
+
+    trabalho_validos["_DATA_SLA"] = (
+        converter_datas_robusto(
+            trabalho_validos[col_data]
+        )
     )
 
-    validas = trabalho.loc[
-        mascara_matricula_valida
+    qtd_datas_invalidas = int(
+        trabalho_validos["_DATA_SLA"]
+        .isna()
+        .sum()
+    )
+
+    # --------------------------------------------------------
+    # PROTOCOLO NUMÉRICO
+    # --------------------------------------------------------
+
+    protocolo_info = (
+        trabalho_validos[col_protocolo]
+        .map(parse_protocolo)
+    )
+
+    trabalho_validos["_PROTOCOLO_NUMERO"] = (
+        protocolo_info.map(
+            lambda item: item[2]
+        )
+    )
+
+    # --------------------------------------------------------
+    # CONTAGEM POR MATRÍCULA
+    # --------------------------------------------------------
+
+    contagem = (
+        trabalho_validos
+        .groupby(
+            "_MATRICULA_NORMALIZADA"
+        )
+        .size()
+    )
+
+    matriculas_duplicadas = contagem[
+        contagem > 1
+    ].index
+
+    qtd_matriculas_duplicadas = len(
+        matriculas_duplicadas
+    )
+
+    if qtd_matriculas_duplicadas == 0:
+        return {
+            "df_duplicidades": pd.DataFrame(
+                columns=df.columns
+            ),
+            "df_mantidos": pd.DataFrame(
+                columns=df.columns
+            ),
+            "df_lote": pd.DataFrame(),
+            "df_ignorados": registros_ignorados.drop(
+                columns=[
+                    "_ORDEM_ORIGINAL",
+                    "_MATRICULA_NORMALIZADA",
+                    "_MATRICULA_VALIDA",
+                ],
+                errors="ignore",
+            ),
+            "qtd_matriculas_duplicadas": 0,
+            "qtd_duplicidades": 0,
+            "qtd_mantidos": 0,
+            "qtd_datas_invalidas": qtd_datas_invalidas,
+            "avisos_data": [],
+        }
+
+    # --------------------------------------------------------
+    # SOMENTE GRUPOS DUPLICADOS
+    # --------------------------------------------------------
+
+    candidatos = trabalho_validos[
+        trabalho_validos[
+            "_MATRICULA_NORMALIZADA"
+        ].isin(matriculas_duplicadas)
+    ].copy()
+
+    candidatos["_DATA_INVALIDA"] = (
+        candidatos["_DATA_SLA"].isna()
+    )
+
+    candidatos["_PROTOCOLO_INVALIDO"] = (
+        candidatos["_PROTOCOLO_NUMERO"].isna()
+    )
+
+    # --------------------------------------------------------
+    # CRITÉRIO DE ESCOLHA DA ORIGINAL
+    #
+    # 1. Data válida tem prioridade.
+    # 2. Entre datas válidas, menor INÍCIO DO SLA.
+    # 3. Empate de data → menor número do protocolo.
+    # 4. Se todas as datas forem inválidas:
+    #       menor número de protocolo.
+    # 5. Se o protocolo também não for comparável,
+    #       usa ordem técnica estável apenas como último
+    #       recurso.
+    # --------------------------------------------------------
+
+    candidatos = candidatos.sort_values(
+        by=[
+            "_MATRICULA_NORMALIZADA",
+            "_DATA_INVALIDA",
+            "_DATA_SLA",
+            "_PROTOCOLO_INVALIDO",
+            "_PROTOCOLO_NUMERO",
+            "_ORDEM_ORIGINAL",
+        ],
+        ascending=[
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+        ],
+        na_position="last",
+        kind="stable",
+    )
+
+    # --------------------------------------------------------
+    # ORIGINAL DE CADA MATRÍCULA DUPLICADA
+    # --------------------------------------------------------
+
+    indices_mantidos = (
+        candidatos
+        .groupby(
+            "_MATRICULA_NORMALIZADA",
+            sort=False,
+        )
+        .head(1)
+        .index
+    )
+
+    # --------------------------------------------------------
+    # TODAS AS DEMAIS O.S. = DUPLICIDADES
+    # --------------------------------------------------------
+
+    mascara_mantido = candidatos.index.isin(
+        indices_mantidos
+    )
+
+    duplicidades = candidatos.loc[
+        ~mascara_mantido
+    ].copy()
+
+    mantidos = candidatos.loc[
+        mascara_mantido
     ].copy()
 
     # --------------------------------------------------------
-    # Datas.
+    # AVISOS DE DATA
     # --------------------------------------------------------
 
-    validas["_DATA_DUP"] = converter_datas_robusto(
-        validas[col_data]
-    )
+    avisos_data = []
 
-    # --------------------------------------------------------
-    # Protocolo.
-    # --------------------------------------------------------
+    for matricula in matriculas_duplicadas:
+        grupo = candidatos.loc[
+            candidatos[
+                "_MATRICULA_NORMALIZADA"
+            ] == matricula
+        ].copy()
 
-    protocolos = validas[col_protocolo].map(
-        parse_protocolo
-    )
+        if grupo["_DATA_SLA"].isna().all():
+            original = grupo.iloc[0]
 
-    validas["_PROTOCOLO_NUM_DUP"] = protocolos.map(
-        lambda valor: valor[2]
-    )
-
-    validas["_PROTOCOLO_NUM_STR_DUP"] = protocolos.map(
-        lambda valor: valor[0]
-    )
-
-    validas["_PROTOCOLO_ANO_DUP"] = protocolos.map(
-        lambda valor: valor[1]
-    )
-
-    avisos = []
-
-    duplicidades_indices = []
-    mantidos_indices = []
-
-    matriculas_com_duplicidade = 0
-    qtd_datas_invalidas = int(
-        validas["_DATA_DUP"].isna().sum()
-    )
-
-    # --------------------------------------------------------
-    # Agrupamento por matrícula.
-    # --------------------------------------------------------
-
-    for matricula, grupo in validas.groupby(
-        "_MATRICULA_NORMALIZADA_DUP",
-        sort=False,
-    ):
-
-        if len(grupo) <= 1:
-            continue
-
-        matriculas_com_duplicidade += 1
-
-        grupo = grupo.copy()
-
-        possui_data_valida = (
-            grupo["_DATA_DUP"].notna().any()
-        )
-
-        # ----------------------------------------------------
-        # Critério de ordenação:
-        #
-        # 1. Data válida antes de inválida.
-        # 2. Data mais antiga.
-        # 3. Menor protocolo.
-        #
-        # A ordem original só é utilizada como último
-        # desempate técnico quando não houver protocolo
-        # comparável.
-        # ----------------------------------------------------
-
-        grupo["_DATA_INVALIDA_ORD_DUP"] = (
-            grupo["_DATA_DUP"].isna()
-        )
-
-        grupo["_PROTOCOLO_INVALIDO_ORD_DUP"] = (
-            grupo["_PROTOCOLO_NUM_DUP"].isna()
-        )
-
-        grupo_ordenado = grupo.sort_values(
-            by=[
-                "_DATA_INVALIDA_ORD_DUP",
-                "_DATA_DUP",
-                "_PROTOCOLO_INVALIDO_ORD_DUP",
-                "_PROTOCOLO_NUM_DUP",
-                "_ORDEM_ORIGINAL_DUP",
-            ],
-            ascending=[
-                True,
-                True,
-                True,
-                True,
-                True,
-            ],
-            kind="mergesort",
-        )
-
-        original = grupo_ordenado.iloc[0]
-
-        mantidos_indices.append(
-            original.name
-        )
-
-        # ----------------------------------------------------
-        # Todas as datas são inválidas.
-        # ----------------------------------------------------
-
-        if not possui_data_valida:
-            protocolo_original = str(
-                original[col_protocolo]
-            ).strip()
-
-            avisos.append(
+            avisos_data.append(
                 {
-                    "Matrícula": matricula,
-                    "Aviso": (
-                        "Todas as O.S. desta matrícula "
-                        "possuem 'INÍCIO DO SLA' inválido. "
-                        "A O.S. original foi definida pelo "
-                        "menor número do protocolo de origem."
+                    "Matrícula": original[
+                        col_matricula
+                    ],
+                    "Motivo": (
+                        "Todas as O.S. da matrícula "
+                        "possuem INÍCIO DO SLA inválido. "
+                        "Foi mantida a O.S. com o menor "
+                        "número de protocolo."
                     ),
-                    "O.S. mantida": protocolo_original,
                 }
             )
 
-        # ----------------------------------------------------
-        # Demais O.S. = duplicidades.
-        # ----------------------------------------------------
-
-        for indice in grupo_ordenado.index[1:]:
-            duplicidades_indices.append(indice)
-
-    # --------------------------------------------------------
-    # DataFrames finais.
-    # --------------------------------------------------------
-
-    if duplicidades_indices:
-        duplicidades = validas.loc[
-            duplicidades_indices
-        ].copy()
-    else:
-        duplicidades = validas.iloc[0:0].copy()
-
-    if mantidos_indices:
-        mantidos = validas.loc[
-            mantidos_indices
-        ].copy()
-    else:
-        mantidos = validas.iloc[0:0].copy()
+        elif grupo["_DATA_SLA"].isna().any():
+            for _, linha in grupo.loc[
+                grupo["_DATA_SLA"].isna()
+            ].iterrows():
+                avisos_data.append(
+                    {
+                        "Matrícula": linha[
+                            col_matricula
+                        ],
+                        "Motivo": (
+                            "O.S. com INÍCIO DO SLA inválido. "
+                            "Não foi escolhida como original, "
+                            "pois datas válidas possuem prioridade."
+                        ),
+                    }
+                )
 
     # --------------------------------------------------------
-    # Remove colunas técnicas dos DataFrames apresentados.
+    # DATAFRAMES FINAIS
     # --------------------------------------------------------
 
-    colunas_tecnicas = [
-        "_ORDEM_ORIGINAL_DUP",
-        "_MATRICULA_NORMALIZADA_DUP",
-        "_DATA_DUP",
-        "_PROTOCOLO_NUM_DUP",
-        "_PROTOCOLO_NUM_STR_DUP",
-        "_PROTOCOLO_ANO_DUP",
-        "_DATA_INVALIDA_ORD_DUP",
-        "_PROTOCOLO_INVALIDO_ORD_DUP",
+    colunas_auxiliares = [
+        "_ORDEM_ORIGINAL",
+        "_MATRICULA_NORMALIZADA",
+        "_MATRICULA_VALIDA",
+        "_DATA_SLA",
+        "_DATA_INVALIDA",
+        "_PROTOCOLO_NUMERO",
+        "_PROTOCOLO_INVALIDO",
     ]
 
-    duplicidades = duplicidades.drop(
-        columns=[
-            coluna
-            for coluna in colunas_tecnicas
-            if coluna in duplicidades.columns
-        ],
-        errors="ignore",
+    df_mantidos = (
+        mantidos
+        .sort_values(
+            "_ORDEM_ORIGINAL"
+        )
+        .drop(
+            columns=colunas_auxiliares,
+            errors="ignore",
+        )
+        .reset_index(drop=True)
     )
 
-    mantidos = mantidos.drop(
-        columns=[
-            coluna
-            for coluna in colunas_tecnicas
-            if coluna in mantidos.columns
-        ],
-        errors="ignore",
+    df_duplicidades = (
+        duplicidades
+        .sort_values(
+            "_ORDEM_ORIGINAL"
+        )
+        .drop(
+            columns=colunas_auxiliares,
+            errors="ignore",
+        )
+        .reset_index(drop=True)
     )
 
-    # Mantém a ordem original dos resultados.
-    duplicidades = duplicidades.sort_index()
-    mantidos = mantidos.sort_index()
+    df_ignorados = (
+        registros_ignorados
+        .drop(
+            columns=[
+                "_ORDEM_ORIGINAL",
+                "_MATRICULA_NORMALIZADA",
+                "_MATRICULA_VALIDA",
+            ],
+            errors="ignore",
+        )
+        .reset_index(drop=True)
+    )
 
-    estatisticas = {
-        "Registros analisados": total_analisado,
-        "Matrículas ignoradas": qtd_ignoradas,
-        "Matrículas válidas": (
-            validas[
-                "_MATRICULA_NORMALIZADA_DUP"
-            ].nunique()
+    return {
+        "df_duplicidades": df_duplicidades,
+        "df_mantidos": df_mantidos,
+        "df_ignorados": df_ignorados,
+        "qtd_matriculas_duplicadas": (
+            qtd_matriculas_duplicadas
         ),
-        "Matrículas com duplicidade": (
-            matriculas_com_duplicidade
+        "qtd_duplicidades": len(
+            df_duplicidades
         ),
-        "O.S. a cancelar": len(duplicidades),
-        "O.S. mantidas": len(mantidos),
-        "Datas inválidas": qtd_datas_invalidas,
+        "qtd_mantidos": len(
+            df_mantidos
+        ),
+        "qtd_datas_invalidas": (
+            qtd_datas_invalidas
+        ),
+        "avisos_data": avisos_data,
     }
-
-    return (
-        duplicidades,
-        mantidos,
-        estatisticas,
-        avisos,
-    )
 
 
 # ============================================================
-# GERAÇÃO DO LOTE
+# GERAÇÃO DO LOTE DE CANCELAMENTO
 # ============================================================
 
 def gerar_lote_cancelamento(
-    duplicidades,
+    df_duplicidades,
+    df_mantidos,
     modo,
 ):
-    """
-    Converte as duplicidades para o padrão oficial
-    de lote de cancelamento da Plataforma COI.
-    """
-
-    if duplicidades is None or duplicidades.empty:
-        return (
-            pd.DataFrame(
-                columns=[
-                    "Matricula",
-                    "Zona Ligacao",
-                    "Numero Do Pedido",
-                    "Ano Do Pedido",
-                    "Tipo Encerramento",
-                    "Observações",
-                ]
-            ),
-            [],
-        )
+    if (
+        df_duplicidades is None
+        or df_duplicidades.empty
+    ):
+        return pd.DataFrame()
 
     col_matricula = localizar_coluna(
-        duplicidades,
+        df_duplicidades,
         "matricula",
     )
 
     col_protocolo = localizar_coluna(
-        duplicidades,
+        df_duplicidades,
         "protocolo",
     )
 
-    col_cidade = localizar_coluna(
-        duplicidades,
-        "cidade",
-    )
+    col_cidade = None
+
+    if modo == "API":
+        col_cidade = localizar_coluna(
+            df_duplicidades,
+            "cidade",
+        )
 
     if col_matricula is None:
         raise ValueError(
-            "Não foi possível localizar a coluna "
-            f"'{COLUNA_MATRICULA}' nas duplicidades."
+            "Não foi encontrada a coluna 'Matrícula' "
+            "para gerar o lote."
         )
 
     if col_protocolo is None:
         raise ValueError(
-            "Não foi possível localizar a coluna "
-            f"'{COLUNA_PROTOCOLO}' nas duplicidades."
+            "Não foi encontrada a coluna "
+            "'Cód. Protocolo Origem' para gerar o lote."
         )
 
-    avisos = []
+    if modo == "API" and col_cidade is None:
+        raise ValueError(
+            "Não foi encontrada a coluna 'Cidade' "
+            "na base API."
+        )
+
+    # --------------------------------------------------------
+    # MAPA DA MATRÍCULA ORIGINAL → PROTOCOLO ORIGINAL
+    # --------------------------------------------------------
+
+    col_matricula_mantido = localizar_coluna(
+        df_mantidos,
+        "matricula",
+    )
+
+    col_protocolo_mantido = localizar_coluna(
+        df_mantidos,
+        "protocolo",
+    )
+
+    if (
+        col_matricula_mantido is None
+        or col_protocolo_mantido is None
+    ):
+        raise ValueError(
+            "Não foi possível identificar Matrícula e "
+            "Cód. Protocolo Origem nas O.S. mantidas."
+        )
+
+    mapa_original = {}
+
+    for _, linha in df_mantidos.iterrows():
+        matricula = normalizar_matricula(
+            linha[col_matricula_mantido]
+        )
+
+        protocolo_original = linha[
+            col_protocolo_mantido
+        ]
+
+        if matricula:
+            mapa_original[matricula] = (
+                protocolo_original
+            )
+
+    # --------------------------------------------------------
+    # GERAÇÃO
+    # --------------------------------------------------------
+
     registros = []
 
-    for _, linha in duplicidades.iterrows():
-
+    for _, linha in df_duplicidades.iterrows():
         matricula = normalizar_matricula(
             linha[col_matricula]
         )
 
-        protocolo = linha[col_protocolo]
+        protocolo = linha[
+            col_protocolo
+        ]
 
-        numero, ano, numero_int = parse_protocolo(
-            protocolo
+        numero_str, ano_str, numero_int = (
+            parse_protocolo(protocolo)
         )
 
-        if numero_int is None:
-            avisos.append(
-                {
-                    "Matrícula": matricula,
-                    "O.S.": str(protocolo),
-                    "Aviso": (
-                        "Protocolo de origem inválido. "
-                        "A O.S. foi identificada como "
-                        "duplicidade, mas não foi incluída "
-                        "no lote de cancelamento."
-                    ),
-                }
-            )
-            continue
+        protocolo_original = mapa_original.get(
+            matricula
+        )
+
+        if protocolo_original is None:
+            protocolo_original = ""
+
+        numero_original = (
+            str(protocolo_original)
+            if not pd.isna(protocolo_original)
+            else ""
+        )
+
+        observacao = (
+            f"Duplicidade com O.S N. "
+            f"{numero_original}"
+        )
 
         # ----------------------------------------------------
-        # Zona.
+        # ZONA
         # ----------------------------------------------------
 
         if modo == "THE":
-
             zona = 1
-
         else:
-
-            if col_cidade is None:
-                avisos.append(
-                    {
-                        "Matrícula": matricula,
-                        "O.S.": str(protocolo),
-                        "Aviso": (
-                            "A base API não possui a coluna "
-                            f"'{COLUNA_CIDADE}'. "
-                            "A O.S. não foi incluída no lote."
-                        ),
-                    }
-                )
-                continue
-
-            zona = obter_zona(
-                linha[col_cidade]
-            )
+            cidade = linha[col_cidade]
+            zona = obter_zona(cidade)
 
             if zona is None:
-                avisos.append(
-                    {
-                        "Matrícula": matricula,
-                        "O.S.": str(protocolo),
-                        "Aviso": (
-                            "Não foi possível determinar a "
-                            "zona da cidade para esta O.S. "
-                            "A O.S. não foi incluída no lote."
-                        ),
-                    }
-                )
-                continue
-
-        # ----------------------------------------------------
-        # Observação.
-        #
-        # A observação referencia a O.S. original da
-        # matrícula. Ela é preenchida posteriormente na
-        # função que possui acesso à relação original.
-        # ----------------------------------------------------
+                zona = ""
 
         registros.append(
             {
                 "Matricula": matricula,
                 "Zona Ligacao": zona,
-                "Numero Do Pedido": numero,
-                "Ano Do Pedido": ano,
+                "Numero Do Pedido": (
+                    numero_int
+                    if numero_int is not None
+                    else ""
+                ),
+                "Ano Do Pedido": (
+                    int(ano_str)
+                    if ano_str.isdigit()
+                    else ""
+                ),
                 "Tipo Encerramento": 6,
-                "Observações": "",
-                "_INDICE_ORIGINAL_DUP": _,
+                "Observações": observacao,
             }
         )
 
-    lote = pd.DataFrame(registros)
-
-    if lote.empty:
-        return (
-            pd.DataFrame(
-                columns=[
-                    "Matricula",
-                    "Zona Ligacao",
-                    "Numero Do Pedido",
-                    "Ano Do Pedido",
-                    "Tipo Encerramento",
-                    "Observações",
-                ]
-            ),
-            avisos,
-        )
-
-    lote = lote.drop(
-        columns=["_INDICE_ORIGINAL_DUP"],
-        errors="ignore",
+    return pd.DataFrame(
+        registros,
+        columns=[
+            "Matricula",
+            "Zona Ligacao",
+            "Numero Do Pedido",
+            "Ano Do Pedido",
+            "Tipo Encerramento",
+            "Observações",
+        ],
     )
-
-    return lote, avisos
 
 
 # ============================================================
-# RELAÇÃO ORIGINAL x DUPLICIDADE
-# ============================================================
-
-def adicionar_observacoes_duplicidade(
-    lote,
-    duplicidades,
-    mantidos,
-):
-    """
-    Preenche a observação de cada duplicidade com a O.S.
-    original correspondente à mesma matrícula.
-    """
-
-    if lote is None or lote.empty:
-        return lote
-
-    col_matricula_dup = localizar_coluna(
-        duplicidades,
-        "matricula",
-    )
-
-    col_protocolo_dup = localizar_coluna(
-        duplicidades,
-        "protocolo",
-    )
-
-    col_matricula_man = localizar_coluna(
-        mantidos,
-        "matricula",
-    )
-
-    col_protocolo_man = localizar_coluna(
-        mantidos,
-        "protocolo",
-    )
-
-    if (
-        col_matricula_dup is None
-        or col_protocolo_dup is None
-        or col_matricula_man is None
-        or col_protocolo_man is None
-    ):
-        return lote
-
-    originais = {}
-
-    for _, linha in mantidos.iterrows():
-
-        matricula = normalizar_matricula(
-            linha[col_matricula_man]
-        )
-
-        protocolo = linha[col_protocolo_man]
-
-        if matricula:
-            originais[matricula] = str(
-                protocolo
-            ).strip()
-
-    observacoes = []
-
-    for _, linha in lote.iterrows():
-
-        matricula = normalizar_matricula(
-            linha["Matricula"]
-        )
-
-        protocolo_original = originais.get(
-            matricula
-        )
-
-        if protocolo_original:
-            observacoes.append(
-                f"Duplicidade com O.S N. {protocolo_original}"
-            )
-        else:
-            observacoes.append(
-                "Duplicidade com O.S N. "
-                "(protocolo original não localizado)"
-            )
-
-    lote = lote.copy()
-    lote["Observações"] = observacoes
-
-    return lote
-
-
-# ============================================================
-# ESTADO DO MÓDULO
-# ============================================================
-
-def inicializar_estado_duplicidade():
-    """
-    Estado específico da ferramenta.
-
-    Os resultados são separados por modo para que a troca
-    API/THE não afete as bases originais.
-    """
-
-    defaults = {
-        "duplicidade_modo_anterior": None,
-
-        "duplicidade_analisada_API": False,
-        "duplicidade_analisada_THE": False,
-
-        "duplicidade_duplicidades_API": None,
-        "duplicidade_duplicidades_THE": None,
-
-        "duplicidade_mantidos_API": None,
-        "duplicidade_mantidos_THE": None,
-
-        "duplicidade_lote_API": None,
-        "duplicidade_lote_THE": None,
-
-        "duplicidade_estatisticas_API": None,
-        "duplicidade_estatisticas_THE": None,
-
-        "duplicidade_avisos_API": [],
-        "duplicidade_avisos_THE": [],
-
-        "duplicidade_nome_API": NOME_ARQUIVO_API,
-        "duplicidade_nome_THE": NOME_ARQUIVO_THE,
-    }
-
-    for chave, valor in defaults.items():
-
-        if chave not in st.session_state:
-            st.session_state[chave] = valor
-
-
-def chave_modo(prefixo, modo):
-    return f"{prefixo}_{modo}"
-
-
-# ============================================================
-# RENDER
+# RENDERIZAÇÃO
 # ============================================================
 
 def render_duplicidade():
-
-    inicializar_estado_duplicidade()
-
     st.title("♻️ Análise de Duplicidade")
     st.caption(
-        "Identifique matrículas com mais de uma O.S. "
-        "e mantenha somente a O.S. mais antiga."
+        "Identificação de O.S. duplicadas por Matrícula, "
+        "mantendo somente a O.S. original."
     )
 
     st.divider()
 
     # --------------------------------------------------------
-    # Seleção API / THE
+    # SELEÇÃO DA BASE
     # --------------------------------------------------------
 
     modo, df = selecionar_modo_api_the(
@@ -864,78 +956,51 @@ def render_duplicidade():
     )
 
     if modo is None or df is None:
-        st.info(
-            "Selecione uma base API ou THE carregada "
-            "para iniciar a análise."
-        )
-
-        st.divider()
-
-        if st.button(
-            "⬅️ Voltar ao Hub",
-            use_container_width=True,
-            key="btn_voltar_hub_duplicidade_sem_base",
-        ):
-            st.session_state.ferramenta_atual = None
-            limpar_resultado()
-            st.rerun()
-
-        return
+        st.stop()
 
     # --------------------------------------------------------
-    # Ao trocar de modo, apenas altera a análise exibida.
-    #
-    # As bases df_api e df_the permanecem intactas.
+    # IDENTIFICAÇÃO DO ESTADO POR MODO
     # --------------------------------------------------------
 
-    modo_anterior = st.session_state.get(
-        "duplicidade_modo_anterior"
+    chave_resultado = (
+        "duplicidade_resultado_api"
+        if modo == "API"
+        else "duplicidade_resultado_the"
     )
 
-    if modo_anterior != modo:
-        st.session_state.duplicidade_modo_anterior = modo
-
-    chave_analisada = chave_modo(
-        "duplicidade_analisada",
-        modo,
+    chave_lote = (
+        "duplicidade_lote_api"
+        if modo == "API"
+        else "duplicidade_lote_the"
     )
 
-    chave_duplicidades = chave_modo(
-        "duplicidade_duplicidades",
-        modo,
+    chave_mantidos = (
+        "duplicidade_mantidos_api"
+        if modo == "API"
+        else "duplicidade_mantidos_the"
     )
 
-    chave_mantidos = chave_modo(
-        "duplicidade_mantidos",
-        modo,
+    chave_ignorados = (
+        "duplicidade_ignorados_api"
+        if modo == "API"
+        else "duplicidade_ignorados_the"
     )
 
-    chave_lote = chave_modo(
-        "duplicidade_lote",
-        modo,
-    )
-
-    chave_estatisticas = chave_modo(
-        "duplicidade_estatisticas",
-        modo,
-    )
-
-    chave_avisos = chave_modo(
-        "duplicidade_avisos",
-        modo,
+    chave_analisada = (
+        "duplicidade_analisada_api"
+        if modo == "API"
+        else "duplicidade_analisada_the"
     )
 
     # --------------------------------------------------------
-    # Resumo da base
+    # INFORMAÇÕES DA BASE
     # --------------------------------------------------------
-
-    st.markdown("### 📊 Base selecionada")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
         st.metric(
-            "Modo",
+            "Base",
             modo,
         )
 
@@ -954,479 +1019,381 @@ def render_duplicidade():
     st.divider()
 
     # --------------------------------------------------------
-    # Critérios
+    # REGRAS
     # --------------------------------------------------------
 
-    st.markdown("### ⚙️ Critérios da análise")
-
-    tamanho_matricula = (
-        "9 dígitos"
-        if modo == "API"
-        else "8 dígitos"
-    )
-
-    st.info(
-        f"Modo {modo}: somente matrículas com exatamente "
-        f"{tamanho_matricula} numéricos participam da "
-        "análise de duplicidade. Matrículas inválidas "
-        "serão contabilizadas como ignoradas."
-    )
-
-    col_crit_1, col_crit_2 = st.columns(2)
-
-    with col_crit_1:
+    with st.expander(
+        "ℹ️ Regras da análise",
+        expanded=False,
+    ):
         st.markdown(
-            "**Identificação**"
-        )
-        st.caption(
-            "Agrupamento por matrícula válida."
-        )
+            """
+            **A análise utiliza o backlog ativo da base selecionada.**
 
-    with col_crit_2:
-        st.markdown(
-            "**O.S. original**"
-        )
-        st.caption(
-            "Data mais antiga; empate pelo menor "
-            "número do protocolo de origem."
+            - API → `df_api`
+            - THE → `df_the`
+            - Matrícula API → exatamente 9 dígitos
+            - Matrícula THE → exatamente 8 dígitos
+            - Matrículas inválidas são ignoradas e contabilizadas
+            - `INÍCIO DO SLA` é a única referência de data/hora
+            - A coluna `Data` não é utilizada
+            - Data válida possui prioridade sobre data inválida
+            - Entre datas válidas, permanece a mais antiga
+            - Empate de data → menor número do protocolo
+            - Se todas as datas forem inválidas → menor número do protocolo
+            - Todas as demais O.S. da matrícula serão canceladas
+            - O.S. com matrícula válida e única não entra na análise
+            """
         )
 
     st.divider()
 
     # --------------------------------------------------------
-    # Botão de análise
+    # BOTÃO DE ANÁLISE
     # --------------------------------------------------------
-
-    st.markdown("### 🔍 Análise")
 
     if st.button(
         "🔍 Analisar Duplicidades",
         type="primary",
         use_container_width=True,
-        key=f"btn_analisar_duplicidades_{modo}",
+        key=f"btn_analisar_duplicidades_{modo.lower()}",
     ):
-
         try:
+            with st.spinner(
+                "Analisando duplicidades..."
+            ):
+                resultado = identificar_duplicidades(
+                    df,
+                    modo,
+                )
 
-            (
-                duplicidades,
-                mantidos,
-                estatisticas,
-                avisos_data,
-            ) = identificar_duplicidades(
-                df,
-                modo,
-            )
+                df_duplicidades = resultado[
+                    "df_duplicidades"
+                ]
 
-            # ------------------------------------------------
-            # Geração do lote.
-            # ------------------------------------------------
+                df_mantidos = resultado[
+                    "df_mantidos"
+                ]
 
-            lote, avisos_lote = gerar_lote_cancelamento(
-                duplicidades,
-                modo,
-            )
+                df_ignorados = resultado[
+                    "df_ignorados"
+                ]
 
-            lote = adicionar_observacoes_duplicidade(
-                lote,
-                duplicidades,
-                mantidos,
-            )
+                df_lote = gerar_lote_cancelamento(
+                    df_duplicidades,
+                    df_mantidos,
+                    modo,
+                )
 
-            avisos = (
-                avisos_data
-                + avisos_lote
-            )
+                st.session_state[
+                    chave_resultado
+                ] = resultado
 
-            st.session_state[
-                chave_duplicidades
-            ] = duplicidades
+                st.session_state[
+                    chave_lote
+                ] = df_lote
 
-            st.session_state[
-                chave_mantidos
-            ] = mantidos
+                st.session_state[
+                    chave_mantidos
+                ] = df_mantidos
 
-            st.session_state[
-                chave_lote
-            ] = lote
+                st.session_state[
+                    chave_ignorados
+                ] = df_ignorados
 
-            st.session_state[
-                chave_estatisticas
-            ] = estatisticas
-
-            st.session_state[
-                chave_avisos
-            ] = avisos
-
-            st.session_state[
-                chave_analisada
-            ] = True
+                st.session_state[
+                    chave_analisada
+                ] = True
 
             st.success(
-                "✓ Análise de duplicidade concluída."
+                "Análise de duplicidades concluída."
             )
 
         except Exception as erro:
-
-            st.session_state[
-                chave_analisada
-            ] = False
-
-            st.session_state[
-                chave_duplicidades
-            ] = None
-
-            st.session_state[
-                chave_mantidos
-            ] = None
-
-            st.session_state[
-                chave_lote
-            ] = None
-
             st.error(
-                f"❌ Não foi possível realizar a análise: "
-                f"{erro}"
+                f"Não foi possível realizar a análise: {erro}"
             )
+            st.stop()
 
     # --------------------------------------------------------
-    # Resultado
+    # RESULTADO EXISTENTE PARA ESTE MODO
     # --------------------------------------------------------
 
-    analisada = st.session_state.get(
+    if not st.session_state.get(
         chave_analisada,
         False,
+    ):
+        return
+
+    resultado = st.session_state.get(
+        chave_resultado
     )
 
-    if analisada:
-
-        duplicidades = st.session_state.get(
-            chave_duplicidades
-        )
-
-        mantidos = st.session_state.get(
-            chave_mantidos
-        )
-
-        lote = st.session_state.get(
-            chave_lote
-        )
-
-        estatisticas = st.session_state.get(
-            chave_estatisticas
-        ) or {}
-
-        avisos = st.session_state.get(
-            chave_avisos,
-            [],
-        )
-
-        st.divider()
-
-        st.markdown("### 📋 Resultado da análise")
-
-        # ----------------------------------------------------
-        # Indicadores
-        # ----------------------------------------------------
-
-        colunas_metricas = st.columns(4)
-
-        with colunas_metricas[0]:
-            st.metric(
-                "Registros analisados",
-                str(
-                    estatisticas.get(
-                        "Registros analisados",
-                        0,
-                    )
-                ),
-            )
-
-        with colunas_metricas[1]:
-            st.metric(
-                "Matrículas ignoradas",
-                str(
-                    estatisticas.get(
-                        "Matrículas ignoradas",
-                        0,
-                    )
-                ),
-            )
-
-        with colunas_metricas[2]:
-            st.metric(
-                "Matrículas com duplicidade",
-                str(
-                    estatisticas.get(
-                        "Matrículas com duplicidade",
-                        0,
-                    )
-                ),
-            )
-
-        with colunas_metricas[3]:
-            st.metric(
-                "O.S. a cancelar",
-                str(
-                    estatisticas.get(
-                        "O.S. a cancelar",
-                        0,
-                    )
-                ),
-            )
-
-        colunas_metricas_2 = st.columns(3)
-
-        with colunas_metricas_2[0]:
-            st.metric(
-                "O.S. mantidas",
-                str(
-                    estatisticas.get(
-                        "O.S. mantidas",
-                        0,
-                    )
-                ),
-            )
-
-        with colunas_metricas_2[1]:
-            st.metric(
-                "Matrículas válidas",
-                str(
-                    estatisticas.get(
-                        "Matrículas válidas",
-                        0,
-                    )
-                ),
-            )
-
-        with colunas_metricas_2[2]:
-            st.metric(
-                "Datas inválidas",
-                str(
-                    estatisticas.get(
-                        "Datas inválidas",
-                        0,
-                    )
-                ),
-            )
-
-        # ----------------------------------------------------
-        # Avisos
-        # ----------------------------------------------------
-
-        if avisos:
-
-            st.warning(
-                f"⚠️ {len(avisos)} aviso(s) registrado(s)."
-            )
-
-            with st.expander(
-                "Ver avisos do processamento"
-            ):
-
-                st.dataframe(
-                    pd.DataFrame(avisos),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-        # ----------------------------------------------------
-        # Prévia das duplicidades
-        # ----------------------------------------------------
-
-        st.markdown(
-            "#### 🔎 Prévia das O.S. a cancelar"
-        )
-
-        if duplicidades is None or duplicidades.empty:
-
-            st.success(
-                "✓ Nenhuma duplicidade encontrada."
-            )
-
-        else:
-
-            st.caption(
-                "Amostra das 10 primeiras O.S. "
-                "identificadas como duplicidade."
-            )
-
-            st.dataframe(
-                duplicidades.head(10),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        # ----------------------------------------------------
-        # O.S. mantidas
-        # ----------------------------------------------------
-
-        with st.expander(
-            "📌 Ver O.S. mantidas"
-        ):
-
-            if mantidos is None or mantidos.empty:
-
-                st.info(
-                    "Nenhuma O.S. mantida."
-                )
-
-            else:
-
-                st.dataframe(
-                    mantidos,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-        # ----------------------------------------------------
-        # Lote
-        # ----------------------------------------------------
-
-        st.divider()
-
-        st.markdown(
-            "### 📦 Lote de cancelamento"
-        )
-
-        if lote is None or lote.empty:
-
-            st.info(
-                "Nenhuma O.S. válida foi produzida "
-                "para o lote de cancelamento."
-            )
-
-        else:
-
-            st.caption(
-                f"{len(lote):,} O.S. serão incluídas "
-                "no lote.".replace(",", ".")
-            )
-
-            st.dataframe(
-                lote,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            nome_arquivo = (
-                NOME_ARQUIVO_API
-                if modo == "API"
-                else NOME_ARQUIVO_THE
-            )
-
-            arquivo_excel = dataframe_para_excel(
-                lote,
-                nome_aba="Duplicidade",
-            )
-
-            if arquivo_excel is not None:
-
-                st.download_button(
-                    "⬇️ Baixar lote",
-                    data=arquivo_excel,
-                    file_name=nome_arquivo,
-                    mime=(
-                        "application/"
-                        "vnd.openxmlformats-officedocument."
-                        "spreadsheetml.sheet"
-                    ),
-                    use_container_width=True,
-                    key=f"btn_download_duplicidade_{modo}",
-                )
-
-        # ----------------------------------------------------
-        # Limpar somente a análise do modo atual
-        # ----------------------------------------------------
-
-        st.divider()
-
-        col_limpar_1, col_limpar_2 = st.columns(2)
-
-        with col_limpar_1:
-
-            if st.button(
-                "🗑️ Limpar análise",
-                use_container_width=True,
-                key=f"btn_limpar_analise_duplicidade_{modo}",
-            ):
-
-                st.session_state[
-                    chave_analisada
-                ] = False
-
-                st.session_state[
-                    chave_duplicidades
-                ] = None
-
-                st.session_state[
-                    chave_mantidos
-                ] = None
-
-                st.session_state[
-                    chave_lote
-                ] = None
-
-                st.session_state[
-                    chave_estatisticas
-                ] = None
-
-                st.session_state[
-                    chave_avisos
-                ] = []
-
-                st.rerun()
-
-        with col_limpar_2:
-
-            if st.button(
-                "🔄 Nova análise",
-                use_container_width=True,
-                key=f"btn_nova_analise_duplicidade_{modo}",
-            ):
-
-                st.session_state[
-                    chave_analisada
-                ] = False
-
-                st.session_state[
-                    chave_duplicidades
-                ] = None
-
-                st.session_state[
-                    chave_mantidos
-                ] = None
-
-                st.session_state[
-                    chave_lote
-                ] = None
-
-                st.session_state[
-                    chave_estatisticas
-                ] = None
-
-                st.session_state[
-                    chave_avisos
-                ] = []
-
-                st.rerun()
+    df_lote = st.session_state.get(
+        chave_lote
+    )
+
+    df_mantidos = st.session_state.get(
+        chave_mantidos
+    )
+
+    df_ignorados = st.session_state.get(
+        chave_ignorados
+    )
+
+    if resultado is None:
+        return
 
     # --------------------------------------------------------
-    # Retorno
+    # MÉTRICAS
     # --------------------------------------------------------
+
+    qtd_total = len(df)
+
+    qtd_ignorados = len(
+        df_ignorados
+    ) if df_ignorados is not None else 0
+
+    qtd_validos = (
+        qtd_total
+        - qtd_ignorados
+    )
+
+    qtd_matriculas = resultado[
+        "qtd_matriculas_duplicadas"
+    ]
+
+    qtd_cancelar = resultado[
+        "qtd_duplicidades"
+    ]
+
+    qtd_mantidos = resultado[
+        "qtd_mantidos"
+    ]
+
+    qtd_datas_invalidas = resultado[
+        "qtd_datas_invalidas"
+    ]
+
+    st.markdown("### 📊 Resultado da análise")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Registros analisados",
+            f"{qtd_total:,}".replace(",", "."),
+        )
+
+    with col2:
+        st.metric(
+            "Matrículas válidas",
+            f"{qtd_validos:,}".replace(",", "."),
+        )
+
+    with col3:
+        st.metric(
+            "Matrículas ignoradas",
+            f"{qtd_ignorados:,}".replace(",", "."),
+        )
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+        st.metric(
+            "Matrículas com duplicidade",
+            f"{qtd_matriculas:,}".replace(",", "."),
+        )
+
+    with col5:
+        st.metric(
+            "O.S. a cancelar",
+            f"{qtd_cancelar:,}".replace(",", "."),
+        )
+
+    with col6:
+        st.metric(
+            "O.S. mantidas",
+            f"{qtd_mantidos:,}".replace(",", "."),
+        )
 
     st.divider()
 
-    if st.button(
-        "⬅️ Voltar ao Hub",
-        use_container_width=True,
-        key="btn_voltar_hub_duplicidade",
+    # --------------------------------------------------------
+    # INFORMAÇÕES DE DATAS
+    # --------------------------------------------------------
+
+    col_data1, col_data2 = st.columns(2)
+
+    with col_data1:
+        st.metric(
+            "INÍCIO DO SLA inválido",
+            f"{qtd_datas_invalidas:,}".replace(",", "."),
+        )
+
+    with col_data2:
+        qtd_avisos = len(
+            resultado["avisos_data"]
+        )
+
+        st.metric(
+            "Ocorrências com aviso",
+            f"{qtd_avisos:,}".replace(",", "."),
+        )
+
+    # --------------------------------------------------------
+    # AVISOS
+    # --------------------------------------------------------
+
+    avisos_data = resultado[
+        "avisos_data"
+    ]
+
+    if avisos_data:
+        st.warning(
+            f"Foram identificadas {len(avisos_data):,} "
+            "ocorrências que exigem atenção quanto ao "
+            "INÍCIO DO SLA.".replace(",", ".")
+        )
+
+        with st.expander(
+            "⚠️ Ver avisos de data",
+            expanded=False,
+        ):
+            st.dataframe(
+                pd.DataFrame(
+                    avisos_data
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    # --------------------------------------------------------
+    # MATRÍCULAS IGNORADAS
+    # --------------------------------------------------------
+
+    if (
+        df_ignorados is not None
+        and not df_ignorados.empty
     ):
+        with st.expander(
+            "⚠️ Matrículas ignoradas — para tratamento posterior",
+            expanded=False,
+        ):
+            st.caption(
+                "Estas O.S. foram contabilizadas nos registros "
+                "analisados, mas não participaram da identificação "
+                "de duplicidades porque a Matrícula não possui "
+                "o formato válido para o modo selecionado."
+            )
 
-        st.session_state.ferramenta_atual = None
+            st.dataframe(
+                df_ignorados,
+                use_container_width=True,
+                hide_index=True,
+            )
 
-        # Importante:
-        # não limpa df_api nem df_the.
-        limpar_resultado()
+    # --------------------------------------------------------
+    # PREVIEW DAS DUPLICIDADES
+    # --------------------------------------------------------
 
-        st.rerun()
+    st.markdown(
+        "### 🔍 Preview das O.S. a cancelar"
+    )
+
+    if (
+        df_lote is None
+        or df_lote.empty
+    ):
+        st.info(
+            "Nenhuma O.S. foi identificada como duplicidade."
+        )
+    else:
+        st.caption(
+            "Exibindo as primeiras 10 O.S. que serão "
+            "incluídas no lote de cancelamento."
+        )
+
+        df_preview = (
+            df_lote
+            .head(10)
+            .copy()
+        )
+
+        st.dataframe(
+            df_preview,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # --------------------------------------------------------
+    # O.S. MANTIDAS
+    # --------------------------------------------------------
+
+    st.markdown(
+        "### 🟢 O.S. mantidas"
+    )
+
+    if (
+        df_mantidos is None
+        or df_mantidos.empty
+    ):
+        st.info(
+            "Nenhuma O.S. mantida foi identificada."
+        )
+    else:
+        st.caption(
+            "Uma O.S. original é mantida para cada Matrícula "
+            "que possui duplicidade."
+        )
+
+        st.dataframe(
+            df_mantidos,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # --------------------------------------------------------
+    # DOWNLOAD
+    # --------------------------------------------------------
+
+    if (
+        df_lote is not None
+        and not df_lote.empty
+    ):
+        st.divider()
+
+        nome_arquivo = (
+            NOME_ARQUIVO_API
+            if modo == "API"
+            else NOME_ARQUIVO_THE
+        )
+
+        arquivo_excel = dataframe_para_excel(
+            df_lote,
+            nome_aba="Lote Cancelamento",
+        )
+
+        if arquivo_excel is not None:
+            st.download_button(
+                label="📥 Baixar Lote de Cancelamento",
+                data=arquivo_excel,
+                file_name=nome_arquivo,
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
+                type="primary",
+                use_container_width=True,
+                key=f"download_duplicidade_{modo.lower()}",
+            )
+
+    # --------------------------------------------------------
+    # OBSERVAÇÃO SOBRE A TROCA API/THE
+    # --------------------------------------------------------
+
+    st.caption(
+        "A base original permanece preservada durante a sessão. "
+        "Você pode alternar entre API e THE e gerar outro lote "
+        "sem realizar novo upload."
+    )
