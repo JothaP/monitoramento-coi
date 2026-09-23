@@ -146,14 +146,7 @@ def verificar_autenticacao():
     if st.session_state.get("autenticado") is True:
         return True
 
-    controller = get_controller()
-
-    token = None
-
-    try:
-        token = controller.get(COOKIE_NAME)
-    except Exception:
-        token = None
+    token = obter_cookie()
 
     if token:
         dados = validar_token(token)
@@ -162,8 +155,9 @@ def verificar_autenticacao():
             st.session_state["autenticado"] = True
             st.session_state["usuario_logado"] = dados["usuario"]
             st.session_state["perfil"] = dados["perfil"]
-
             return True
+
+    return False
 
         try:
             controller.remove(COOKIE_NAME)
