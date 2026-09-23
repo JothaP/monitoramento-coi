@@ -146,20 +146,48 @@ def verificar_autenticacao():
     if st.session_state.get("autenticado") is True:
         return True
 
-    token = obter_cookie()
+    controller = get_controller()
 
-    if not token:
-        return False
+    token = None
 
-    dados = validar_token(token)
+    try:
+        token = controller.get(COOKIE_NAME)
+    except Exception:
+        token = None
 
-    if not dados:
+    if token:
+        dados = validar_token(token)
+
+        if dados:
+            st.session_state["autenticado"] = True
+            st.session_state["usuario_logado"] = dados["usuario"]
+            st.session_state["perfil"] = dados["perfil"]
+
+            return True
+
         try:
-            get_controller().remove(COOKIE_NAME)
+            controller.remove(COOKIE_NAME)
         except Exception:
             pass
 
         return False
+
+    tentativas = st.session_state.get(
+        "_tentativas_restauracao_login",
+        0,
+    )
+
+    if tentativas < 20:
+        st.session_state["_tentativas_restauracao_login"] = tentativas + 1
+
+        import time
+        time.sleep(0.5)
+
+        st.rerun()
+
+    st.session_state["_tentativas_restauracao_login"] = 0
+
+    return False
 
     st.session_state["autenticado"] = True
     st.session_state["usuario_logado"] = dados["usuario"]
