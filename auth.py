@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import json
 import secrets
-import time
 
 from streamlit_cookies_controller import CookieController
 
@@ -12,13 +11,14 @@ TEMPO_SESSAO_HORAS = 8
 COOKIE_NAME = "coi_auth_token"
 
 def get_controller():
-if "cookie_controller" not in st.session_state:
-st.session_state["cookie_controller"] = CookieController(
-key="coi_auth_controller"
-)
+controller = st.session_state.get("cookie_controller")
 
 ```
-return st.session_state["cookie_controller"]
+if controller is None:
+    controller = CookieController(key="coi_auth_controller")
+    st.session_state["cookie_controller"] = controller
+
+return controller
 ```
 
 def obter_secret_key():
@@ -46,12 +46,9 @@ return hmac.new(
 
 def criar_token(usuario, perfil):
 agora = datetime.now(timezone.utc)
+expiracao = agora + timedelta(hours=TEMPO_SESSAO_HORAS)
 
 ```
-expiracao = agora + timedelta(
-    hours=TEMPO_SESSAO_HORAS
-)
-
 dados = {
     "usuario": str(usuario),
     "perfil": str(perfil),
@@ -87,9 +84,6 @@ return None
 ```
     token_data = json.loads(token)
 
-    if not isinstance(token_data, dict):
-        return None
-
     conteudo = token_data.get("dados")
     assinatura_recebida = token_data.get("assinatura")
 
@@ -106,16 +100,8 @@ return None
 
     dados = json.loads(conteudo)
 
-    if not isinstance(dados, dict):
-        return None
-
-    expira_em_texto = dados.get("expira_em")
-
-    if not expira_em_texto:
-        return None
-
     expira_em = datetime.fromisoformat(
-        expira_em_texto
+        dados["expira_em"]
     )
 
     if expira_em.tzinfo is None:
@@ -123,15 +109,10 @@ return None
             tzinfo=timezone.utc
         )
 
-    agora = datetime.now(timezone.utc)
-
-    if agora >= expira_em:
+    if datetime.now(timezone.utc) >= expira_em:
         return None
 
-    usuario = dados.get("usuario")
-    perfil = dados.get("perfil")
-
-    if not usuario or not perfil:
+    if not dados.get("usuario") or not dados.get("perfil"):
         return None
 
     return dados
@@ -144,10 +125,7 @@ def fazer_login(usuario, perfil):
 controller = get_controller()
 
 ```
-token = criar_token(
-    usuario=usuario,
-    perfil=perfil,
-)
+token = criar_token(usuario, perfil)
 
 controller.set(
     COOKIE_NAME,
@@ -163,20 +141,10 @@ return True
 ```
 
 def obter_cookie():
-controller = get_controller()
-
-```
 try:
-    token = controller.get(COOKIE_NAME)
-
-    if token:
-        return token
-
+return get_controller().get(COOKIE_NAME)
 except Exception:
-    pass
-
 return None
-```
 
 def verificar_autenticacao():
 if st.session_state.get("autenticado") is True:
@@ -185,22 +153,12 @@ return True
 ```
 token = obter_cookie()
 
-if token:
-    dados = validar_token(token)
+if not token:
+    return False
 
-    if dados:
-        st.session_state["autenticado"] = True
-        st.session_state["usuario_logado"] = dados.get(
-            "usuario",
-            "",
-        )
-        st.session_state["perfil"] = dados.get(
-            "perfil",
-            "",
-        )
+dados = validar_token(token)
 
-        return True
-
+if not dados:
     try:
         get_controller().remove(COOKIE_NAME)
     except Exception:
@@ -208,21 +166,11 @@ if token:
 
     return False
 
-tentativas = st.session_state.get(
-    "_auth_tentativas_cookie",
-    0,
-)
+st.session_state["autenticado"] = True
+st.session_state["usuario_logado"] = dados["usuario"]
+st.session_state["perfil"] = dados["perfil"]
 
-if tentativas < 3:
-    st.session_state["_auth_tentativas_cookie"] = tentativas + 1
-
-    time.sleep(0.5)
-
-    st.rerun()
-
-st.session_state["_auth_tentativas_cookie"] = 0
-
-return False
+return True
 ```
 
 def fazer_logout():
@@ -232,12 +180,6 @@ except Exception:
 pass
 
 ```
-keys_to_delete = [
-    key
-    for key in list(st.session_state.keys())
-    if key != "cookie_controller"
-]
-
-for key in keys_to_delete:
+for key in list(st.session_state.keys()):
     del st.session_state[key]
 ```
