@@ -583,6 +583,16 @@ MAPA_FERRAMENTAS = {
     "Lista Rápida": "lista_rapida",
 }
 
+# ============================================================
+# CONTROLE DE ACESSO
+# ============================================================
+
+perfil_atual = st.session_state.get("perfil", "").lower()
+
+FERRAMENTAS_LIBERADAS_USUARIO = {
+    "Filtragem",
+}
+
 for indice, ferramenta in enumerate(FERRAMENTAS):
 
     coluna = colunas_ferramentas[indice % 3]
@@ -603,15 +613,63 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                 .replace(" ", "_")
             )
 
-            if st.button(
-                "Acessar",
-                key=f"btn_ferramenta_{chave_ferramenta}",
-                type="primary",
-                use_container_width=True,
+            # ------------------------------------------------
+            # ADMIN
+            # ------------------------------------------------
+
+            if perfil_atual == "admin":
+
+                if st.button(
+                    "Acessar",
+                    key=f"btn_ferramenta_{chave_ferramenta}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+
+                    st.session_state.ferramenta_atual = (
+                        MAPA_FERRAMENTAS[ferramenta["nome"]]
+                    )
+
+                    st.rerun()
+
+            # ------------------------------------------------
+            # USUÁRIO
+            # ------------------------------------------------
+
+            elif (
+                perfil_atual == "usuario"
+                and ferramenta["nome"] in FERRAMENTAS_LIBERADAS_USUARIO
             ):
 
-                st.session_state.ferramenta_atual = (
-                    MAPA_FERRAMENTAS[ferramenta["nome"]]
+                if st.button(
+                    "Acessar",
+                    key=f"btn_ferramenta_{chave_ferramenta}",
+                    type="primary",
+                    use_container_width=True,
+                ):
+
+                    st.session_state.ferramenta_atual = (
+                        MAPA_FERRAMENTAS[ferramenta["nome"]]
+                    )
+
+                    st.rerun()
+
+            # ------------------------------------------------
+            # BLOQUEADO
+            # ------------------------------------------------
+
+            else:
+
+                st.button(
+                    "🔒 Restrito",
+                    key=f"btn_ferramenta_bloqueada_{chave_ferramenta}",
+                    disabled=True,
+                    use_container_width=True,
                 )
 
-                st.rerun()
+                st.markdown(
+                    "<p style='font-size:12px; color:gray;'>"
+                    "🔒 Restrito a administradores"
+                    "</p>",
+                    unsafe_allow_html=True
+                )
