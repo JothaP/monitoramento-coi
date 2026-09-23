@@ -11,7 +11,7 @@ COOKIE_NAME = "coi_auth_token"
 COOKIE_MANAGER_KEY = "coi_cookie_manager"
 
 def obter_secret_key():
-chave = st.secrets.get("COI_SECRET_KEY")
+    chave = st.secrets.get("COI_SECRET_KEY")
 
 ```
 if not chave:
