@@ -675,21 +675,3 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True
                 )
-```
-
-A **única alteração funcional** foi esta:
-
-```python
-FERRAMENTAS_LIBERADAS_USUARIO = {
-    "Filtragem",
-    "Duplicidade",
-}
-```
-
-Portanto:
-
-* 👤 **Usuário:** Filtragem + Duplicidade
-* 👑 **Admin:** todas as ferramentas
-* 🔒 Serviços, Eventos, Lotes e Lista Rápida: continuam restritos ao admin.
-
-Também não alterei a autenticação, o carregamento das bases, o tema ou o roteamento.
