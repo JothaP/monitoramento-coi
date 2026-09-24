@@ -142,8 +142,6 @@ if modo_escuro:
             gap: 0.45rem;
         }
 
-        /* Botões da barra lateral */
-
         [data-testid="stSidebar"] .stButton > button {
             background-color: #212833 !important;
             color: #f1f5f9 !important;
@@ -551,9 +549,23 @@ for indice, base in enumerate(BASES_CONFIG):
                     use_container_width=True,
                 ):
 
+                    # Remove somente a base selecionada.
                     st.session_state[f"df_{chave}"] = None
                     st.session_state[f"arquivos_{chave}"] = []
 
+                    # Remove a assinatura para permitir que o mesmo
+                    # arquivo seja carregado novamente.
+                    assinaturas = st.session_state.get(
+                        "assinaturas_upload",
+                        {},
+                    )
+
+                    assinaturas.pop(chave, None)
+
+                    st.session_state["assinaturas_upload"] = assinaturas
+
+                    # Troca a chave do file_uploader para limpar
+                    # visualmente o componente.
                     if f"versao_upload_{chave}" not in st.session_state:
                         st.session_state[f"versao_upload_{chave}"] = 0
 
@@ -675,4 +687,4 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "🔒 Restrito a administradores"
                     "</p>",
                     unsafe_allow_html=True
-                )
+                
