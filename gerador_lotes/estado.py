@@ -1,132 +1,181 @@
 import streamlit as st
 
 
+# ============================================================
+# BASES COMPARTILHADAS DA PLATAFORMA
+# ============================================================
+
 BASES = [
     "api",
     "the",
+    "eventos",
     "servicos_api",
     "servicos_the",
-    "eventos",
     "lotes",
 ]
 
 
+# ============================================================
+# INICIALIZAÇÃO DO ESTADO
+# ============================================================
+
 def inicializar_estado():
+    """
+    Inicializa todas as bases compartilhadas da sessão.
+
+    As bases permanecem disponíveis durante toda a sessão
+    do usuário e não são apagadas ao trocar de ferramenta.
+    """
 
     for base in BASES:
 
-        if f"df_{base}" not in st.session_state:
-            st.session_state[f"df_{base}"] = None
+        chave_df = f"df_{base}"
+        chave_arquivos = f"arquivos_{base}"
 
-        if f"arquivos_{base}" not in st.session_state:
-            st.session_state[f"arquivos_{base}"] = []
+        if chave_df not in st.session_state:
+            st.session_state[chave_df] = None
 
-        if f"assinatura_{base}" not in st.session_state:
-            st.session_state[f"assinatura_{base}"] = None
+        if chave_arquivos not in st.session_state:
+            st.session_state[chave_arquivos] = []
 
-        if f"versao_upload_{base}" not in st.session_state:
-            st.session_state[f"versao_upload_{base}"] = 0
+    # Assinaturas dos uploads.
+    if "assinaturas_upload" not in st.session_state:
+        st.session_state["assinaturas_upload"] = {}
 
+    # Ferramenta atualmente aberta.
     if "ferramenta_atual" not in st.session_state:
-        st.session_state.ferramenta_atual = None
-
-    if "df_resultado" not in st.session_state:
-        st.session_state.df_resultado = None
-
-    if "df_resultado_lote" not in st.session_state:
-        st.session_state.df_resultado_lote = None
-
-    if "df_log" not in st.session_state:
-        st.session_state.df_log = None
-
-    if "nome_arquivo_resultado" not in st.session_state:
-        st.session_state.nome_arquivo_resultado = None
+        st.session_state["ferramenta_atual"] = None
 
 
-def obter_base(nome):
-    return st.session_state.get(f"df_{nome}")
+# ============================================================
+# ACESSO ÀS BASES
+# ============================================================
 
+def obter_base(nome_base):
+    """
+    Retorna o DataFrame da base solicitada.
+    """
 
-def base_carregada(nome):
+    inicializar_estado()
 
-    df = obter_base(nome)
+    nome_base = str(nome_base).strip().lower()
 
-    return (
-        df is not None
-        and not df.empty
-    )
-
-
-def definir_base(
-    nome,
-    dataframe,
-    arquivos=None,
-    assinatura=None,
-):
-
-    if nome not in BASES:
+    if nome_base not in BASES:
         raise ValueError(
-            f"Base desconhecida: {nome}"
+            f"Base inválida: {nome_base}. "
+            f"Bases disponíveis: {', '.join(BASES)}."
         )
 
-    st.session_state[f"df_{nome}"] = dataframe
+    return st.session_state.get(f"df_{nome_base}")
+
+
+def base_carregada(nome_base):
+    """
+    Verifica se uma base existe e possui registros.
+    """
+
+    df = obter_base(nome_base)
+
+    return df is not None and not df.empty
+
+
+# ============================================================
+# DEFINIÇÃO DAS BASES
+# ============================================================
+
+def definir_base(nome_base, df, arquivos=None):
+    """
+    Armazena uma base no estado compartilhado da sessão.
+
+    Esta função NÃO interfere nas demais bases.
+    """
+
+    inicializar_estado()
+
+    nome_base = str(nome_base).strip().lower()
+
+    if nome_base not in BASES:
+        raise ValueError(
+            f"Base inválida: {nome_base}. "
+            f"Bases disponíveis: {', '.join(BASES)}."
+        )
+
+    st.session_state[f"df_{nome_base}"] = df
 
     if arquivos is not None:
-        st.session_state[f"arquivos_{nome}"] = arquivos
-
-    if assinatura is not None:
-        st.session_state[f"assinatura_{nome}"] = assinatura
+        st.session_state[f"arquivos_{nome_base}"] = arquivos
 
 
-def limpar_base(nome):
-
-    if nome not in BASES:
-        return
-
-    st.session_state[f"df_{nome}"] = None
-    st.session_state[f"arquivos_{nome}"] = []
-    st.session_state[f"assinatura_{nome}"] = None
-
-    st.session_state[
-        f"versao_upload_{nome}"
-    ] += 1
-
+# ============================================================
+# LIMPEZA DE RESULTADOS
+# ============================================================
 
 def limpar_resultado():
+    """
+    Limpa somente resultados temporários das ferramentas.
 
-    st.session_state.df_resultado = None
-    st.session_state.df_resultado_lote = None
-    st.session_state.df_log = None
-    st.session_state.nome_arquivo_resultado = None
+    IMPORTANTE:
+    Esta função NÃO remove nenhuma base carregada.
 
+    As bases df_api, df_the, df_eventos, servicos_api,
+    servicos_the e lotes permanecem disponíveis.
+    """
+
+    chaves_resultado = [
+        "df_resultado",
+        "df_log",
+        "nome_arquivo_resultado",
+        "resultado",
+        "log_resultado",
+    ]
+
+    for chave in chaves_resultado:
+        if chave in st.session_state:
+            st.session_state[chave] = None
+
+    # Estados específicos do Gerador de Lotes
+    chaves_lotes = [
+        "lote_gerado",
+        "lote_resultado",
+        "lote_log",
+        "lote_nome_arquivo",
+    ]
+
+    for chave in chaves_lotes:
+        if chave in st.session_state:
+            st.session_state[chave] = None
+
+
+# ============================================================
+# LIMPEZA COMPLETA DAS BASES
+# ============================================================
 
 def limpar_bases():
+    """
+    Remove explicitamente todas as bases carregadas.
+
+    Esta função deve ser chamada SOMENTE quando o usuário
+    realmente desejar encerrar/limpar os dados da sessão.
+    """
+
+    inicializar_estado()
 
     for base in BASES:
+        st.session_state[f"df_{base}"] = None
+        st.session_state[f"arquivos_{base}"] = []
 
-        st.session_state[
-            f"df_{base}"
-        ] = None
+    st.session_state["assinaturas_upload"] = {}
 
-        st.session_state[
-            f"arquivos_{base}"
-        ] = []
 
-        st.session_state[
-            f"assinatura_{base}"
-        ] = None
-
-        st.session_state[
-            f"versao_upload_{base}"
-        ] += 1
-
-    limpar_resultado()
-
-    st.session_state.ferramenta_atual = None
-
+# ============================================================
+# RETORNO AO HUB
+# ============================================================
 
 def voltar_ao_hub():
+    """
+    Retorna ao Hub Central sem apagar as bases carregadas.
+    """
 
-    st.session_state.ferramenta_atual = None
+    inicializar_estado()
 
-    limpar_resultado()
+    st.session_state["ferramenta_atual"] = None
