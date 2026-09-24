@@ -395,14 +395,19 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not area or not bairro:
         return False
 
+    # Correspondência exata.
     if area == bairro:
         return True
 
-    if bairro in area:
-        return True
-
-    if area in bairro:
-        return True
+    # ========================================================
+    # NÃO considerar correspondência por:
+    # - um texto estar contido no outro;
+    # - apenas um token em comum.
+    #
+    # Isso evita falsos positivos entre bairros diferentes.
+    # Exemplo:
+    # Vila Irmã Dulce != Vila Cristalina
+    # ========================================================
 
     tokens_area = tokenizar_area(area)
     tokens_bairro = tokenizar_area(bairro)
@@ -410,28 +415,40 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not tokens_area or not tokens_bairro:
         return False
 
-    if tokens_area.intersection(tokens_bairro):
-        return True
+    # ========================================================
+    # Sinônimos cadastrados devem representar o bairro/área
+    # inteira, e não apenas uma palavra isolada.
+    # ========================================================
 
     for grupo, sinonimos in SINONIMOS_AREAS.items():
 
-        bairro_equiv = (
-            grupo in tokens_bairro
+        grupo_normalizado = normalizar_texto(grupo)
+
+        equivalentes = {
+            normalizar_texto(sinonimo)
+            for sinonimo in sinonimos
+            if normalizar_texto(sinonimo)
+        }
+
+        equivalentes.add(grupo_normalizado)
+
+        area_equivalente = (
+            area in equivalentes
             or any(
-                sinonimo in bairro
-                for sinonimo in sinonimos
+                area == sinonimo
+                for sinonimo in equivalentes
             )
         )
 
-        area_equiv = (
-            grupo in tokens_area
+        bairro_equivalente = (
+            bairro in equivalentes
             or any(
-                sinonimo in area
-                for sinonimo in sinonimos
+                bairro == sinonimo
+                for sinonimo in equivalentes
             )
         )
 
-        if bairro_equiv and area_equiv:
+        if area_equivalente and bairro_equivalente:
             return True
 
     return False
