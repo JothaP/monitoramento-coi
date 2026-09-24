@@ -335,7 +335,7 @@ def eh_todo_municipio(valor) -> bool:
     if not texto:
         return False
 
-    if texto in PADROES_TODO_MUNICIPIO:
+    return texto in PADROES_TODO_MUNICIPIO
         return True
 
     palavras = set(texto.split())
