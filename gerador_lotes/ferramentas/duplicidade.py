@@ -261,7 +261,6 @@ def aplicar_modo_visual():
             unsafe_allow_html=True,
         )
 
-
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 🛠️ Duplicidade")
@@ -290,6 +289,7 @@ def render_sidebar():
             use_container_width=True,
             key="duplicidade_voltar_ferramentas",
         ):
+            st.session_state.ferramenta_atual = None
             st.switch_page(
                 "pages/4_Ferramentas_Operacionais.py"
             )
@@ -299,12 +299,12 @@ def render_sidebar():
             use_container_width=True,
             key="duplicidade_voltar_gerador",
         ):
+            st.session_state.ferramenta_atual = None
             st.switch_page(
                 "pages/4_1_Gerador_Lotes_Cancelamento.py"
             )
 
     aplicar_modo_visual()
-
 
 # ============================================================
 # NORMALIZAÇÃO DE TEXTO
