@@ -687,4 +687,4 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "🔒 Restrito a administradores"
                     "</p>",
                     unsafe_allow_html=True
-                
+                )
