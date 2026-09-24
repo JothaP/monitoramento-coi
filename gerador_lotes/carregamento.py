@@ -1,3 +1,4 @@
+```python
 import hashlib
 import io
 
@@ -10,7 +11,18 @@ from .estado import definir_base
 EXTENSOES_EXCEL_VALIDAS = (".xlsx", ".xlsm")
 
 
+# ============================================================
+# ASSINATURA DOS ARQUIVOS
+# ============================================================
+
 def assinatura_arquivo(arquivo):
+    """
+    Gera uma assinatura única para um arquivo enviado.
+
+    A assinatura permite identificar se o mesmo arquivo já foi
+    processado durante a sessão.
+    """
+
     if arquivo is None:
         return None
 
@@ -24,6 +36,10 @@ def assinatura_arquivo(arquivo):
 
 
 def assinatura_arquivos(arquivos):
+    """
+    Gera uma assinatura única para um conjunto de arquivos.
+    """
+
     if not arquivos:
         return None
 
@@ -43,7 +59,15 @@ def assinatura_arquivos(arquivos):
     return tuple(sorted(assinaturas))
 
 
+# ============================================================
+# LEITURA DO EXCEL
+# ============================================================
+
 def ler_excel(arquivo):
+    """
+    Lê um arquivo Excel e retorna um DataFrame.
+    """
+
     if arquivo is None:
         return None
 
@@ -70,7 +94,15 @@ def ler_excel(arquivo):
     return df
 
 
+# ============================================================
+# LIMPEZA DE LINHAS VAZIAS
+# ============================================================
+
 def remover_linhas_vazias(df):
+    """
+    Remove linhas completamente vazias.
+    """
+
     if df is None or df.empty:
         return df
 
@@ -87,7 +119,15 @@ def remover_linhas_vazias(df):
     return df.loc[~mascara_vazia].reset_index(drop=True)
 
 
+# ============================================================
+# CONSOLIDAÇÃO DE MÚLTIPLOS ARQUIVOS
+# ============================================================
+
 def consolidar_arquivos(arquivos):
+    """
+    Lê e consolida múltiplos arquivos Excel em um único DataFrame.
+    """
+
     if not arquivos:
         return None
 
@@ -123,15 +163,55 @@ def consolidar_arquivos(arquivos):
     return df_final
 
 
+# ============================================================
+# CONTROLE DE ASSINATURAS
+# ============================================================
+
+def _obter_assinatura_anterior(nome_base):
+    """
+    Retorna a assinatura anteriormente processada para a base.
+    """
+
+    assinaturas = st.session_state.get(
+        "assinaturas_upload",
+        {},
+    )
+
+    return assinaturas.get(nome_base)
+
+
+def _registrar_assinatura(nome_base, assinatura):
+    """
+    Registra a assinatura do upload processado.
+    """
+
+    if "assinaturas_upload" not in st.session_state:
+        st.session_state["assinaturas_upload"] = {}
+
+    st.session_state["assinaturas_upload"][nome_base] = assinatura
+
+
+# ============================================================
+# UPLOAD MÚLTIPLO
+# ============================================================
+
 def processar_upload_multiplo(nome_base, arquivos):
+    """
+    Processa múltiplos arquivos para uma base compartilhada.
+
+    O mesmo conjunto de arquivos não é processado novamente em
+    reruns do Streamlit.
+
+    A base já armazenada permanece disponível enquanto não houver
+    um novo conjunto de arquivos efetivamente enviado.
+    """
+
     if not arquivos:
         return False
 
     assinatura = assinatura_arquivos(arquivos)
 
-    assinatura_anterior = st.session_state.get(
-        f"assinatura_{nome_base}"
-    )
+    assinatura_anterior = _obter_assinatura_anterior(nome_base)
 
     if assinatura == assinatura_anterior:
         return False
@@ -145,27 +225,40 @@ def processar_upload_multiplo(nome_base, arquivos):
         return False
 
     definir_base(
-        nome=nome_base,
-        dataframe=df,
+        nome_base,
+        df,
         arquivos=[
             arquivo.name
             for arquivo in arquivos
         ],
-        assinatura=assinatura,
+    )
+
+    _registrar_assinatura(
+        nome_base,
+        assinatura,
     )
 
     return True
 
 
+# ============================================================
+# UPLOAD ÚNICO
+# ============================================================
+
 def processar_upload_unico(nome_base, arquivo):
+    """
+    Processa um único arquivo para uma base compartilhada.
+
+    O mesmo arquivo não é processado novamente em reruns do
+    Streamlit.
+    """
+
     if arquivo is None:
         return False
 
     assinatura = assinatura_arquivo(arquivo)
 
-    assinatura_anterior = st.session_state.get(
-        f"assinatura_{nome_base}"
-    )
+    assinatura_anterior = _obter_assinatura_anterior(nome_base)
 
     if assinatura == assinatura_anterior:
         return False
@@ -180,11 +273,22 @@ def processar_upload_unico(nome_base, arquivo):
 
     df = remover_linhas_vazias(df)
 
+    if df is None or df.empty:
+        st.warning(
+            f"O arquivo '{arquivo.name}' não contém dados válidos."
+        )
+        return False
+
     definir_base(
-        nome=nome_base,
-        dataframe=df,
+        nome_base,
+        df,
         arquivos=[arquivo.name],
-        assinatura=assinatura,
+    )
+
+    _registrar_assinatura(
+        nome_base,
+        assinatura,
     )
 
     return True
+```
