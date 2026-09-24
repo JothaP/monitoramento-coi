@@ -291,7 +291,7 @@ FERRAMENTAS = [
     {
         "nome": "Filtragem",
         "icone": "🔎",
-        "descricao": "Filtragem e geração de lotes de cancelamento.",
+        "descricao": "Seleção de argumentos.",
     },
     {
         "nome": "Duplicidade",
