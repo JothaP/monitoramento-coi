@@ -256,12 +256,6 @@ def parse_protocolo(valor):
 
 
 def chave_protocolo(info):
-    """
-    Define a antiguidade do protocolo.
-
-    Primeiro considera o ano e, dentro do ano,
-    o número do protocolo.
-    """
     return (
         info["ano"],
         info["numero"],
@@ -293,16 +287,6 @@ def localizar_coluna_descricao(df):
 # ============================================================
 
 def consolidar_servicos(df_servicos, modo):
-    """
-    Consolida os Serviços por matrícula.
-
-    Para cada matrícula válida, mantém somente o Serviço
-    cujo protocolo seja o mais antigo.
-
-    Registros sem matrícula, protocolo ou descrição válida
-    são ignorados.
-    """
-
     resultado = {}
 
     if df_servicos is None or df_servicos.empty:
@@ -409,14 +393,6 @@ def gerar_lote_servicos(
     servicos_por_matricula,
     modo,
 ):
-    """
-    Percorre o backlog de Falta de Água e gera o lote de
-    cancelamento para as O.S. cuja matrícula possua Serviço
-    em aberto.
-
-    Cada O.S. do backlog entra no máximo uma vez.
-    """
-
     if df_backlog is None or df_backlog.empty:
         return (
             pd.DataFrame(),
@@ -607,10 +583,6 @@ def inicializar_estado_servicos():
 # RENDERIZAÇÃO
 # ============================================================
 
-def render_duplicidade_info():
-    pass
-
-
 def render_servicos():
     inicializar_estado_servicos()
     render_sidebar()
@@ -624,7 +596,7 @@ def render_servicos():
     st.divider()
 
     # --------------------------------------------------------
-    # SELEÇÃO API / THE
+    # MODO API / THE
     # --------------------------------------------------------
 
     modo = selecionar_modo_api_the(
@@ -653,6 +625,10 @@ def render_servicos():
     df_servicos = obter_base(
         chave_servicos
     )
+
+    # --------------------------------------------------------
+    # BASES UTILIZADAS
+    # --------------------------------------------------------
 
     st.subheader("📊 Bases utilizadas")
 
@@ -697,40 +673,6 @@ def render_servicos():
         return
 
     # --------------------------------------------------------
-    # REGRAS
-    # --------------------------------------------------------
-
-    with st.expander(
-        "ℹ️ Regras da análise",
-        expanded=False,
-    ):
-        st.markdown(
-            """
-            **Critério de cancelamento**
-
-            A O.S. de Falta de Água será incluída no lote
-            quando sua matrícula existir na base de Serviços
-            em aberto do mesmo modo.
-
-            **Regras**
-
-            - API utiliza matrículas com 9 dígitos.
-            - THE utiliza matrículas com 8 dígitos.
-            - O cruzamento utiliza exclusivamente a matrícula.
-            - Não há filtro de data, horário ou área.
-            - Se houver vários Serviços para a mesma matrícula,
-              será utilizado o protocolo mais antigo.
-            - Se houver várias O.S. de Falta de Água para a mesma
-              matrícula, todas serão incluídas no lote.
-            - Cada O.S. de Falta de Água entra no máximo uma vez.
-            - Serviços sem matrícula, protocolo ou descrição
-              completos são ignorados.
-            - `INÍCIO DO SLA` não participa desta análise.
-            - A coluna `Data` não é utilizada.
-            """
-        )
-
-    # --------------------------------------------------------
     # EXECUÇÃO
     # --------------------------------------------------------
 
@@ -746,11 +688,12 @@ def render_servicos():
             with st.spinner(
                 "Consolidando Serviços e analisando o backlog..."
             ):
-                servicos_por_matricula, info_servicos = (
-                    consolidar_servicos(
-                        df_servicos,
-                        modo,
-                    )
+                (
+                    servicos_por_matricula,
+                    info_servicos,
+                ) = consolidar_servicos(
+                    df_servicos,
+                    modo,
                 )
 
                 (
@@ -884,10 +827,10 @@ def render_servicos():
     # PREVIEW
     # --------------------------------------------------------
 
+    st.subheader("📋 Prévia do lote de cancelamento")
+
     if resultado is None:
         return
-
-    st.subheader("📋 Prévia do lote de cancelamento")
 
     if resultado.empty:
         st.info(
