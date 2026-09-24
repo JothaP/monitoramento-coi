@@ -1,4 +1,3 @@
-import io
 import re
 import unicodedata
 from datetime import datetime
@@ -39,10 +38,6 @@ def aplicar_modo_visual():
     st.markdown(
         """
         <style>
-        /* =====================================================
-           BASE
-           ===================================================== */
-
         .coi-card {
             border-radius: 12px;
             padding: 18px 20px;
@@ -70,10 +65,6 @@ def aplicar_modo_visual():
             font-size: 1.45rem;
             font-weight: 700;
         }
-
-        /* =====================================================
-           MODO CLARO
-           ===================================================== */
 
         @media (prefers-color-scheme: light) {
             .coi-card {
@@ -109,10 +100,6 @@ def aplicar_modo_visual():
             }
         }
 
-        /* =====================================================
-           MODO ESCURO
-           ===================================================== */
-
         @media (prefers-color-scheme: dark) {
             .coi-card {
                 background: #161b22;
@@ -147,25 +134,13 @@ def aplicar_modo_visual():
             }
         }
 
-        /* =====================================================
-           BOTÕES
-           ===================================================== */
-
         div.stButton > button {
             border-radius: 8px;
         }
 
-        /* =====================================================
-           DATAFRAMES
-           ===================================================== */
-
         div[data-testid="stDataFrame"] {
             border-radius: 8px;
         }
-
-        /* =====================================================
-           EXPANDERS
-           ===================================================== */
 
         div[data-testid="stExpander"] {
             border-radius: 8px;
@@ -205,45 +180,88 @@ def normalizar_texto(valor) -> str:
     return texto.strip()
 
 
-def normalizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
-    resultado = df.copy()
-
-    mapa = {}
-
-    for coluna in resultado.columns:
-        normalizada = normalizar_texto(coluna)
-        mapa[coluna] = normalizada
-
-    resultado.rename(columns=mapa, inplace=True)
-
-    return resultado
-
-
 # ============================================================
-# IDENTIFICAÇÃO DE COLUNAS
+# LOCALIZAÇÃO DE COLUNAS
 # ============================================================
 
 def encontrar_coluna(df: pd.DataFrame, *nomes):
-    colunas = {
+    mapa = {
         normalizar_texto(coluna): coluna
         for coluna in df.columns
     }
 
     for nome in nomes:
-        nome_normalizado = normalizar_texto(nome)
+        chave = normalizar_texto(nome)
 
-        if nome_normalizado in colunas:
-            return colunas[nome_normalizado]
+        if chave in mapa:
+            return mapa[chave]
 
     return None
 
 
-def encontrar_coluna_eventos(df: pd.DataFrame, *nomes):
-    return encontrar_coluna(df, *nomes)
+# ============================================================
+# CONVERSÃO DE DATA/HORA DOS EVENTOS
+# ============================================================
 
+def converter_datetime_evento(valor):
+    """
+    Converte os formatos de data/hora encontrados na planilha
+    de Eventos.
 
-def encontrar_coluna_backlog(df: pd.DataFrame, *nomes):
-    return encontrar_coluna(df, *nomes)
+    Formato principal da planilha:
+        24/09/2026 10:30h
+
+    Também aceita:
+        24/09/2026 10:30
+        Timestamp do Pandas
+        datetime
+    """
+
+    if valor is None:
+        return pd.NaT
+
+    try:
+        if pd.isna(valor):
+            return pd.NaT
+    except Exception:
+        pass
+
+    if isinstance(valor, (pd.Timestamp, datetime)):
+        return pd.Timestamp(valor)
+
+    texto = str(valor).strip()
+
+    if not texto:
+        return pd.NaT
+
+    # Remove o "h" do final da hora:
+    #
+    # 24/09/2026 10:30h
+    # ->
+    # 24/09/2026 10:30
+    texto = re.sub(
+        r"(\d{1,2}:\d{2})h\b",
+        r"\1",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    # Tenta primeiro o formato oficial encontrado na planilha.
+    resultado = pd.to_datetime(
+        texto,
+        format="%d/%m/%Y %H:%M",
+        errors="coerce",
+    )
+
+    if not pd.isna(resultado):
+        return resultado
+
+    # Fallback para outros formatos eventualmente presentes.
+    return pd.to_datetime(
+        texto,
+        errors="coerce",
+        dayfirst=True,
+    )
 
 
 # ============================================================
@@ -252,19 +270,11 @@ def encontrar_coluna_backlog(df: pd.DataFrame, *nomes):
 
 def parse_protocolo(valor):
     """
-    Aceita formatos como:
+    Aceita:
 
         1274665/2026-1
         1274665/2026
         1274665 / 2026-1
-
-    Retorna:
-
-        numero, ano
-
-    ou:
-
-        None, None
     """
 
     if valor is None:
@@ -318,7 +328,7 @@ def normalizar_matricula(valor):
 
 
 # ============================================================
-# ÁREAS DE EVENTOS
+# EVENTO — TODO O MUNICÍPIO
 # ============================================================
 
 PADROES_TODO_MUNICIPIO = {
@@ -330,26 +340,12 @@ PADROES_TODO_MUNICIPIO = {
     "TODA AREA",
     "TODA A REGIAO",
     "TODA REGIAO",
-    "TODO O MUNICIPIO",
     "MUNICIPIO TODO",
     "CIDADE TODA",
     "AREA TODA",
     "REGIAO TODA",
     "TODAS AS AREAS",
     "TODAS AREAS",
-    "TODO MUNICIPIO",
-}
-
-
-SINONIMOS_AREAS = {
-    "CENTRO": {
-        "CENTRO",
-    },
-    "SAO JOSE": {
-        "SAO JOSE",
-        "SAO JOSE I",
-        "SAO JOSE II",
-    },
 }
 
 
@@ -362,11 +358,6 @@ def eh_todo_municipio(valor) -> bool:
     if texto in PADROES_TODO_MUNICIPIO:
         return True
 
-    # Casos compostos:
-    # "TODAS AS AREAS DO MUNICIPIO"
-    # "TODO O MUNICIPIO"
-    # "TODA A CIDADE"
-    # etc.
     palavras = set(texto.split())
 
     if "MUNICIPIO" in palavras and "TODO" in palavras:
@@ -384,6 +375,22 @@ def eh_todo_municipio(valor) -> bool:
     return False
 
 
+# ============================================================
+# ÁREAS / BAIRROS
+# ============================================================
+
+SINONIMOS_AREAS = {
+    "CENTRO": {
+        "CENTRO",
+    },
+    "SAO JOSE": {
+        "SAO JOSE",
+        "SAO JOSE I",
+        "SAO JOSE II",
+    },
+}
+
+
 def tokenizar_area(valor):
     texto = normalizar_texto(valor)
 
@@ -399,16 +406,15 @@ def tokenizar_area(valor):
 
 def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     """
-    Compara o bairro da O.S. com as áreas impactadas.
+    Compara a área impactada do evento com o bairro da O.S.
 
-    A comparação é feita por:
-    - texto normalizado;
-    - tokens;
-    - sinônimos definidos;
-    - correspondência de expressões compostas.
-
-    Eventos que representam todo o município têm correspondência
-    automática.
+    Critérios:
+    1. Evento que abrange todo o município.
+    2. Correspondência textual direta.
+    3. Bairro contido na descrição da área.
+    4. Área contida no bairro.
+    5. Interseção de tokens.
+    6. Sinônimos cadastrados.
     """
 
     if eh_todo_municipio(area_evento):
@@ -420,15 +426,12 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not area or not bairro:
         return False
 
-    # Correspondência direta.
-    if bairro == area:
+    if area == bairro:
         return True
 
-    # O bairro aparece como expressão dentro da área.
     if bairro in area:
         return True
 
-    # A área aparece dentro do bairro.
     if area in bairro:
         return True
 
@@ -438,20 +441,25 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not tokens_area or not tokens_bairro:
         return False
 
-    # Correspondência por interseção de tokens.
     if tokens_area.intersection(tokens_bairro):
         return True
 
-    # Sinônimos conhecidos.
     for grupo, sinonimos in SINONIMOS_AREAS.items():
+
         bairro_equiv = (
             grupo in tokens_bairro
-            or any(sinonimo in bairro for sinonimo in sinonimos)
+            or any(
+                sinonimo in bairro
+                for sinonimo in sinonimos
+            )
         )
 
         area_equiv = (
             grupo in tokens_area
-            or any(sinonimo in area for sinonimo in sinonimos)
+            or any(
+                sinonimo in area
+                for sinonimo in sinonimos
+            )
         )
 
         if bairro_equiv and area_equiv:
@@ -461,17 +469,20 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
 
 
 # ============================================================
-# PREPARAÇÃO DA BASE DE EVENTOS
+# PREPARAÇÃO DOS EVENTOS
 # ============================================================
 
 def preparar_eventos(df_eventos: pd.DataFrame):
     """
-    Prepara a planilha de eventos para o cruzamento.
+    Prepara a planilha de Eventos.
 
-    Retorna:
-        eventos_validos
-        avisos
-        estatisticas
+    Regras:
+    - normalização de cidade e área;
+    - conversão de Início;
+    - conversão de Prev. Término;
+    - fim efetivo = Prev. Término + 3 horas;
+    - identificação de evento municipal;
+    - descarte de eventos inválidos.
     """
 
     avisos = []
@@ -489,12 +500,12 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
     df = df_eventos.copy()
 
-    coluna_cidade = encontrar_coluna_eventos(
+    coluna_cidade = encontrar_coluna(
         df,
         "Cidade",
     )
 
-    coluna_area = encontrar_coluna_eventos(
+    coluna_area = encontrar_coluna(
         df,
         "Áreas Impactadas",
         "Areas Impactadas",
@@ -502,13 +513,13 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         "Area Impactada",
     )
 
-    coluna_inicio = encontrar_coluna_eventos(
+    coluna_inicio = encontrar_coluna(
         df,
         "Início",
         "Inicio",
     )
 
-    coluna_fim = encontrar_coluna_eventos(
+    coluna_fim = encontrar_coluna(
         df,
         "Prev. Término",
         "Prev Término",
@@ -517,7 +528,7 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         "Previsao de Termino",
     )
 
-    coluna_descricao = encontrar_coluna_eventos(
+    coluna_descricao = encontrar_coluna(
         df,
         "Descrição do Serviço",
         "Descricao do Servico",
@@ -525,30 +536,29 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         "Descricao",
     )
 
-    colunas_faltantes = []
+    faltantes = []
 
     if coluna_cidade is None:
-        colunas_faltantes.append("Cidade")
+        faltantes.append("Cidade")
 
     if coluna_area is None:
-        colunas_faltantes.append("Áreas Impactadas")
+        faltantes.append("Áreas Impactadas")
 
     if coluna_inicio is None:
-        colunas_faltantes.append("Início")
+        faltantes.append("Início")
 
     if coluna_fim is None:
-        colunas_faltantes.append("Prev. Término")
+        faltantes.append("Prev. Término")
 
-    if colunas_faltantes:
-        mensagem = (
-            "Colunas obrigatórias ausentes na base de Eventos: "
-            + ", ".join(colunas_faltantes)
-            + "."
-        )
-
+    if faltantes:
         return (
             pd.DataFrame(),
-            [mensagem],
+            [
+                "Colunas obrigatórias ausentes na base de "
+                "Eventos: "
+                + ", ".join(faltantes)
+                + "."
+            ],
             {
                 "total": len(df),
                 "validos": 0,
@@ -558,25 +568,50 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
     eventos = pd.DataFrame()
 
-    eventos["cidade"] = df[coluna_cidade].apply(normalizar_texto)
-    eventos["areas"] = df[coluna_area].apply(normalizar_texto)
+    # --------------------------------------------------------
+    # Cidade
+    # --------------------------------------------------------
 
-    eventos["inicio"] = pd.to_datetime(
-        df[coluna_inicio],
-        errors="coerce",
-        dayfirst=True,
+    eventos["cidade"] = df[coluna_cidade].apply(
+        normalizar_texto
     )
 
-    eventos["fim_previsto"] = pd.to_datetime(
-        df[coluna_fim],
-        errors="coerce",
-        dayfirst=True,
+    # --------------------------------------------------------
+    # Área
+    # --------------------------------------------------------
+
+    eventos["areas"] = df[coluna_area].apply(
+        normalizar_texto
     )
+
+    # --------------------------------------------------------
+    # Início
+    # --------------------------------------------------------
+
+    eventos["inicio"] = df[coluna_inicio].apply(
+        converter_datetime_evento
+    )
+
+    # --------------------------------------------------------
+    # Prev. Término
+    # --------------------------------------------------------
+
+    eventos["fim_previsto"] = df[coluna_fim].apply(
+        converter_datetime_evento
+    )
+
+    # --------------------------------------------------------
+    # Fim efetivo
+    # --------------------------------------------------------
 
     eventos["fim_efetivo"] = (
         eventos["fim_previsto"]
         + pd.Timedelta(hours=3)
     )
+
+    # --------------------------------------------------------
+    # Descrição
+    # --------------------------------------------------------
 
     if coluna_descricao is not None:
         eventos["descricao"] = (
@@ -588,12 +623,17 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     else:
         eventos["descricao"] = ""
 
+    # --------------------------------------------------------
+    # Evento municipal
+    # --------------------------------------------------------
+
     eventos["todo_municipio"] = eventos["areas"].apply(
         eh_todo_municipio
     )
 
-    eventos["inicio_valido"] = eventos["inicio"].notna()
-    eventos["fim_valido"] = eventos["fim_previsto"].notna()
+    # --------------------------------------------------------
+    # Validações
+    # --------------------------------------------------------
 
     eventos["fim_anterior_inicio"] = (
         eventos["inicio"].notna()
@@ -604,7 +644,6 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         )
     )
 
-    # Avisos dos eventos com problemas.
     quantidade_inicio_invalido = int(
         eventos["inicio"].isna().sum()
     )
@@ -615,6 +654,10 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
     quantidade_fim_anterior = int(
         eventos["fim_anterior_inicio"].sum()
+    )
+
+    cidades_vazias = int(
+        (eventos["cidade"] == "").sum()
     )
 
     if quantidade_inicio_invalido:
@@ -635,6 +678,16 @@ def preparar_eventos(df_eventos: pd.DataFrame):
             "anterior ao início serão ignorados."
         )
 
+    if cidades_vazias:
+        avisos.append(
+            f"{cidades_vazias} evento(s) sem cidade serão "
+            "ignorados."
+        )
+
+    # --------------------------------------------------------
+    # Somente eventos válidos
+    # --------------------------------------------------------
+
     eventos_validos = eventos[
         eventos["inicio"].notna()
         & eventos["fim_previsto"].notna()
@@ -645,35 +698,39 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     estatisticas = {
         "total": len(eventos),
         "validos": len(eventos_validos),
-        "invalidos": len(eventos) - len(eventos_validos),
+        "invalidos": (
+            len(eventos)
+            - len(eventos_validos)
+        ),
     }
 
-    return eventos_validos, avisos, estatisticas
+    return (
+        eventos_validos,
+        avisos,
+        estatisticas,
+    )
 
 
 # ============================================================
-# DESCRIÇÃO DO EVENTO
+# OBSERVAÇÃO
 # ============================================================
-
-def montar_descricao_evento(descricao):
-    texto = normalizar_texto(descricao)
-
-    if not texto:
-        return ""
-
-    return texto
-
 
 def montar_observacao(descricao):
-    descricao_normalizada = montar_descricao_evento(descricao)
+    descricao = "" if descricao is None else str(descricao).strip()
+
+    descricao = re.sub(
+        r"\s+",
+        " ",
+        descricao,
+    )
 
     prefixo = (
         "Abertura indevida - OS aberta durante evento "
         "de falta de água"
     )
 
-    if descricao_normalizada:
-        texto = f"{prefixo} ({descricao_normalizada})"
+    if descricao:
+        texto = f"{prefixo} ({descricao})"
     else:
         texto = prefixo
 
@@ -681,7 +738,7 @@ def montar_observacao(descricao):
 
 
 # ============================================================
-# CRUZAMENTO
+# CRUZAMENTO EVENTOS x BACKLOG
 # ============================================================
 
 def cruzar_eventos_com_backlog(
@@ -690,13 +747,12 @@ def cruzar_eventos_com_backlog(
     modo: str,
 ):
     """
-    Cruza cada O.S. do backlog com os eventos.
+    Para cada O.S. do backlog:
 
-    Critérios:
-    - mesma cidade;
-    - Início do SLA dentro do intervalo do evento;
-    - área correspondente ou evento municipal;
-    - cada O.S. entra uma única vez.
+    1. mesma cidade;
+    2. início do evento <= início do SLA <= fim efetivo;
+    3. área correspondente;
+    4. O.S. incluída apenas uma vez.
     """
 
     avisos = []
@@ -719,19 +775,19 @@ def cruzar_eventos_com_backlog(
 
     df = df_backlog.copy()
 
-    coluna_cidade = encontrar_coluna_backlog(
+    coluna_cidade = encontrar_coluna(
         df,
         "CIDADE",
         "Cidade",
     )
 
-    coluna_bairro = encontrar_coluna_backlog(
+    coluna_bairro = encontrar_coluna(
         df,
         "BAIRRO",
         "Bairro",
     )
 
-    coluna_inicio_sla = encontrar_coluna_backlog(
+    coluna_inicio_sla = encontrar_coluna(
         df,
         "INÍCIO DO SLA",
         "INICIO DO SLA",
@@ -739,7 +795,7 @@ def cruzar_eventos_com_backlog(
         "Inicio do SLA",
     )
 
-    coluna_protocolo = encontrar_coluna_backlog(
+    coluna_protocolo = encontrar_coluna(
         df,
         "COD. PROTOCOLO ORIGEM",
         "COD PROTOCOLO ORIGEM",
@@ -747,7 +803,7 @@ def cruzar_eventos_com_backlog(
         "Codigo do Protocolo Origem",
     )
 
-    coluna_matricula = encontrar_coluna_backlog(
+    coluna_matricula = encontrar_coluna(
         df,
         "MATRICULA",
         "MATRÍCULA",
@@ -799,10 +855,10 @@ def cruzar_eventos_com_backlog(
 
     # REGRA GLOBAL:
     # somente INÍCIO DO SLA é utilizado.
-    df["_inicio_sla_evento"] = pd.to_datetime(
-        df[coluna_inicio_sla],
-        errors="coerce",
-        dayfirst=True,
+    df["_inicio_sla_evento"] = df[
+        coluna_inicio_sla
+    ].apply(
+        converter_datetime_evento
     )
 
     protocolos_invalidos = 0
@@ -810,10 +866,11 @@ def cruzar_eventos_com_backlog(
     inicio_sla_invalido = 0
 
     resultados = []
-    matriculas_processadas = set()
+
+    os_processadas = set()
 
     # --------------------------------------------------------
-    # Cruzamento linha a linha
+    # Cruzamento
     # --------------------------------------------------------
 
     for _, linha in df.iterrows():
@@ -839,14 +896,13 @@ def cruzar_eventos_com_backlog(
         if not matricula:
             continue
 
-        # Garante que a O.S. entre uma única vez.
         chave_os = (
             matricula,
             numero,
             ano,
         )
 
-        if chave_os in matriculas_processadas:
+        if chave_os in os_processadas:
             continue
 
         cidade = linha["_cidade_evento"]
@@ -862,22 +918,31 @@ def cruzar_eventos_com_backlog(
         if eventos_cidade.empty:
             continue
 
-        # ----------------------------------------------------
-        # Verificação temporal e de área
-        # ----------------------------------------------------
-
         evento_correspondente = None
+
+        # ----------------------------------------------------
+        # Tempo + Área
+        # ----------------------------------------------------
 
         for _, evento in eventos_cidade.iterrows():
 
             inicio_evento = evento["inicio"]
             fim_evento = evento["fim_efetivo"]
 
-            if pd.isna(inicio_evento) or pd.isna(fim_evento):
+            if pd.isna(inicio_evento):
                 continue
 
-            # Regra:
-            # início do evento <= início do SLA <= fim efetivo
+            if pd.isna(fim_evento):
+                continue
+
+            # REGRA PRINCIPAL:
+            #
+            # início do evento
+            # <=
+            # início do SLA da O.S.
+            # <=
+            # fim efetivo do evento
+            #
             if not (
                 inicio_evento
                 <= inicio_sla
@@ -885,10 +950,12 @@ def cruzar_eventos_com_backlog(
             ):
                 continue
 
+            # Evento abrangendo todo o município.
             if evento["todo_municipio"]:
                 evento_correspondente = evento
                 break
 
+            # Evento com áreas específicas.
             if areas_evento_correspondem(
                 evento["areas"],
                 bairro,
@@ -913,16 +980,14 @@ def cruzar_eventos_com_backlog(
             continue
 
         # ----------------------------------------------------
-        # Resultado
+        # Observação
         # ----------------------------------------------------
 
-        descricao = evento_correspondente.get(
-            "descricao",
-            "",
-        )
-
         observacao = montar_observacao(
-            descricao
+            evento_correspondente.get(
+                "descricao",
+                "",
+            )
         )
 
         resultados.append(
@@ -936,7 +1001,7 @@ def cruzar_eventos_com_backlog(
             }
         )
 
-        matriculas_processadas.add(chave_os)
+        os_processadas.add(chave_os)
 
     # --------------------------------------------------------
     # Avisos
@@ -969,15 +1034,16 @@ def cruzar_eventos_com_backlog(
         resultado,
         len(df),
         avisos,
-        len(resultados),
+        len(resultado),
     )
 
 
 # ============================================================
-# RENDERIZAÇÃO
+# RENDERIZAÇÃO DA FERRAMENTA
 # ============================================================
 
 def render_eventos():
+
     aplicar_modo_visual()
 
     # --------------------------------------------------------
@@ -1010,14 +1076,19 @@ def render_eventos():
     st.divider()
 
     # --------------------------------------------------------
-    # SELEÇÃO API / THE
+    # MODO API / THE
     # --------------------------------------------------------
 
     modo, df_backlog = selecionar_modo_api_the(
         key="eventos_modo"
     )
 
+    # --------------------------------------------------------
+    # VERIFICAÇÃO DO BACKLOG
+    # --------------------------------------------------------
+
     if df_backlog is None or df_backlog.empty:
+
         st.warning(
             f"A base de backlog do modo {modo} ainda não foi "
             "carregada no Hub."
@@ -1042,10 +1113,11 @@ def render_eventos():
         st.stop()
 
     # --------------------------------------------------------
-    # BASE DE EVENTOS
+    # VERIFICAÇÃO DA BASE DE EVENTOS
     # --------------------------------------------------------
 
     if not base_carregada("eventos"):
+
         st.warning(
             "A base de Eventos ainda não foi carregada no Hub "
             "do Gerador de Lotes."
@@ -1119,7 +1191,7 @@ def render_eventos():
     st.divider()
 
     # --------------------------------------------------------
-    # REGRAS DA ANÁLISE
+    # REGRAS
     # --------------------------------------------------------
 
     with st.expander(
@@ -1146,7 +1218,7 @@ def render_eventos():
         )
 
     # --------------------------------------------------------
-    # EXECUÇÃO
+    # EXECUTAR
     # --------------------------------------------------------
 
     st.markdown("### 🔍 Análise")
@@ -1157,13 +1229,18 @@ def render_eventos():
         use_container_width=True,
         key="btn_analisar_eventos",
     ):
-        with st.spinner("Preparando eventos e cruzando com o backlog..."):
+
+        with st.spinner(
+            "Preparando eventos e cruzando com o backlog..."
+        ):
 
             (
                 eventos_preparados,
                 avisos_eventos,
                 estatisticas_eventos,
-            ) = preparar_eventos(df_eventos)
+            ) = preparar_eventos(
+                df_eventos
+            )
 
             (
                 resultado,
@@ -1177,13 +1254,21 @@ def render_eventos():
             )
 
         st.session_state["eventos_analisado"] = True
+
         st.session_state["eventos_resultado"] = resultado
+
         st.session_state["eventos_avisos"] = (
-            avisos_eventos + avisos_cruzamento
+            avisos_eventos
+            + avisos_cruzamento
         )
+
         st.session_state["eventos_estatisticas"] = {
-            "eventos_total": estatisticas_eventos["total"],
-            "eventos_validos": estatisticas_eventos["validos"],
+            "eventos_total": estatisticas_eventos[
+                "total"
+            ],
+            "eventos_validos": estatisticas_eventos[
+                "validos"
+            ],
             "registros_analisados": total_analisado,
             "os_cancelamento": total_resultado,
         }
@@ -1265,7 +1350,6 @@ def render_eventos():
             )
 
         with col4:
-            percentual = 0
 
             analisadas = estatisticas.get(
                 "registros_analisados",
@@ -1277,9 +1361,12 @@ def render_eventos():
                 0,
             )
 
+            percentual = 0
+
             if analisadas:
                 percentual = (
-                    cancelamento / analisadas
+                    cancelamento
+                    / analisadas
                 ) * 100
 
             st.markdown(
@@ -1301,6 +1388,7 @@ def render_eventos():
         # ----------------------------------------------------
 
         if avisos:
+
             st.markdown("### ⚠️ Avisos")
 
             for aviso in avisos:
@@ -1313,11 +1401,15 @@ def render_eventos():
         st.markdown("### 👁️ Prévia do lote")
 
         if resultado is None or resultado.empty:
+
             st.info(
-                "Nenhuma O.S. foi identificada para cancelamento "
-                "de acordo com as regras dos eventos."
+                "Nenhuma O.S. foi identificada para "
+                "cancelamento de acordo com as regras "
+                "dos eventos."
             )
+
         else:
+
             st.dataframe(
                 resultado,
                 use_container_width=True,
@@ -1325,7 +1417,7 @@ def render_eventos():
             )
 
             # ------------------------------------------------
-            # EXPORTAÇÃO
+            # AÇÕES
             # ------------------------------------------------
 
             st.divider()
@@ -1346,11 +1438,14 @@ def render_eventos():
             col_acao_1, col_acao_2 = st.columns(2)
 
             with col_acao_1:
+
                 st.download_button(
                     "📥 Baixar lote",
-                    data=arquivo.getvalue()
-                    if arquivo is not None
-                    else b"",
+                    data=(
+                        arquivo.getvalue()
+                        if arquivo is not None
+                        else b""
+                    ),
                     file_name=nome_arquivo,
                     mime=(
                         "application/vnd.openxmlformats-"
@@ -1361,11 +1456,13 @@ def render_eventos():
                 )
 
             with col_acao_2:
+
                 if st.button(
                     "🗑️ Limpar análise",
                     use_container_width=True,
                     key="btn_limpar_eventos",
                 ):
+
                     st.session_state[
                         "eventos_analisado"
                     ] = False
@@ -1385,7 +1482,7 @@ def render_eventos():
                     st.rerun()
 
     # --------------------------------------------------------
-    # VOLTAR
+    # VOLTAR AO HUB
     # --------------------------------------------------------
 
     st.divider()
@@ -1395,10 +1492,25 @@ def render_eventos():
         use_container_width=True,
         key="btn_voltar_hub_eventos",
     ):
+
         st.session_state.ferramenta_atual = None
+
         limpar_resultado()
-        st.session_state["eventos_analisado"] = False
-        st.session_state["eventos_resultado"] = None
-        st.session_state["eventos_avisos"] = []
-        st.session_state["eventos_estatisticas"] = {}
+
+        st.session_state[
+            "eventos_analisado"
+        ] = False
+
+        st.session_state[
+            "eventos_resultado"
+        ] = None
+
+        st.session_state[
+            "eventos_avisos"
+        ] = []
+
+        st.session_state[
+            "eventos_estatisticas"
+        ] = {}
+
         st.rerun()
