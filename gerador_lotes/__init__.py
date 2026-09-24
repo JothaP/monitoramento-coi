@@ -3,13 +3,17 @@ from .estado import (
     obter_base,
     base_carregada,
     definir_base,
-    limpar_base,
     limpar_resultado,
     limpar_bases,
     voltar_ao_hub,
 )
 
 from .carregamento import (
+    assinatura_arquivo,
+    assinatura_arquivos,
+    ler_excel,
+    remover_linhas_vazias,
+    consolidar_arquivos,
     processar_upload_multiplo,
     processar_upload_unico,
 )
