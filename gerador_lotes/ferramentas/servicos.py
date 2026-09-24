@@ -26,7 +26,10 @@ COL_SAIDA_OBSERVACOES = "Observações"
 
 
 def aplicar_modo_visual():
-    modo_escuro = st.session_state.get("servicos_modo_escuro", False)
+    modo_escuro = st.session_state.get(
+        "servicos_modo_escuro",
+        False,
+    )
 
     if modo_escuro:
         st.markdown(
@@ -221,6 +224,19 @@ def localizar_coluna_descricao(df):
 
 
 def parse_protocolo(valor):
+    """
+    Aceita protocolos nos formatos:
+
+        1318439/2026
+        1318439/2026-1
+        1318439/2026-2
+        1318439/2026-10
+
+    O número e o ano são extraídos para o lote,
+    enquanto o texto original completo é preservado
+    para a observação.
+    """
+
     if pd.isna(valor):
         return None
 
@@ -230,7 +246,7 @@ def parse_protocolo(valor):
         return None
 
     correspondencia = re.fullmatch(
-        r"(\d+)\s*/\s*(\d{4})",
+        r"(\d+)\s*/\s*(\d{4})(?:\s*-\s*\d+)?",
         texto,
     )
 
@@ -323,7 +339,7 @@ def consolidar_servicos(df_servicos, modo):
     if not coluna_protocolo:
         avisos.append(
             "A base de Serviços não possui "
-            "a coluna COD. PROTOCOLO ORIGEM."
+            "a coluna Cód. Protocolo Origem."
         )
 
         return (
@@ -402,7 +418,9 @@ def consolidar_servicos(df_servicos, modo):
         }
 
         servico_existente = (
-            servicos_por_matricula.get(matricula)
+            servicos_por_matricula.get(
+                matricula
+            )
         )
 
         if servico_existente is None:
@@ -492,7 +510,7 @@ def gerar_lote_servicos(
     if not coluna_protocolo:
         avisos.append(
             "A base do backlog não possui "
-            "a coluna COD. PROTOCOLO ORIGEM."
+            "a coluna Cód. Protocolo Origem."
         )
 
         return (
