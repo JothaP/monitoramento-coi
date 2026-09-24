@@ -386,67 +386,84 @@ def tokenizar_area(valor):
 
 def areas_evento_correspondem(area_evento, bairro_os) -> bool:
 
-    if eh_todo_municipio(area_evento):
-        return True
+    if not area_evento or not bairro_os:
+        return False
 
-    area = normalizar_texto(area_evento)
     bairro = normalizar_texto(bairro_os)
 
-    if not area or not bairro:
+    if not bairro:
         return False
 
-    # Correspondência exata.
-    if area == bairro:
+    texto_area_original = str(area_evento).strip()
+
+    if not texto_area_original:
+        return False
+
+    # --------------------------------------------------------
+    # MUNICÍPIO INTEIRO
+    # --------------------------------------------------------
+    if eh_todo_municipio(texto_area_original):
         return True
 
-    # ========================================================
-    # NÃO considerar correspondência por:
-    # - um texto estar contido no outro;
-    # - apenas um token em comum.
+    # --------------------------------------------------------
+    # SEPARAÇÃO DE MÚLTIPLAS ÁREAS
     #
-    # Isso evita falsos positivos entre bairros diferentes.
-    # Exemplo:
-    # Vila Irmã Dulce != Vila Cristalina
-    # ========================================================
+    # A célula de Áreas Impactadas pode conter vários bairros.
+    # Cada área deve ser comparada individualmente.
+    # --------------------------------------------------------
 
-    tokens_area = tokenizar_area(area)
-    tokens_bairro = tokenizar_area(bairro)
+    partes = re.split(
+        r"[;,|\n]+|\s+E\s+",
+        texto_area_original,
+        flags=re.IGNORECASE,
+    )
 
-    if not tokens_area or not tokens_bairro:
+    areas = []
+
+    for parte in partes:
+        area = normalizar_texto(parte)
+
+        if area:
+            areas.append(area)
+
+    if not areas:
         return False
 
-    # ========================================================
-    # Sinônimos cadastrados devem representar o bairro/área
-    # inteira, e não apenas uma palavra isolada.
-    # ========================================================
+    # --------------------------------------------------------
+    # COMPARAÇÃO EXATA
+    # --------------------------------------------------------
+
+    for area in areas:
+
+        if area == bairro:
+            return True
+
+    # --------------------------------------------------------
+    # SINÔNIMOS EXPLÍCITOS
+    #
+    # Só permitem equivalência quando os dois nomes pertencem
+    # ao mesmo grupo cadastrado.
+    # --------------------------------------------------------
 
     for grupo, sinonimos in SINONIMOS_AREAS.items():
 
         grupo_normalizado = normalizar_texto(grupo)
 
         equivalentes = {
-            normalizar_texto(sinonimo)
-            for sinonimo in sinonimos
-            if normalizar_texto(sinonimo)
+            grupo_normalizado,
+            *{
+                normalizar_texto(sinonimo)
+                for sinonimo in sinonimos
+                if normalizar_texto(sinonimo)
+            },
         }
 
-        equivalentes.add(grupo_normalizado)
-
-        area_equivalente = (
+        area_equivalente = any(
             area in equivalentes
-            or any(
-                area == sinonimo
-                for sinonimo in equivalentes
-            )
+            for area in areas
         )
 
-        bairro_equivalente = (
-            bairro in equivalentes
-            or any(
-                bairro == sinonimo
-                for sinonimo in equivalentes
-            )
-        )
+        bairro_equivalente = bairro in equivalentes
 
         if area_equivalente and bairro_equivalente:
             return True
