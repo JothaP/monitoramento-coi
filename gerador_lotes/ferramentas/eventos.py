@@ -336,21 +336,6 @@ def eh_todo_municipio(valor) -> bool:
         return False
 
     return texto in PADROES_TODO_MUNICIPIO
-        return True
-
-    palavras = set(texto.split())
-
-    if "MUNICIPIO" in palavras and "TODO" in palavras:
-        return True
-
-    if "CIDADE" in palavras and "TODA" in palavras:
-        return True
-
-    if "AREA" in palavras and "TODA" in palavras:
-        return True
-
-    if "AREAS" in palavras and "TODAS" in palavras:
-        return True
 
     return False
 
