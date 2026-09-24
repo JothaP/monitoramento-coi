@@ -1,4 +1,3 @@
-```python
 import hashlib
 import io
 
@@ -291,4 +290,3 @@ def processar_upload_unico(nome_base, arquivo):
     )
 
     return True
-```
