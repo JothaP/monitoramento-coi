@@ -593,6 +593,7 @@ perfil_atual = st.session_state.get("perfil", "").lower()
 FERRAMENTAS_LIBERADAS_USUARIO = {
     "Filtragem",
     "Duplicidade",
+    "Serviços",
 }
 
 for indice, ferramenta in enumerate(FERRAMENTAS):
