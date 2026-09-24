@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from ..exportacao import dataframe_para_excel
-from ..estado import base_carregada, obter_base
+from ..estado import obter_base
 from ..zonas import obter_zona
 from .componentes import selecionar_modo_api_the
 
@@ -25,6 +25,10 @@ COL_SAIDA_TIPO = "Tipo Encerramento"
 COL_SAIDA_OBSERVACOES = "Observações"
 
 
+# ============================================================
+# VISUAL
+# ============================================================
+
 def aplicar_modo_visual():
     modo_escuro = st.session_state.get(
         "servicos_modo_escuro",
@@ -35,42 +39,332 @@ def aplicar_modo_visual():
         st.markdown(
             """
             <style>
+                /* ==================================================
+                   BASE
+                   ================================================== */
+
                 .stApp {
                     background-color: #0e1117;
-                    color: #fafafa;
+                    color: #f0f2f6;
                 }
+
+                .main .block-container {
+                    padding-top: 2rem;
+                    padding-bottom: 3rem;
+                }
+
+                /* ==================================================
+                   SIDEBAR
+                   ================================================== */
 
                 [data-testid="stSidebar"] {
                     background-color: #161b22;
+                    border-right: 1px solid #30363d;
                 }
 
                 [data-testid="stSidebar"] * {
-                    color: #fafafa;
+                    color: #f0f2f6;
                 }
 
-                .stMarkdown,
-                .stText,
-                label,
-                p,
-                span,
-                div {
+                [data-testid="stSidebar"] .stButton > button {
+                    background-color: #21262d;
+                    color: #f0f2f6;
+                    border: 1px solid #30363d;
+                }
+
+                [data-testid="stSidebar"] .stButton > button:hover {
+                    background-color: #30363d;
+                    border-color: #58a6ff;
+                    color: #ffffff;
+                }
+
+                /* ==================================================
+                   TEXTOS
+                   ================================================== */
+
+                h1, h2, h3, h4, h5, h6 {
+                    color: #f0f2f6 !important;
+                }
+
+                p, label, span, div {
                     color: inherit;
+                }
+
+                [data-testid="stCaptionContainer"] {
+                    color: #8b949e !important;
+                }
+
+                /* ==================================================
+                   DIVISORES
+                   ================================================== */
+
+                hr {
+                    border-color: #30363d !important;
+                }
+
+                /* ==================================================
+                   RADIO / TOGGLE
+                   ================================================== */
+
+                [data-testid="stRadio"] label {
+                    color: #f0f2f6 !important;
+                }
+
+                /* ==================================================
+                   CARDS
+                   ================================================== */
+
+                .coi-card {
+                    background-color: #161b22;
+                    border: 1px solid #30363d;
+                    border-radius: 10px;
+                    padding: 1rem 1.1rem;
+                    margin-bottom: 0.8rem;
+                }
+
+                .coi-card-title {
+                    font-size: 0.95rem;
+                    font-weight: 700;
+                    color: #f0f2f6;
+                    margin-bottom: 0.35rem;
+                }
+
+                .coi-card-text {
+                    font-size: 0.86rem;
+                    color: #8b949e;
+                }
+
+                /* ==================================================
+                   MÉTRICAS
+                   ================================================== */
+
+                [data-testid="stMetric"] {
+                    background-color: #161b22;
+                    border: 1px solid #30363d;
+                    border-radius: 10px;
+                    padding: 0.85rem 1rem;
+                }
+
+                [data-testid="stMetricLabel"] {
+                    color: #8b949e !important;
+                }
+
+                [data-testid="stMetricValue"] {
+                    color: #f0f2f6 !important;
+                }
+
+                /* ==================================================
+                   BOTÕES
+                   ================================================== */
+
+                .stButton > button {
+                    border-radius: 8px;
+                    min-height: 42px;
+                    font-weight: 600;
+                }
+
+                .stDownloadButton > button {
+                    border-radius: 8px;
+                    min-height: 42px;
+                    font-weight: 600;
+                }
+
+                /* ==================================================
+                   TABELA
+                   ================================================== */
+
+                [data-testid="stDataFrame"] {
+                    border: 1px solid #30363d;
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+
+                /* ==================================================
+                   ALERTAS
+                   ================================================== */
+
+                [data-testid="stAlert"] {
+                    border-radius: 8px;
+                }
+
+                /* ==================================================
+                   EXPANDER
+                   ================================================== */
+
+                [data-testid="stExpander"] {
+                    border: 1px solid #30363d;
+                    border-radius: 8px;
+                    overflow: hidden;
                 }
             </style>
             """,
             unsafe_allow_html=True,
         )
+
     else:
         st.markdown(
             """
             <style>
+                /* ==================================================
+                   BASE
+                   ================================================== */
+
                 .stApp {
-                    background-color: #ffffff;
-                    color: #111111;
+                    background-color: #f5f7fa;
+                    color: #1f2937;
                 }
 
+                .main .block-container {
+                    padding-top: 2rem;
+                    padding-bottom: 3rem;
+                }
+
+                /* ==================================================
+                   SIDEBAR
+                   ================================================== */
+
                 [data-testid="stSidebar"] {
-                    background-color: #f7f7f7;
+                    background-color: #ffffff;
+                    border-right: 1px solid #d9dee7;
+                }
+
+                [data-testid="stSidebar"] * {
+                    color: #1f2937;
+                }
+
+                [data-testid="stSidebar"] .stButton > button {
+                    background-color: #ffffff;
+                    color: #1f2937;
+                    border: 1px solid #d9dee7;
+                }
+
+                [data-testid="stSidebar"] .stButton > button:hover {
+                    background-color: #f0f4f8;
+                    border-color: #2563eb;
+                    color: #1d4ed8;
+                }
+
+                /* ==================================================
+                   TEXTOS
+                   ================================================== */
+
+                h1, h2, h3, h4, h5, h6 {
+                    color: #111827 !important;
+                }
+
+                p, label {
+                    color: #374151;
+                }
+
+                [data-testid="stCaptionContainer"] {
+                    color: #6b7280 !important;
+                }
+
+                /* ==================================================
+                   DIVISORES
+                   ================================================== */
+
+                hr {
+                    border-color: #d9dee7 !important;
+                }
+
+                /* ==================================================
+                   RADIO / TOGGLE
+                   ================================================== */
+
+                [data-testid="stRadio"] label {
+                    color: #374151 !important;
+                }
+
+                /* ==================================================
+                   CARDS
+                   ================================================== */
+
+                .coi-card {
+                    background-color: #ffffff;
+                    border: 1px solid #d9dee7;
+                    border-radius: 10px;
+                    padding: 1rem 1.1rem;
+                    margin-bottom: 0.8rem;
+                    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                }
+
+                .coi-card-title {
+                    font-size: 0.95rem;
+                    font-weight: 700;
+                    color: #111827;
+                    margin-bottom: 0.35rem;
+                }
+
+                .coi-card-text {
+                    font-size: 0.86rem;
+                    color: #6b7280;
+                }
+
+                /* ==================================================
+                   MÉTRICAS
+                   ================================================== */
+
+                [data-testid="stMetric"] {
+                    background-color: #ffffff;
+                    border: 1px solid #d9dee7;
+                    border-radius: 10px;
+                    padding: 0.85rem 1rem;
+                    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                }
+
+                [data-testid="stMetricLabel"] {
+                    color: #6b7280 !important;
+                }
+
+                [data-testid="stMetricValue"] {
+                    color: #111827 !important;
+                }
+
+                /* ==================================================
+                   BOTÕES
+                   ================================================== */
+
+                .stButton > button {
+                    border-radius: 8px;
+                    min-height: 42px;
+                    font-weight: 600;
+                }
+
+                .stDownloadButton > button {
+                    border-radius: 8px;
+                    min-height: 42px;
+                    font-weight: 600;
+                }
+
+                /* ==================================================
+                   TABELA
+                   ================================================== */
+
+                [data-testid="stDataFrame"] {
+                    border: 1px solid #d9dee7;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    background-color: #ffffff;
+                }
+
+                /* ==================================================
+                   ALERTAS
+                   ================================================== */
+
+                [data-testid="stAlert"] {
+                    border-radius: 8px;
+                }
+
+                /* ==================================================
+                   EXPANDER
+                   ================================================== */
+
+                [data-testid="stExpander"] {
+                    border: 1px solid #d9dee7;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    background-color: #ffffff;
                 }
             </style>
             """,
@@ -82,6 +376,7 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("## 🛠️ Serviços")
         st.caption("Navegação da ferramenta")
+
         st.divider()
 
         modo_escuro = st.toggle(
@@ -122,6 +417,10 @@ def render_sidebar():
 
     aplicar_modo_visual()
 
+
+# ============================================================
+# NORMALIZAÇÕES
+# ============================================================
 
 def normalizar_texto(valor):
     if pd.isna(valor):
@@ -174,6 +473,10 @@ def matricula_valida(matricula, modo):
     )
 
 
+# ============================================================
+# LOCALIZAÇÃO DE COLUNAS
+# ============================================================
+
 def localizar_coluna(df, nome_desejado):
     if nome_desejado in df.columns:
         return nome_desejado
@@ -223,6 +526,10 @@ def localizar_coluna_descricao(df):
     return None
 
 
+# ============================================================
+# PROTOCOLO
+# ============================================================
+
 def parse_protocolo(valor):
     """
     Aceita protocolos nos formatos:
@@ -261,6 +568,7 @@ def parse_protocolo(valor):
         ano = int(
             correspondencia.group(2)
         )
+
     except (
         TypeError,
         ValueError,
@@ -286,6 +594,10 @@ def chave_protocolo(info):
         info["numero"],
     )
 
+
+# ============================================================
+# CONSOLIDAÇÃO DOS SERVIÇOS
+# ============================================================
 
 def consolidar_servicos(df_servicos, modo):
     avisos = []
@@ -452,6 +764,10 @@ def consolidar_servicos(df_servicos, modo):
         avisos,
     )
 
+
+# ============================================================
+# GERAÇÃO DO LOTE
+# ============================================================
 
 def gerar_lote_servicos(
     df_backlog,
@@ -656,6 +972,10 @@ def gerar_lote_servicos(
     )
 
 
+# ============================================================
+# ESTADO
+# ============================================================
+
 def inicializar_estado_servicos():
     estados = {
         "servicos_resultado_api": None,
@@ -702,6 +1022,10 @@ def limpar_resultado_servicos(modo=None):
         ] = None
 
 
+# ============================================================
+# INTERFACE PRINCIPAL
+# ============================================================
+
 def render_servicos():
     inicializar_estado_servicos()
     render_sidebar()
@@ -710,9 +1034,8 @@ def render_servicos():
 
     st.markdown(
         """
-        A ferramenta identifica as O.S. de **Falta de Água**
-        cuja matrícula também possui um serviço em aberto na
-        base de Serviços correspondente ao modo selecionado.
+        Identifica as O.S. de **Falta de Água** cuja matrícula
+        também possui um serviço em aberto na base correspondente.
         """
     )
 
@@ -739,40 +1062,74 @@ def render_servicos():
         chave_servicos
     )
 
+    # ========================================================
+    # BASES UTILIZADAS
+    # ========================================================
+
     st.subheader("📊 Bases utilizadas")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown(
-            f"**Backlog de Falta de Água — {modo}**"
-        )
-
         if df_backlog is not None:
-            st.success(
-                f"Base carregada • "
-                f"{len(df_backlog):,} registros"
-                .replace(",", ".")
+            st.markdown(
+                f"""
+                <div class="coi-card">
+                    <div class="coi-card-title">
+                        💧 Backlog de Falta de Água — {modo}
+                    </div>
+                    <div class="coi-card-text">
+                        Base carregada •
+                        {len(df_backlog):,} registros
+                    </div>
+                </div>
+                """.replace(",", "."),
+                unsafe_allow_html=True,
             )
         else:
-            st.warning(
-                "Base de Falta de Água não carregada."
+            st.markdown(
+                f"""
+                <div class="coi-card">
+                    <div class="coi-card-title">
+                        💧 Backlog de Falta de Água — {modo}
+                    </div>
+                    <div class="coi-card-text">
+                        Base não carregada.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
     with col2:
-        st.markdown(
-            f"**Serviços — {modo}**"
-        )
-
         if df_servicos is not None:
-            st.success(
-                f"Base carregada • "
-                f"{len(df_servicos):,} registros"
-                .replace(",", ".")
+            st.markdown(
+                f"""
+                <div class="coi-card">
+                    <div class="coi-card-title">
+                        🛠️ Serviços — {modo}
+                    </div>
+                    <div class="coi-card-text">
+                        Base carregada •
+                        {len(df_servicos):,} registros
+                    </div>
+                </div>
+                """.replace(",", "."),
+                unsafe_allow_html=True,
             )
         else:
-            st.warning(
-                "Base de Serviços não carregada."
+            st.markdown(
+                f"""
+                <div class="coi-card">
+                    <div class="coi-card-title">
+                        🛠️ Serviços — {modo}
+                    </div>
+                    <div class="coi-card-text">
+                        Base não carregada.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
     if (
@@ -798,6 +1155,10 @@ def render_servicos():
         st.stop()
 
     st.divider()
+
+    # ========================================================
+    # EXECUÇÃO
+    # ========================================================
 
     if st.button(
         "▶️ Executar análise",
@@ -848,6 +1209,10 @@ def render_servicos():
         ] = info_servicos
 
         st.rerun()
+
+    # ========================================================
+    # RESULTADO
+    # ========================================================
 
     chave_modo = modo.lower()
 
@@ -936,6 +1301,10 @@ def render_servicos():
             for aviso in avisos:
                 st.warning(aviso)
 
+    # ========================================================
+    # PRÉVIA
+    # ========================================================
+
     st.subheader(
         "📋 Prévia do lote de cancelamento"
     )
@@ -962,6 +1331,10 @@ def render_servicos():
             f"de {len(resultado):,}."
             .replace(",", ".")
         )
+
+    # ========================================================
+    # DOWNLOAD
+    # ========================================================
 
     arquivo = dataframe_para_excel(
         resultado,
