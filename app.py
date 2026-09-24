@@ -2,6 +2,7 @@ import streamlit as st
 from auth import fazer_login, verificar_autenticacao, fazer_logout
 import streamlit as st
 from auth import fazer_login, verificar_autenticacao, fazer_logout
+from gerador_lotes.estado import inicializar_estado
 
 st.set_page_config(
     page_title="Plataforma COI - Hub Central",
