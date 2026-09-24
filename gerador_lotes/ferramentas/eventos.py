@@ -1349,11 +1349,7 @@ def render_eventos():
 
                 st.download_button(
                     "📥 Baixar lote",
-                    data=(
-                        arquivo.getvalue()
-                        if arquivo is not None
-                        else b""
-                    ),
+                    data=arquivo if arquivo is not None else b"",
                     file_name=nome_arquivo,
                     mime=(
                         "application/vnd.openxmlformats-"
