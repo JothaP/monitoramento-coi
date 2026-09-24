@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 
 from ..estado import base_carregada, obter_base
@@ -73,4 +72,3 @@ def selecionar_modo_api_the(
     df = obter_base(nome_base)
 
     return modo, df
-```
