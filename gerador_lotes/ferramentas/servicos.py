@@ -10,10 +10,6 @@ from ..zonas import obter_zona
 from .componentes import selecionar_modo_api_the
 
 
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
-
 NOME_ARQUIVO_API = "Serviços API.xlsx"
 NOME_ARQUIVO_THE = "Serviços THE.xlsx"
 
@@ -29,15 +25,8 @@ COL_SAIDA_TIPO = "Tipo Encerramento"
 COL_SAIDA_OBSERVACOES = "Observações"
 
 
-# ============================================================
-# VISUAL
-# ============================================================
-
 def aplicar_modo_visual():
-    modo_escuro = st.session_state.get(
-        "servicos_modo_escuro",
-        False,
-    )
+    modo_escuro = st.session_state.get("servicos_modo_escuro", False)
 
     if modo_escuro:
         st.markdown(
@@ -86,15 +75,10 @@ def aplicar_modo_visual():
         )
 
 
-# ============================================================
-# SIDEBAR
-# ============================================================
-
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 🛠️ Serviços")
         st.caption("Navegação da ferramenta")
-
         st.divider()
 
         modo_escuro = st.toggle(
@@ -136,10 +120,6 @@ def render_sidebar():
     aplicar_modo_visual()
 
 
-# ============================================================
-# NORMALIZAÇÃO
-# ============================================================
-
 def normalizar_texto(valor):
     if pd.isna(valor):
         return ""
@@ -179,17 +159,17 @@ def matricula_valida(matricula, modo):
     if not matricula:
         return False
 
-    quantidade_digitos = 9 if modo == "API" else 8
+    quantidade_digitos = (
+        9
+        if modo == "API"
+        else 8
+    )
 
     return (
         matricula.isdigit()
         and len(matricula) == quantidade_digitos
     )
 
-
-# ============================================================
-# LOCALIZAÇÃO DE COLUNAS
-# ============================================================
 
 def localizar_coluna(df, nome_desejado):
     if nome_desejado in df.columns:
@@ -206,6 +186,14 @@ def localizar_coluna(df, nome_desejado):
 
 def localizar_coluna_descricao(df):
     possibilidades = [
+        "CÓDIGO/DESCRIÇÃO",
+        "CODIGO/DESCRICAO",
+        "CÓDIGO / DESCRIÇÃO",
+        "CODIGO / DESCRICAO",
+        "CÓDIGO/ DESCRIÇÃO",
+        "CODIGO/ DESCRICAO",
+        "CÓDIGO /DESCRIÇÃO",
+        "CODIGO /DESCRICAO",
         "DESCRIÇÃO",
         "DESCRICAO",
         "DESCRIÇÃO DO SERVIÇO",
@@ -232,10 +220,6 @@ def localizar_coluna_descricao(df):
     return None
 
 
-# ============================================================
-# PROTOCOLO
-# ============================================================
-
 def parse_protocolo(valor):
     if pd.isna(valor):
         return None
@@ -254,9 +238,17 @@ def parse_protocolo(valor):
         return None
 
     try:
-        numero = int(correspondencia.group(1))
-        ano = int(correspondencia.group(2))
-    except (TypeError, ValueError):
+        numero = int(
+            correspondencia.group(1)
+        )
+
+        ano = int(
+            correspondencia.group(2)
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
     return {
@@ -279,20 +271,23 @@ def chave_protocolo(info):
     )
 
 
-# ============================================================
-# CONSOLIDAÇÃO DOS SERVIÇOS
-# ============================================================
-
 def consolidar_servicos(df_servicos, modo):
     avisos = []
 
-    if df_servicos is None or df_servicos.empty:
-        return {}, {
-            "linhas_analisadas": 0,
-            "matriculas_validas": 0,
-            "matriculas_ignoradas": 0,
-            "servicos_considerados": 0,
-        }, avisos
+    if (
+        df_servicos is None
+        or df_servicos.empty
+    ):
+        return (
+            {},
+            {
+                "linhas_analisadas": 0,
+                "matriculas_validas": 0,
+                "matriculas_ignoradas": 0,
+                "servicos_considerados": 0,
+            },
+            avisos,
+        )
 
     coluna_matricula = localizar_coluna(
         df_servicos,
@@ -305,46 +300,59 @@ def consolidar_servicos(df_servicos, modo):
     )
 
     coluna_descricao = localizar_coluna_descricao(
-        df_servicos,
+        df_servicos
     )
 
     if not coluna_matricula:
         avisos.append(
-            "A base de Serviços não possui a coluna de matrícula."
+            "A base de Serviços não possui "
+            "a coluna de matrícula."
         )
 
-        return {}, {
-            "linhas_analisadas": len(df_servicos),
-            "matriculas_validas": 0,
-            "matriculas_ignoradas": len(df_servicos),
-            "servicos_considerados": 0,
-        }, avisos
+        return (
+            {},
+            {
+                "linhas_analisadas": len(df_servicos),
+                "matriculas_validas": 0,
+                "matriculas_ignoradas": len(df_servicos),
+                "servicos_considerados": 0,
+            },
+            avisos,
+        )
 
     if not coluna_protocolo:
         avisos.append(
-            "A base de Serviços não possui a coluna "
-            "COD. PROTOCOLO ORIGEM."
+            "A base de Serviços não possui "
+            "a coluna COD. PROTOCOLO ORIGEM."
         )
 
-        return {}, {
-            "linhas_analisadas": len(df_servicos),
-            "matriculas_validas": 0,
-            "matriculas_ignoradas": len(df_servicos),
-            "servicos_considerados": 0,
-        }, avisos
+        return (
+            {},
+            {
+                "linhas_analisadas": len(df_servicos),
+                "matriculas_validas": 0,
+                "matriculas_ignoradas": len(df_servicos),
+                "servicos_considerados": 0,
+            },
+            avisos,
+        )
 
     if not coluna_descricao:
         avisos.append(
-            "A base de Serviços não possui uma coluna "
-            "de descrição do serviço reconhecida."
+            "A base de Serviços não possui "
+            "uma coluna de descrição do serviço reconhecida."
         )
 
-        return {}, {
-            "linhas_analisadas": len(df_servicos),
-            "matriculas_validas": 0,
-            "matriculas_ignoradas": len(df_servicos),
-            "servicos_considerados": 0,
-        }, avisos
+        return (
+            {},
+            {
+                "linhas_analisadas": len(df_servicos),
+                "matriculas_validas": 0,
+                "matriculas_ignoradas": len(df_servicos),
+                "servicos_considerados": 0,
+            },
+            avisos,
+        )
 
     servicos_por_matricula = {}
 
@@ -353,11 +361,15 @@ def consolidar_servicos(df_servicos, modo):
     servicos_considerados = 0
 
     for _, linha in df_servicos.iterrows():
+
         matricula = normalizar_matricula(
             linha[coluna_matricula]
         )
 
-        if not matricula_valida(matricula, modo):
+        if not matricula_valida(
+            matricula,
+            modo,
+        ):
             matriculas_ignoradas += 1
             continue
 
@@ -389,13 +401,17 @@ def consolidar_servicos(df_servicos, modo):
             "descricao": descricao,
         }
 
-        servico_existente = servicos_por_matricula.get(
-            matricula
+        servico_existente = (
+            servicos_por_matricula.get(matricula)
         )
 
         if servico_existente is None:
-            servicos_por_matricula[matricula] = registro
+            servicos_por_matricula[
+                matricula
+            ] = registro
+
             servicos_considerados += 1
+
             continue
 
         if chave_protocolo(
@@ -403,19 +419,21 @@ def consolidar_servicos(df_servicos, modo):
         ) < chave_protocolo(
             servico_existente["protocolo"]
         ):
-            servicos_por_matricula[matricula] = registro
+            servicos_por_matricula[
+                matricula
+            ] = registro
 
-    return servicos_por_matricula, {
-        "linhas_analisadas": len(df_servicos),
-        "matriculas_validas": matriculas_validas,
-        "matriculas_ignoradas": matriculas_ignoradas,
-        "servicos_considerados": servicos_considerados,
-    }, avisos
+    return (
+        servicos_por_matricula,
+        {
+            "linhas_analisadas": len(df_servicos),
+            "matriculas_validas": matriculas_validas,
+            "matriculas_ignoradas": matriculas_ignoradas,
+            "servicos_considerados": servicos_considerados,
+        },
+        avisos,
+    )
 
-
-# ============================================================
-# GERAÇÃO DO LOTE
-# ============================================================
 
 def gerar_lote_servicos(
     df_backlog,
@@ -424,13 +442,20 @@ def gerar_lote_servicos(
 ):
     avisos = []
 
-    if df_backlog is None or df_backlog.empty:
-        return pd.DataFrame(), {
-            "os_analisadas": 0,
-            "matriculas_validas": 0,
-            "os_para_cancelar": 0,
-            "sem_servico": 0,
-        }, avisos
+    if (
+        df_backlog is None
+        or df_backlog.empty
+    ):
+        return (
+            pd.DataFrame(),
+            {
+                "os_analisadas": 0,
+                "matriculas_validas": 0,
+                "os_para_cancelar": 0,
+                "sem_servico": 0,
+            },
+            avisos,
+        )
 
     coluna_matricula = localizar_coluna(
         df_backlog,
@@ -449,28 +474,37 @@ def gerar_lote_servicos(
 
     if not coluna_matricula:
         avisos.append(
-            "A base do backlog não possui a coluna de matrícula."
+            "A base do backlog não possui "
+            "a coluna de matrícula."
         )
 
-        return pd.DataFrame(), {
-            "os_analisadas": len(df_backlog),
-            "matriculas_validas": 0,
-            "os_para_cancelar": 0,
-            "sem_servico": 0,
-        }, avisos
+        return (
+            pd.DataFrame(),
+            {
+                "os_analisadas": len(df_backlog),
+                "matriculas_validas": 0,
+                "os_para_cancelar": 0,
+                "sem_servico": 0,
+            },
+            avisos,
+        )
 
     if not coluna_protocolo:
         avisos.append(
-            "A base do backlog não possui a coluna "
-            "COD. PROTOCOLO ORIGEM."
+            "A base do backlog não possui "
+            "a coluna COD. PROTOCOLO ORIGEM."
         )
 
-        return pd.DataFrame(), {
-            "os_analisadas": len(df_backlog),
-            "matriculas_validas": 0,
-            "os_para_cancelar": 0,
-            "sem_servico": 0,
-        }, avisos
+        return (
+            pd.DataFrame(),
+            {
+                "os_analisadas": len(df_backlog),
+                "matriculas_validas": 0,
+                "os_para_cancelar": 0,
+                "sem_servico": 0,
+            },
+            avisos,
+        )
 
     if modo == "API" and not coluna_cidade:
         avisos.append(
@@ -478,12 +512,16 @@ def gerar_lote_servicos(
             "necessária para determinar a Zona Ligacao."
         )
 
-        return pd.DataFrame(), {
-            "os_analisadas": len(df_backlog),
-            "matriculas_validas": 0,
-            "os_para_cancelar": 0,
-            "sem_servico": 0,
-        }, avisos
+        return (
+            pd.DataFrame(),
+            {
+                "os_analisadas": len(df_backlog),
+                "matriculas_validas": 0,
+                "os_para_cancelar": 0,
+                "sem_servico": 0,
+            },
+            avisos,
+        )
 
     resultados = []
 
@@ -493,11 +531,15 @@ def gerar_lote_servicos(
     sem_servico = 0
 
     for _, linha in df_backlog.iterrows():
+
         matricula = normalizar_matricula(
             linha[coluna_matricula]
         )
 
-        if not matricula_valida(matricula, modo):
+        if not matricula_valida(
+            matricula,
+            modo,
+        ):
             continue
 
         matriculas_validas += 1
@@ -524,13 +566,15 @@ def gerar_lote_servicos(
 
         if modo == "THE":
             zona = 1
+
         else:
             cidade = linha[coluna_cidade]
 
             if pd.isna(cidade):
                 avisos.append(
                     f"A O.S. {protocolo_os['texto']} "
-                    f"possui matrícula {matricula}, mas não possui cidade."
+                    f"possui matrícula {matricula}, "
+                    "mas não possui cidade."
                 )
                 continue
 
@@ -543,8 +587,9 @@ def gerar_lote_servicos(
 
             if zona is None:
                 avisos.append(
-                    f"A cidade '{cidade}' não possui zona cadastrada "
-                    f"para a O.S. {protocolo_os['texto']}."
+                    f"A cidade '{cidade}' não possui "
+                    "zona cadastrada para a O.S. "
+                    f"{protocolo_os['texto']}."
                 )
                 continue
 
@@ -586,12 +631,12 @@ def gerar_lote_servicos(
         "sem_servico": sem_servico,
     }
 
-    return resultado, indicadores, avisos
+    return (
+        resultado,
+        indicadores,
+        avisos,
+    )
 
-
-# ============================================================
-# ESTADO
-# ============================================================
 
 def inicializar_estado_servicos():
     estados = {
@@ -612,7 +657,10 @@ def inicializar_estado_servicos():
 
 def limpar_resultado_servicos(modo=None):
     if modo is None:
-        modos = ["api", "the"]
+        modos = [
+            "api",
+            "the",
+        ]
     else:
         modos = [
             modo.lower()
@@ -636,10 +684,6 @@ def limpar_resultado_servicos(modo=None):
         ] = None
 
 
-# ============================================================
-# RENDER DA FERRAMENTA
-# ============================================================
-
 def render_servicos():
     inicializar_estado_servicos()
     render_sidebar()
@@ -654,10 +698,6 @@ def render_servicos():
         """
     )
 
-    # --------------------------------------------------------
-    # SELEÇÃO API / THE
-    # --------------------------------------------------------
-
     modo, df_backlog = selecionar_modo_api_the(
         key="servicos_modo_api_the",
     )
@@ -665,7 +705,10 @@ def render_servicos():
     if modo is None or df_backlog is None:
         st.stop()
 
-    if modo not in {"API", "THE"}:
+    if modo not in {
+        "API",
+        "THE",
+    }:
         modo = "API"
 
     chave_servicos = (
@@ -674,11 +717,9 @@ def render_servicos():
         else "servicos_the"
     )
 
-    df_servicos = obter_base(chave_servicos)
-
-    # --------------------------------------------------------
-    # BASES UTILIZADAS
-    # --------------------------------------------------------
+    df_servicos = obter_base(
+        chave_servicos
+    )
 
     st.subheader("📊 Bases utilizadas")
 
@@ -691,10 +732,9 @@ def render_servicos():
 
         if df_backlog is not None:
             st.success(
-                f"Base carregada • {len(df_backlog):,} registros".replace(
-                    ",",
-                    ".",
-                )
+                f"Base carregada • "
+                f"{len(df_backlog):,} registros"
+                .replace(",", ".")
             )
         else:
             st.warning(
@@ -708,34 +748,36 @@ def render_servicos():
 
         if df_servicos is not None:
             st.success(
-                f"Base carregada • {len(df_servicos):,} registros".replace(
-                    ",",
-                    ".",
-                )
+                f"Base carregada • "
+                f"{len(df_servicos):,} registros"
+                .replace(",", ".")
             )
         else:
             st.warning(
                 "Base de Serviços não carregada."
             )
 
-    if df_backlog is None or df_backlog.empty:
+    if (
+        df_backlog is None
+        or df_backlog.empty
+    ):
         st.warning(
-            "Carregue a base de Falta de Água no Gerador "
-            "de Lotes antes de executar a análise."
+            "Carregue a base de Falta de Água "
+            "no Gerador de Lotes antes de executar "
+            "a análise."
         )
         st.stop()
 
-    if df_servicos is None or df_servicos.empty:
+    if (
+        df_servicos is None
+        or df_servicos.empty
+    ):
         st.warning(
             "Carregue a base de Serviços correspondente "
-            f"ao modo {modo} no Gerador de Lotes antes "
-            "de executar a análise."
+            f"ao modo {modo} no Gerador de Lotes "
+            "antes de executar a análise."
         )
         st.stop()
-
-    # --------------------------------------------------------
-    # EXECUÇÃO
-    # --------------------------------------------------------
 
     st.divider()
 
@@ -789,10 +831,6 @@ def render_servicos():
 
         st.rerun()
 
-    # --------------------------------------------------------
-    # RESULTADOS
-    # --------------------------------------------------------
-
     chave_modo = modo.lower()
 
     resultado = st.session_state.get(
@@ -828,42 +866,30 @@ def render_servicos():
     with col1:
         st.metric(
             "O.S. no backlog",
-            f"{indicadores['os_analisadas']:,}".replace(
-                ",",
-                ".",
-            ),
+            f"{indicadores['os_analisadas']:,}"
+            .replace(",", "."),
         )
 
     with col2:
         st.metric(
             "Matrículas válidas",
-            f"{indicadores['matriculas_validas']:,}".replace(
-                ",",
-                ".",
-            ),
+            f"{indicadores['matriculas_validas']:,}"
+            .replace(",", "."),
         )
 
     with col3:
         st.metric(
             "O.S. para cancelar",
-            f"{indicadores['os_para_cancelar']:,}".replace(
-                ",",
-                ".",
-            ),
+            f"{indicadores['os_para_cancelar']:,}"
+            .replace(",", "."),
         )
 
     with col4:
         st.metric(
             "Sem Serviço correspondente",
-            f"{indicadores['sem_servico']:,}".replace(
-                ",",
-                ".",
-            ),
+            f"{indicadores['sem_servico']:,}"
+            .replace(",", "."),
         )
-
-    # --------------------------------------------------------
-    # INFORMAÇÕES SOBRE A BASE DE SERVIÇOS
-    # --------------------------------------------------------
 
     if info_servicos:
         ignorados = info_servicos.get(
@@ -879,14 +905,10 @@ def render_servicos():
         st.caption(
             "Serviços considerados no cruzamento: "
             f"{considerados:,}".replace(",", ".")
-            + " • Registros de serviços ignorados por "
-            "informações incompletas ou inválidas: "
+            + " • Registros de serviços ignorados "
+            "por informações incompletas ou inválidas: "
             f"{ignorados:,}".replace(",", ".")
         )
-
-    # --------------------------------------------------------
-    # AVISOS
-    # --------------------------------------------------------
 
     if avisos:
         with st.expander(
@@ -896,15 +918,17 @@ def render_servicos():
             for aviso in avisos:
                 st.warning(aviso)
 
-    # --------------------------------------------------------
-    # PRÉVIA DO LOTE
-    # --------------------------------------------------------
+    st.subheader(
+        "📋 Prévia do lote de cancelamento"
+    )
 
-    st.subheader("📋 Prévia do lote de cancelamento")
-
-    if resultado is None or resultado.empty:
+    if (
+        resultado is None
+        or resultado.empty
+    ):
         st.info(
-            "Nenhuma O.S. foi identificada para cancelamento."
+            "Nenhuma O.S. foi identificada "
+            "para cancelamento."
         )
         st.stop()
 
@@ -917,15 +941,9 @@ def render_servicos():
     if len(resultado) > 100:
         st.caption(
             "Exibindo as primeiras 100 O.S. "
-            f"de {len(resultado):,}.".replace(
-                ",",
-                ".",
-            )
+            f"de {len(resultado):,}."
+            .replace(",", ".")
         )
-
-    # --------------------------------------------------------
-    # DOWNLOAD
-    # --------------------------------------------------------
 
     arquivo = dataframe_para_excel(
         resultado,
