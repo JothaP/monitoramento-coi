@@ -801,3 +801,4 @@ with col2:
         limpar_estado_lista_rapida()
         st.session_state[
             "ferramenta_atual"
+```
