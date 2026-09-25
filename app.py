@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import fazer_login, verificar_autenticacao, fazer_logout
@@ -82,6 +83,7 @@ if not st.session_state.get("autenticado"):
 # ============================================================
 # HUB CENTRAL
 # ============================================================
+
 if "modo_escuro_hub" not in st.session_state:
     st.session_state.modo_escuro_hub = False
 
@@ -140,6 +142,8 @@ if modo_escuro_hub:
         """,
         unsafe_allow_html=True,
     )
+
+
 perfil_atual = st.session_state.perfil.upper()
 
 st.write(
@@ -151,7 +155,12 @@ st.divider()
 st.markdown("### Selecione o módulo desejado:")
 st.markdown("")
 
-col1, col2, col3, col4 = st.columns(4)
+
+# ============================================================
+# PRIMEIRA LINHA
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
 
 
 # ============================================================
@@ -159,7 +168,7 @@ col1, col2, col3, col4 = st.columns(4)
 # ============================================================
 
 with col1:
-    st.markdown("#### 🗺️ Módulo 1")
+    st.markdown("#### 💧 Módulo 1")
     st.markdown("**Baixa Pressão**")
     st.caption("Status: Ativo")
 
@@ -177,7 +186,7 @@ with col1:
 # ============================================================
 
 with col2:
-    st.markdown("#### 📊 Módulo 2")
+    st.markdown("#### 🗺️ Módulo 2")
     st.markdown("**Mapeamento de Pressão**")
     st.caption("Status: Ativo")
 
@@ -195,7 +204,7 @@ with col2:
 # ============================================================
 
 with col3:
-    st.markdown("#### ⚙️ Módulo 3")
+    st.markdown("#### 🚰 Módulo 3")
     st.markdown("**Vazão de Poços**")
 
     if st.session_state.perfil == "admin":
@@ -229,13 +238,20 @@ with col3:
 
 
 # ============================================================
+# SEGUNDA LINHA
+# ============================================================
+
+st.markdown("")
+col4, col5, col6 = st.columns(3)
+
+
+# ============================================================
 # MÓDULO 4
 # ============================================================
 
 with col4:
     st.markdown("#### 🛠️ Módulo 4")
     st.markdown("**Ferramentas Operacionais**")
-
     st.caption("Status: Ativo")
 
     if st.button(
@@ -248,8 +264,86 @@ with col4:
 
 
 # ============================================================
+# MÓDULO 5
+# ============================================================
+
+with col5:
+    st.markdown("#### 📋 Módulo 5")
+    st.markdown("**Cadastros e Consultas COI**")
+
+    if st.session_state.perfil == "admin":
+
+        st.caption("Status: Em desenvolvimento (Admin)")
+
+        if st.button(
+            "Acessar Cadastros e Consultas",
+            use_container_width=True,
+            key="acessar_cadastros_consultas",
+        ):
+            st.switch_page("pages/5_Cadastros_Consultas_COI.py")
+
+    else:
+
+        st.caption("Status: Em desenvolvimento")
+
+        st.button(
+            "Acessar Cadastros e Consultas",
+            disabled=True,
+            use_container_width=True,
+            key="cadastros_consultas_restrito",
+        )
+
+        st.markdown(
+            "<p style='font-size:12px; color:gray;'>"
+            "🔒 Restrito a administradores"
+            "</p>",
+            unsafe_allow_html=True,
+        )
+
+
+# ============================================================
+# MÓDULO 6
+# ============================================================
+
+with col6:
+    st.markdown("#### 🔧 Módulo 6")
+    st.markdown("**Ferramentas Adicionais**")
+
+    if st.session_state.perfil == "admin":
+
+        st.caption("Status: Em desenvolvimento (Admin)")
+
+        if st.button(
+            "Acessar Ferramentas Adicionais",
+            use_container_width=True,
+            key="acessar_ferramentas_adicionais",
+        ):
+            st.switch_page("pages/6_Ferramentas_Adicionais.py")
+
+    else:
+
+        st.caption("Status: Em desenvolvimento")
+
+        st.button(
+            "Acessar Ferramentas Adicionais",
+            disabled=True,
+            use_container_width=True,
+            key="ferramentas_adicionais_restrito",
+        )
+
+        st.markdown(
+            "<p style='font-size:12px; color:gray;'>"
+            "🔒 Restrito a administradores"
+            "</p>",
+            unsafe_allow_html=True,
+        )
+
+
+# ============================================================
 # ENCERRAR SESSÃO
 # ============================================================
+
+st.markdown("")
 
 if st.button(
     "Encerrar Sessão / Sair",
@@ -260,3 +354,4 @@ if st.button(
     st.success("Sessão encerrada com sucesso!")
 
     st.rerun()
+```
