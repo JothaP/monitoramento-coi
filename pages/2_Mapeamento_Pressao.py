@@ -567,7 +567,7 @@ with st.sidebar:
     st.divider()
         st.divider()
 
-    if "modo_escuro_bp" not in st.session_state:
+if "modo_escuro_bp" not in st.session_state:
         st.session_state.modo_escuro_bp = False
 
     modo_escuro_bp = st.toggle(
