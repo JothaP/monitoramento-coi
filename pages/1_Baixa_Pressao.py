@@ -637,17 +637,33 @@ with st.sidebar:
                     color: #f0f0f0 !important;
                 }
 
-                /* Botões */
-                .stButton > button {
-                    background-color: #21262d;
-                    color: #f0f0f0;
-                    border: 1px solid #444c56;
-                }
+                /* Botões normais e botões de download */
+.stButton > button,
+.stDownloadButton > button {
+    background-color: #000000 !important;
+    color: #ffffff !important;
+    border: 1px solid #444c56 !important;
+}
 
-                .stButton > button:hover {
-                    border-color: #58a6ff;
-                    color: #58a6ff;
-                }
+/* Texto interno dos botões */
+.stButton > button *,
+.stDownloadButton > button * {
+    color: #ffffff !important;
+}
+
+/* Efeito ao passar o mouse */
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    background-color: #000000 !important;
+    color: #ff0000 !important;
+    border-color: #ff0000 !important;
+}
+
+/* Texto interno no hover */
+.stButton > button:hover *,
+.stDownloadButton > button:hover * {
+    color: #ff0000 !important;
+}
 
                 /* Tabelas */
                 [data-testid="stDataFrame"] {
