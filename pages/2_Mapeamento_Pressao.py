@@ -563,12 +563,13 @@ with st.sidebar:
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
-    st.markdown("<br>" * 2, unsafe_allow_html=True)
+        st.markdown("<br>" * 2, unsafe_allow_html=True)
     st.divider()
-        st.divider()
 
     if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
         st.switch_page("app.py")
+
+    st.divider()
 
 # ============================================================
 # ÁREA PRINCIPAL
