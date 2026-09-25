@@ -563,13 +563,84 @@ with st.sidebar:
     if intervalo > 0:
         st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
-        st.markdown("<br>" * 2, unsafe_allow_html=True)
+      st.markdown("<br>" * 2, unsafe_allow_html=True)
     st.divider()
 
     if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
         st.switch_page("app.py")
 
     st.divider()
+
+    if "modo_escuro_mp" not in st.session_state:
+        st.session_state.modo_escuro_mp = False
+
+    modo_escuro_mp = st.toggle(
+        "🌙 Modo escuro",
+        value=st.session_state.modo_escuro_mp,
+        key="toggle_modo_escuro_mp",
+    )
+
+    st.session_state.modo_escuro_mp = modo_escuro_mp
+
+    if modo_escuro_mp:
+        st.markdown(
+            """
+            <style>
+                .stApp {
+                    background-color: #0e1117;
+                    color: #fafafa;
+                }
+
+                [data-testid="stSidebar"] {
+                    background-color: #161b22;
+                }
+
+                .stApp p,
+                .stApp label,
+                .stApp h1,
+                .stApp h2,
+                .stApp h3,
+                .stApp h4,
+                .stApp h5,
+                .stApp h6 {
+                    color: #f0f0f0 !important;
+                }
+
+                [data-testid="stMetric"],
+                [data-testid="stExpander"],
+                div[data-testid="stDataFrame"] {
+                    background-color: #161b22;
+                }
+
+                input,
+                textarea,
+                [data-baseweb="select"] > div {
+                    background-color: #21262d !important;
+                    color: #f0f0f0 !important;
+                }
+
+                [data-baseweb="select"] * {
+                    color: #f0f0f0 !important;
+                }
+
+                .stButton > button {
+                    background-color: #21262d;
+                    color: #f0f0f0;
+                    border: 1px solid #444c56;
+                }
+
+                .stButton > button:hover {
+                    border-color: #58a6ff;
+                    color: #58a6ff;
+                }
+
+                [data-testid="stDataFrame"] {
+                    color: #f0f0f0;
+                }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
 # ============================================================
 # ÁREA PRINCIPAL
