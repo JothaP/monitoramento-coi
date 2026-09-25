@@ -41,19 +41,6 @@ if not st.session_state.get("autenticado"):
     st.stop()
 
 
-if st.session_state.get("perfil") != "admin":
-    st.error("🔒 Este módulo é restrito a administradores.")
-
-    if st.button(
-        "↩️ Voltar ao Hub",
-        use_container_width=True,
-        key="voltar_hub_restrito_cadastros",
-    ):
-        st.switch_page("app.py")
-
-    st.stop()
-
-
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 
 
