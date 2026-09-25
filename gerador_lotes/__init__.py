@@ -3,6 +3,7 @@ from .estado import (
     obter_base,
     base_carregada,
     definir_base,
+    obter_arquivos_base,
     limpar_resultado,
     limpar_bases,
     voltar_ao_hub,
