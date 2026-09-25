@@ -606,6 +606,7 @@ FERRAMENTAS_LIBERADAS_USUARIO = {
     "Filtragem",
     "Duplicidade",
     "Serviços",
+    "Eventos",
 }
 
 for indice, ferramenta in enumerate(FERRAMENTAS):
