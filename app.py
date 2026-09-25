@@ -161,7 +161,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown("#### 🗺️ Módulo 1")
     st.markdown("**Baixa Pressão**")
-    st.caption("Status: Ativo para todos")
+    st.caption("Status: Ativo")
 
     if st.button(
         "Acessar Baixa Pressão",
@@ -179,7 +179,7 @@ with col1:
 with col2:
     st.markdown("#### 📊 Módulo 2")
     st.markdown("**Mapeamento de Pressão**")
-    st.caption("Status: Ativo para todos")
+    st.caption("Status: Ativo")
 
     if st.button(
         "Acessar Mapeamento",
