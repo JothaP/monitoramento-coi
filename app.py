@@ -248,10 +248,11 @@ with col1:
     st.caption("Status: Ativo para todos")
 
     if st.button(
-        "Acessar Baixa Pressão",
-        type="primary",
-        use_container_width=True
-    ):
+    "Acessar Baixa Pressão",
+    type="primary",
+    use_container_width=True,
+    key="acessar_baixa_pressao",
+):
         st.switch_page("pages/1_Baixa_Pressao.py")
 
 
