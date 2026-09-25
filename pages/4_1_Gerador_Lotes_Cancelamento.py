@@ -608,6 +608,7 @@ FERRAMENTAS_LIBERADAS_USUARIO = {
     "Serviços",
     "Eventos",
     "Lista Rápida",
+    "Lotes",
 }
 
 for indice, ferramenta in enumerate(FERRAMENTAS):
