@@ -432,7 +432,10 @@ def aplicar_estilo_lista_rapida():
 
         .lista-rapida-metricas {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(
+                4,
+                minmax(0, 1fr)
+            );
             gap: 12px;
             margin: 16px 0 20px 0;
         }
@@ -460,6 +463,62 @@ def aplicar_estilo_lista_rapida():
             font-size: 1.08rem;
             font-weight: 700;
             margin-bottom: 10px;
+        }
+
+        /* =========================================================
+           BOTÕES — PADRÃO TEMA ESCURO
+           ========================================================= */
+
+        [data-testid="stButton"] > button,
+        [data-testid="stDownloadButton"] > button {
+            border-radius: 8px !important;
+            min-height: 42px !important;
+            font-weight: 600 !important;
+        }
+
+        [data-testid="stButton"] > button:not([kind="primary"]),
+        [data-testid="stDownloadButton"] > button {
+            background-color: transparent !important;
+            color: inherit !important;
+            border: 1px solid rgba(
+                128,
+                128,
+                128,
+                0.45
+            ) !important;
+        }
+
+        [data-testid="stButton"] > button:not([kind="primary"]):hover,
+        [data-testid="stDownloadButton"] > button:hover {
+            background-color: rgba(
+                128,
+                128,
+                128,
+                0.10
+            ) !important;
+            color: inherit !important;
+            border-color: rgba(
+                128,
+                128,
+                128,
+                0.65
+            ) !important;
+        }
+
+        [data-testid="stButton"] > button[kind="primary"] {
+            color: white !important;
+            border: 1px solid transparent !important;
+        }
+
+        [data-testid="stButton"] > button[kind="primary"]:hover {
+            filter: brightness(1.08);
+        }
+
+        [data-testid="stButton"] > button p,
+        [data-testid="stButton"] > button span,
+        [data-testid="stDownloadButton"] > button p,
+        [data-testid="stDownloadButton"] > button span {
+            color: inherit !important;
         }
 
         @media (max-width: 900px) {
