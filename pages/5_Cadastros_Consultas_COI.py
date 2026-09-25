@@ -53,25 +53,7 @@ if st.session_state.get("perfil") != "admin":
 
     st.stop()
 
-# ============================================================
-# CONSTANTES
-# ============================================================
-
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
-
-# ============================================================
-# ID DA PLANILHA
-# ============================================================
-
-SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID")
-
-if not SPREADSHEET_ID:
-    st.error(
-        "❌ O identificador da planilha não foi encontrado "
-        "em st.secrets['SPREADSHEET_ID']."
-    )
-    st.stop()
-
 
 # ============================================================
 # MODO ESCURO
