@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 
 from auth import fazer_login, verificar_autenticacao, fazer_logout
@@ -204,4 +203,3 @@ if st.button(
     st.success("Sessão encerrada com sucesso!")
 
     st.rerun()
-```
