@@ -269,35 +269,14 @@ with col4:
 with col5:
     st.markdown("#### 📋 Módulo 5")
     st.markdown("**Cadastros e Consultas COI**")
+    st.caption("Status: Em desenvolvimento")
 
-    if st.session_state.perfil == "admin":
-
-        st.caption("Status: Em desenvolvimento (Admin)")
-
-        if st.button(
-            "Acessar Cadastros e Consultas",
-            use_container_width=True,
-            key="acessar_cadastros_consultas",
-        ):
-            st.switch_page("pages/5_Cadastros_Consultas_COI.py")
-
-    else:
-
-        st.caption("Status: Em desenvolvimento")
-
-        st.button(
-            "Acessar Cadastros e Consultas",
-            disabled=True,
-            use_container_width=True,
-            key="cadastros_consultas_restrito",
-        )
-
-        st.markdown(
-            "<p style='font-size:12px; color:gray;'>"
-            "🔒 Restrito a administradores"
-            "</p>",
-            unsafe_allow_html=True,
-        )
+    if st.button(
+        "Acessar Cadastros e Consultas",
+        use_container_width=True,
+        key="acessar_cadastros_consultas",
+    ):
+        st.switch_page("pages/5_Cadastros_Consultas_COI.py")
 
 
 # ============================================================
