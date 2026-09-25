@@ -1028,7 +1028,7 @@ def render_lotes():
         if arquivo_excel is not None:
             st.download_button(
                 "📥 Baixar acompanhamento",
-                data=arquivo_excel.getvalue(),
+                data=arquivo_excel,
                 file_name=(
                     "Acompanhamento de Lotes.xlsx"
                 ),
@@ -1073,7 +1073,7 @@ def render_lotes():
         if arquivo_avisos is not None:
             st.download_button(
                 "📥 Baixar log de avisos",
-                data=arquivo_avisos.getvalue(),
+                data=arquivo_avisos,
                 file_name=(
                     "Log de Avisos - Lotes.xlsx"
                 ),
