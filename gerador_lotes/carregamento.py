@@ -7,21 +7,13 @@ import streamlit as st
 from .estado import definir_base
 
 
-EXTENSOES_EXCEL_VALIDAS = (".xlsx", ".xlsm")
+EXTENSOES_EXCEL_VALIDAS = (
+    ".xlsx",
+    ".xlsm",
+)
 
-
-# ============================================================
-# ASSINATURA DOS ARQUIVOS
-# ============================================================
 
 def assinatura_arquivo(arquivo):
-    """
-    Gera uma assinatura única para um arquivo enviado.
-
-    A assinatura permite identificar se o mesmo arquivo já foi
-    processado durante a sessão.
-    """
-
     if arquivo is None:
         return None
 
@@ -30,15 +22,13 @@ def assinatura_arquivo(arquivo):
     return (
         arquivo.name,
         len(conteudo),
-        hashlib.md5(conteudo).hexdigest(),
+        hashlib.md5(
+            conteudo
+        ).hexdigest(),
     )
 
 
 def assinatura_arquivos(arquivos):
-    """
-    Gera uma assinatura única para um conjunto de arquivos.
-    """
-
     if not arquivos:
         return None
 
@@ -51,28 +41,26 @@ def assinatura_arquivos(arquivos):
             (
                 arquivo.name,
                 len(conteudo),
-                hashlib.md5(conteudo).hexdigest(),
+                hashlib.md5(
+                    conteudo
+                ).hexdigest(),
             )
         )
 
-    return tuple(sorted(assinaturas))
+    return tuple(
+        sorted(assinaturas)
+    )
 
-
-# ============================================================
-# LEITURA DO EXCEL
-# ============================================================
 
 def ler_excel(arquivo):
-    """
-    Lê um arquivo Excel e retorna um DataFrame.
-    """
-
     if arquivo is None:
         return None
 
     nome = arquivo.name.lower()
 
-    if not nome.endswith(EXTENSOES_EXCEL_VALIDAS):
+    if not nome.endswith(
+        EXTENSOES_EXCEL_VALIDAS
+    ):
         raise ValueError(
             f"O arquivo '{arquivo.name}' não é um Excel válido. "
             "Utilize .xlsx ou .xlsm."
@@ -93,15 +81,7 @@ def ler_excel(arquivo):
     return df
 
 
-# ============================================================
-# LIMPEZA DE LINHAS VAZIAS
-# ============================================================
-
 def remover_linhas_vazias(df):
-    """
-    Remove linhas completamente vazias.
-    """
-
     if df is None or df.empty:
         return df
 
@@ -109,24 +89,19 @@ def remover_linhas_vazias(df):
 
     mascara_vazia = df.apply(
         lambda linha: all(
-            pd.isna(valor) or str(valor).strip() == ""
+            pd.isna(valor)
+            or str(valor).strip() == ""
             for valor in linha
         ),
         axis=1,
     )
 
-    return df.loc[~mascara_vazia].reset_index(drop=True)
+    return df.loc[
+        ~mascara_vazia
+    ].reset_index(drop=True)
 
-
-# ============================================================
-# CONSOLIDAÇÃO DE MÚLTIPLOS ARQUIVOS
-# ============================================================
 
 def consolidar_arquivos(arquivos):
-    """
-    Lê e consolida múltiplos arquivos Excel em um único DataFrame.
-    """
-
     if not arquivos:
         return None
 
@@ -147,80 +122,112 @@ def consolidar_arquivos(arquivos):
         sort=False,
     )
 
-    df_final = remover_linhas_vazias(df_final)
+    df_final = remover_linhas_vazias(
+        df_final
+    )
 
-    if df_final is None or df_final.empty:
+    if (
+        df_final is None
+        or df_final.empty
+    ):
         return None
 
-    # Remove somente duplicações EXATAS de toda a linha.
     df_final = (
         df_final
-        .drop_duplicates(keep="first")
+        .drop_duplicates(
+            keep="first"
+        )
         .reset_index(drop=True)
     )
 
     return df_final
 
 
-# ============================================================
-# CONTROLE DE ASSINATURAS
-# ============================================================
-
-def _obter_assinatura_anterior(nome_base):
-    """
-    Retorna a assinatura anteriormente processada para a base.
-    """
-
+def _obter_assinatura_anterior(
+    nome_base
+):
     assinaturas = st.session_state.get(
         "assinaturas_upload",
         {},
     )
 
-    return assinaturas.get(nome_base)
+    return assinaturas.get(
+        nome_base
+    )
 
 
-def _registrar_assinatura(nome_base, assinatura):
-    """
-    Registra a assinatura do upload processado.
-    """
+def _registrar_assinatura(
+    nome_base,
+    assinatura,
+):
+    if (
+        "assinaturas_upload"
+        not in st.session_state
+    ):
+        st.session_state[
+            "assinaturas_upload"
+        ] = {}
 
-    if "assinaturas_upload" not in st.session_state:
-        st.session_state["assinaturas_upload"] = {}
+    st.session_state[
+        "assinaturas_upload"
+    ][nome_base] = assinatura
 
-    st.session_state["assinaturas_upload"][nome_base] = assinatura
 
-
-# ============================================================
-# UPLOAD MÚLTIPLO
-# ============================================================
-
-def processar_upload_multiplo(nome_base, arquivos):
-    """
-    Processa múltiplos arquivos para uma base compartilhada.
-
-    O mesmo conjunto de arquivos não é processado novamente em
-    reruns do Streamlit.
-
-    A base já armazenada permanece disponível enquanto não houver
-    um novo conjunto de arquivos efetivamente enviado.
-    """
-
+def processar_upload_multiplo(
+    nome_base,
+    arquivos,
+):
     if not arquivos:
         return False
 
-    assinatura = assinatura_arquivos(arquivos)
+    assinatura = assinatura_arquivos(
+        arquivos
+    )
 
-    assinatura_anterior = _obter_assinatura_anterior(nome_base)
+    assinatura_anterior = (
+        _obter_assinatura_anterior(
+            nome_base
+        )
+    )
 
-    if assinatura == assinatura_anterior:
+    if (
+        assinatura
+        == assinatura_anterior
+    ):
         return False
 
-    df = consolidar_arquivos(arquivos)
+    dados_arquivos = []
+
+    for arquivo in arquivos:
+        df_arquivo = ler_excel(
+            arquivo
+        )
+
+        if (
+            df_arquivo is not None
+            and not df_arquivo.empty
+        ):
+            dados_arquivos.append(
+                {
+                    "nome": arquivo.name,
+                    "df": (
+                        remover_linhas_vazias(
+                            df_arquivo
+                        )
+                    ),
+                }
+            )
+
+    df = consolidar_arquivos(
+        arquivos
+    )
 
     if df is None or df.empty:
         st.warning(
-            f"Nenhum dado válido encontrado para a base '{nome_base}'."
+            f"Nenhum dado válido encontrado "
+            f"para a base '{nome_base}'."
         )
+
         return False
 
     definir_base(
@@ -230,6 +237,7 @@ def processar_upload_multiplo(nome_base, arquivos):
             arquivo.name
             for arquivo in arquivos
         ],
+        dados_arquivos=dados_arquivos,
     )
 
     _registrar_assinatura(
@@ -240,48 +248,65 @@ def processar_upload_multiplo(nome_base, arquivos):
     return True
 
 
-# ============================================================
-# UPLOAD ÚNICO
-# ============================================================
-
-def processar_upload_unico(nome_base, arquivo):
-    """
-    Processa um único arquivo para uma base compartilhada.
-
-    O mesmo arquivo não é processado novamente em reruns do
-    Streamlit.
-    """
-
+def processar_upload_unico(
+    nome_base,
+    arquivo,
+):
     if arquivo is None:
         return False
 
-    assinatura = assinatura_arquivo(arquivo)
+    assinatura = assinatura_arquivo(
+        arquivo
+    )
 
-    assinatura_anterior = _obter_assinatura_anterior(nome_base)
+    assinatura_anterior = (
+        _obter_assinatura_anterior(
+            nome_base
+        )
+    )
 
-    if assinatura == assinatura_anterior:
+    if (
+        assinatura
+        == assinatura_anterior
+    ):
         return False
 
-    df = ler_excel(arquivo)
+    df = ler_excel(
+        arquivo
+    )
 
     if df is None or df.empty:
         st.warning(
-            f"O arquivo '{arquivo.name}' não contém dados."
+            f"O arquivo '{arquivo.name}' "
+            "não contém dados."
         )
+
         return False
 
-    df = remover_linhas_vazias(df)
+    df = remover_linhas_vazias(
+        df
+    )
 
     if df is None or df.empty:
         st.warning(
-            f"O arquivo '{arquivo.name}' não contém dados válidos."
+            f"O arquivo '{arquivo.name}' "
+            "não contém dados válidos."
         )
+
         return False
 
     definir_base(
         nome_base,
         df,
-        arquivos=[arquivo.name],
+        arquivos=[
+            arquivo.name
+        ],
+        dados_arquivos=[
+            {
+                "nome": arquivo.name,
+                "df": df,
+            }
+        ],
     )
 
     _registrar_assinatura(
