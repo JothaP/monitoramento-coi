@@ -58,7 +58,7 @@ if st.session_state.get("perfil") != "admin":
 # ID DA PLANILHA
 # ============================================================
 
-SPREADSHEET_ID = st.secrets.get("15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU")
+SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID")
 
 if not SPREADSHEET_ID:
     st.error(
