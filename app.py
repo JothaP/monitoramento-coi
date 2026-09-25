@@ -82,7 +82,64 @@ if not st.session_state.get("autenticado"):
 # ============================================================
 # HUB CENTRAL
 # ============================================================
+if "modo_escuro_hub" not in st.session_state:
+    st.session_state.modo_escuro_hub = False
 
+modo_escuro_hub = st.toggle(
+    "🌙 Modo escuro",
+    value=st.session_state.modo_escuro_hub,
+    key="toggle_modo_escuro_hub",
+)
+
+st.session_state.modo_escuro_hub = modo_escuro_hub
+
+if modo_escuro_hub:
+    st.markdown(
+        """
+        <style>
+            /* Fundo principal */
+            .stApp {
+                background-color: #0e1117;
+                color: #fafafa;
+            }
+
+            /* Textos */
+            .stApp p,
+            .stApp label,
+            .stApp h1,
+            .stApp h2,
+            .stApp h3,
+            .stApp h4,
+            .stApp h5,
+            .stApp h6 {
+                color: #f0f0f0 !important;
+            }
+
+            /* Botões */
+            .stButton > button {
+                background-color: #000000 !important;
+                color: #ffffff !important;
+                border: 1px solid #444c56 !important;
+            }
+
+            .stButton > button * {
+                color: #ffffff !important;
+            }
+
+            /* Hover */
+            .stButton > button:hover {
+                background-color: #000000 !important;
+                color: #ff0000 !important;
+                border-color: #ff0000 !important;
+            }
+
+            .stButton > button:hover * {
+                color: #ff0000 !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 perfil_atual = st.session_state.perfil.upper()
 
 st.write(
