@@ -4,11 +4,7 @@ import unicodedata
 import pandas as pd
 import streamlit as st
 
-from ..estado import (
-obter_base,
-base_carregada,
-limpar_resultado,
-)
+from ..estado import obter_base, base_carregada, limpar_resultado
 from ..exportacao import dataframe_para_excel
 from ..zonas import obter_zona
 from .componentes import selecionar_modo_api_the
@@ -41,7 +37,7 @@ texto = unicodedata.normalize(
     "ASCII",
     "ignore",
 ).decode(
-    "ASCII"
+    "ASCII",
 )
 
 texto = re.sub(r"\s+", " ", texto)
@@ -85,7 +81,6 @@ try:
 
     if numero.is_integer():
         return str(int(numero))
-
 except (ValueError, TypeError):
     pass
 
@@ -120,7 +115,6 @@ try:
 
         if 1900 <= numero <= 2100:
             return str(numero)
-
 except (ValueError, TypeError):
     pass
 
@@ -137,7 +131,7 @@ if not texto:
 texto = re.sub(r"\s+", "", texto)
 
 match = re.fullmatch(
-    r"(\d+)\s*/\s*(\d{4})",
+    r"(\d+)/(\d{4})",
     texto,
 )
 
@@ -159,7 +153,7 @@ if match:
     )
 
 match = re.search(
-    r"(\d+)\s*/\s*(\d{4})",
+    r"(\d+)/(\d{4})",
     texto,
 )
 
@@ -167,17 +161,6 @@ if match:
     return (
         str(int(match.group(1))),
         match.group(2),
-    )
-
-match = re.search(
-    r"\d+",
-    texto,
-)
-
-if match:
-    return (
-        str(int(match.group(0))),
-        None,
     )
 
 return None, None
@@ -203,23 +186,12 @@ for parte in partes:
 
     numero, ano = parse_protocolo(parte)
 
-    if numero is None:
-        protocolos.append(
-            {
-                "entrada": parte,
-                "numero": None,
-                "ano": None,
-                "valido": False,
-            }
-        )
-        continue
-
     protocolos.append(
         {
             "entrada": parte,
             "numero": numero,
             "ano": ano,
-            "valido": True,
+            "valido": numero is not None,
         }
     )
 
@@ -228,7 +200,7 @@ return protocolos
 
 def preparar_backlog(df):
 if df is None or df.empty:
-return None, None
+return None, "A base selecionada está vazia."
 
 ```
 col_numero = encontrar_coluna(
@@ -267,21 +239,24 @@ col_cidade = encontrar_coluna(
 )
 
 if col_numero is None:
-    return None, (
+    return (
+        None,
         "A base selecionada não possui a coluna "
-        "'COD. PROTOCOLO ORIGEM'."
+        "'COD. PROTOCOLO ORIGEM'.",
     )
 
 if col_matricula is None:
-    return None, (
+    return (
+        None,
         "A base selecionada não possui a coluna "
-        "'MATRICULA'."
+        "'MATRICULA'.",
     )
 
 if col_cidade is None:
-    return None, (
+    return (
+        None,
         "A base selecionada não possui a coluna "
-        "'CIDADE'."
+        "'CIDADE'.",
     )
 
 base = df.copy()
@@ -329,20 +304,9 @@ if erro:
         erro,
     )
 
-if base is None or base.empty:
-    return (
-        pd.DataFrame(columns=COLUNAS_LOTE),
-        [],
-        [],
-        "A base selecionada não possui registros válidos.",
-    )
-
 resultado = []
-
-encontrados = 0
 nao_encontrados = []
 entradas_invalidas = []
-
 processados = set()
 
 for item in protocolos:
@@ -369,17 +333,15 @@ for item in protocolos:
     ]
 
     if ano is not None:
-        candidato_ano = candidato[
+        candidato_exato = candidato[
             candidato["_ano_lista_rapida"] == ano
         ]
 
-        if not candidato_ano.empty:
-            candidato = candidato_ano
+        if not candidato_exato.empty:
+            candidato = candidato_exato
 
     if candidato.empty:
-        nao_encontrados.append(
-            entrada
-        )
+        nao_encontrados.append(entrada)
         continue
 
     linha = candidato.iloc[0]
@@ -421,15 +383,11 @@ for item in protocolos:
         }
     )
 
-    encontrados += 1
-
-df_resultado = pd.DataFrame(
-    resultado,
-    columns=COLUNAS_LOTE,
-)
-
 return (
-    df_resultado,
+    pd.DataFrame(
+        resultado,
+        columns=COLUNAS_LOTE,
+    ),
     nao_encontrados,
     entradas_invalidas,
     None,
@@ -441,8 +399,6 @@ chaves = [
 "lista_rapida_resultado",
 "lista_rapida_log",
 "lista_rapida_nome_arquivo",
-"lista_rapida_protocolos",
-"lista_rapida_observacoes",
 "lista_rapida_geracao_info",
 ]
 
@@ -508,9 +464,7 @@ def render_lista_rapida():
 aplicar_estilo_lista_rapida()
 
 ```
-st.markdown(
-    "## 📋 Lista Rápida"
-)
+st.markdown("## 📋 Lista Rápida")
 
 st.caption(
     "Geração de lote de cancelamento a partir de uma lista de O.S./protocolos."
@@ -524,6 +478,7 @@ if not base_carregada("api") and not base_carregada("the"):
 
     if st.button(
         "⬅️ Voltar ao Gerador de Lotes",
+        key="lista_rapida_voltar_sem_base",
         use_container_width=False,
     ):
         st.session_state["ferramenta_atual"] = None
@@ -572,7 +527,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-protocolos_texto = st.text_area(
+st.text_area(
     "Protocolos / O.S.",
     height=230,
     placeholder=(
@@ -582,7 +537,6 @@ protocolos_texto = st.text_area(
         "123458/2026"
     ),
     key="lista_rapida_protocolos",
-    label_visibility="visible",
 )
 
 st.markdown(
@@ -607,12 +561,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-observacoes = st.text_area(
+st.text_area(
     "Observações do lote",
     height=120,
     placeholder="Digite a observação que deverá constar no lote.",
     key="lista_rapida_observacoes",
-    label_visibility="visible",
 )
 
 st.markdown(
@@ -626,8 +579,17 @@ if st.button(
     "⚙️ Gerar lote",
     type="primary",
     use_container_width=True,
+    key="lista_rapida_gerar_lote",
 ):
-    limpar_estado_lista_rapida()
+    protocolos_texto = st.session_state.get(
+        "lista_rapida_protocolos",
+        "",
+    )
+
+    observacoes = st.session_state.get(
+        "lista_rapida_observacoes",
+        "",
+    )
 
     if not protocolos_texto.strip():
         st.warning(
@@ -674,23 +636,11 @@ if st.button(
         "total_gerado": len(df_resultado),
     }
 
-    nome_base = (
-        "API"
-        if modo == "API"
-        else "THE"
-    )
-
     st.session_state[
         "lista_rapida_nome_arquivo"
-    ] = f"Lista Rapida {nome_base}.xlsx"
-
-    st.session_state[
-        "lista_rapida_geracao_info"
-    ] = {
-        "modo": modo,
-        "total_informado": len(protocolos),
-        "total_gerado": len(df_resultado),
-    }
+    ] = (
+        f"Lista Rapida {modo}.xlsx"
+    )
 
     st.rerun()
 
@@ -702,153 +652,152 @@ log = st.session_state.get(
     "lista_rapida_log"
 )
 
-if df_resultado is not None:
-    st.markdown("---")
-
-    st.markdown("### 📊 Prévia do lote")
-
-    total_informado = (
-        log.get("total_informado", 0)
-        if log
-        else 0
-    )
-
-    total_gerado = (
-        len(df_resultado)
-    )
-
-    nao_encontrados = (
-        log.get("nao_encontrados", [])
-        if log
-        else []
-    )
-
-    entradas_invalidas = (
-        log.get("entradas_invalidas", [])
-        if log
-        else []
-    )
-
-    st.markdown(
-        '<div class="lista-rapida-metricas">'
-        f'<div class="lista-rapida-metrica">'
-        '<div class="lista-rapida-metrica-label">'
-        "Informados"
-        "</div>"
-        f'<div class="lista-rapida-metrica-valor">'
-        f"{total_informado}"
-        "</div>"
-        "</div>"
-        f'<div class="lista-rapida-metrica">'
-        '<div class="lista-rapida-metrica-label">'
-        "Gerados"
-        "</div>"
-        f'<div class="lista-rapida-metrica-valor">'
-        f"{total_gerado}"
-        "</div>"
-        "</div>"
-        f'<div class="lista-rapida-metrica">'
-        '<div class="lista-rapida-metrica-label">'
-        "Não encontrados"
-        "</div>"
-        f'<div class="lista-rapida-metrica-valor">'
-        f"{len(nao_encontrados)}"
-        "</div>"
-        "</div>"
-        f'<div class="lista-rapida-metrica">'
-        '<div class="lista-rapida-metrica-label">'
-        "Inválidos"
-        "</div>"
-        f'<div class="lista-rapida-metrica-valor">'
-        f"{len(entradas_invalidas)}"
-        "</div>"
-        "</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    if entradas_invalidas:
-        st.warning(
-            "Entradas não reconhecidas como protocolo: "
-            + ", ".join(
-                str(item)
-                for item in entradas_invalidas
-            )
-        )
-
-    if nao_encontrados:
-        st.warning(
-            "O.S. não encontrada: "
-            + ", ".join(
-                str(item)
-                for item in nao_encontrados
-            )
-        )
-
-    if df_resultado.empty:
-        st.error(
-            "Nenhum registro da lista foi encontrado no backlog."
-        )
-    else:
-        st.dataframe(
-            df_resultado,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        arquivo = dataframe_para_excel(
-            df_resultado,
-            nome_aba="Lista Rápida",
-        )
-
-        if arquivo is not None:
-            st.download_button(
-                label="⬇️ Baixar lote",
-                data=arquivo.getvalue(),
-                file_name=st.session_state.get(
-                    "lista_rapida_nome_arquivo",
-                    "Lista Rapida.xlsx",
-                ),
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
-                use_container_width=True,
-            )
-
-    st.markdown("---")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button(
-            "🧹 Limpar resultado",
-            use_container_width=True,
-        ):
-            limpar_resultado()
-            limpar_estado_lista_rapida()
-            st.rerun()
-
-    with col2:
-        if st.button(
-            "⬅️ Voltar",
-            use_container_width=True,
-        ):
-            limpar_resultado()
-            limpar_estado_lista_rapida()
-            st.session_state[
-                "ferramenta_atual"
-            ] = None
-            st.rerun()
-else:
-    st.markdown("---")
-
+if df_resultado is None:
     if st.button(
         "⬅️ Voltar",
+        key="lista_rapida_voltar",
         use_container_width=False,
     ):
         st.session_state[
             "ferramenta_atual"
         ] = None
         st.rerun()
-```
+
+    return
+
+st.markdown("---")
+
+st.markdown("### 📊 Prévia do lote")
+
+total_informado = (
+    log.get("total_informado", 0)
+    if log
+    else 0
+)
+
+total_gerado = len(df_resultado)
+
+nao_encontrados = (
+    log.get("nao_encontrados", [])
+    if log
+    else []
+)
+
+entradas_invalidas = (
+    log.get("entradas_invalidas", [])
+    if log
+    else []
+)
+
+st.markdown(
+    '<div class="lista-rapida-metricas">'
+    f'<div class="lista-rapida-metrica">'
+    '<div class="lista-rapida-metrica-label">'
+    "Informados"
+    "</div>"
+    f'<div class="lista-rapida-metrica-valor">'
+    f"{total_informado}"
+    "</div>"
+    "</div>"
+    f'<div class="lista-rapida-metrica">'
+    '<div class="lista-rapida-metrica-label">'
+    "Gerados"
+    "</div>"
+    f'<div class="lista-rapida-metrica-valor">'
+    f"{total_gerado}"
+    "</div>"
+    "</div>"
+    f'<div class="lista-rapida-metrica">'
+    '<div class="lista-rapida-metrica-label">'
+    "Não encontrados"
+    "</div>"
+    f'<div class="lista-rapida-metrica-valor">'
+    f"{len(nao_encontrados)}"
+    "</div>"
+    "</div>"
+    f'<div class="lista-rapida-metrica">'
+    '<div class="lista-rapida-metrica-label">'
+    "Inválidos"
+    "</div>"
+    f'<div class="lista-rapida-metrica-valor">'
+    f"{len(entradas_invalidas)}"
+    "</div>"
+    "</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+if entradas_invalidas:
+    st.warning(
+        "Entradas não reconhecidas como protocolo: "
+        + ", ".join(
+            str(item)
+            for item in entradas_invalidas
+        )
+    )
+
+if nao_encontrados:
+    st.warning(
+        "O.S. não encontrada: "
+        + ", ".join(
+            str(item)
+            for item in nao_encontrados
+        )
+    )
+
+if df_resultado.empty:
+    st.error(
+        "Nenhum registro da lista foi encontrado no backlog."
+    )
+else:
+    st.dataframe(
+        df_resultado,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    arquivo = dataframe_para_excel(
+        df_resultado,
+        nome_aba="Lista Rápida",
+    )
+
+    if arquivo is not None:
+        st.download_button(
+            label="⬇️ Baixar lote",
+            data=arquivo.getvalue(),
+            file_name=st.session_state.get(
+                "lista_rapida_nome_arquivo",
+                "Lista Rapida.xlsx",
+            ),
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+            key="lista_rapida_download",
+        )
+
+st.markdown("---")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button(
+        "🧹 Limpar resultado",
+        use_container_width=True,
+        key="lista_rapida_limpar_resultado",
+    ):
+        limpar_resultado()
+        limpar_estado_lista_rapida()
+        st.rerun()
+
+with col2:
+    if st.button(
+        "⬅️ Voltar",
+        use_container_width=True,
+        key="lista_rapida_voltar_resultado",
+    ):
+        limpar_resultado()
+        limpar_estado_lista_rapida()
+        st.session_state[
+            "ferramenta_atual"
