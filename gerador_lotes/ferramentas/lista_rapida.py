@@ -1,983 +1,854 @@
 import re
+import unicodedata
 
 import pandas as pd
 import streamlit as st
 
-from ..estado import obter_base, base_carregada, limpar_resultado
+from ..estado import (
+obter_base,
+base_carregada,
+limpar_resultado,
+)
 from ..exportacao import dataframe_para_excel
 from ..zonas import obter_zona
-
-
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
+from .componentes import selecionar_modo_api_the
 
 TIPO_ENCERRAMENTO = 6
 
 COLUNAS_LOTE = [
-    "Matricula",
-    "Zona Ligacao",
-    "Numero Do Pedido",
-    "Ano Do Pedido",
-    "Tipo Encerramento",
-    "Observações",
+"Matricula",
+"Zona Ligacao",
+"Numero Do Pedido",
+"Ano Do Pedido",
+"Tipo Encerramento",
+"Observações",
 ]
 
-
-# ============================================================
-# ESTILO
-# ============================================================
-
-def aplicar_modo_visual(modo_escuro):
-    if modo_escuro:
-        st.markdown(
-            """
-            <style>
-            .stApp {
-                background-color: #0e1117;
-                color: #f1f5f9;
-            }
-
-            [data-testid="stAppViewContainer"] {
-                background-color: #0e1117;
-            }
-
-            [data-testid="stHeader"] {
-                background-color: #0e1117;
-            }
-
-            h1, h2, h3, h4, h5, h6,
-            p, label,
-            [data-testid="stMarkdownContainer"] {
-                color: #f1f5f9;
-            }
-
-            .stCaption,
-            [data-testid="stCaptionContainer"] {
-                color: #aab4c3 !important;
-            }
-
-            div[data-testid="stVerticalBlockBorderWrapper"] {
-                background-color: #161b22;
-                border: 1px solid #30363d;
-                border-radius: 12px;
-            }
-
-            textarea,
-            input,
-            select {
-                background-color: #1b222c !important;
-                color: #f1f5f9 !important;
-                border-color: #3b4654 !important;
-            }
-
-            .stButton > button,
-            .stDownloadButton > button {
-                border-radius: 8px;
-                border: 1px solid #3b4654;
-            }
-
-            [data-testid="stSidebar"] {
-                background-color: #161b22;
-                border-right: 1px solid #30363d;
-            }
-
-            [data-testid="stSidebar"] * {
-                color: #f1f5f9;
-            }
-
-            [data-testid="stSidebar"] .stButton > button {
-                background-color: #212833 !important;
-                color: #f1f5f9 !important;
-                border: 1px solid #3b4654 !important;
-                border-radius: 8px !important;
-            }
-
-            [data-testid="stSidebar"] .stButton > button:hover {
-                background-color: #2b3441 !important;
-                color: #ffffff !important;
-                border-color: #64748b !important;
-            }
-
-            [data-testid="stSidebar"] .stButton > button p {
-                color: #f1f5f9 !important;
-            }
-
-            hr {
-                border-color: #30363d;
-            }
-
-            .lista-rapida-status {
-                font-size: 0.82rem;
-                margin-top: -0.1rem;
-                margin-bottom: 0.4rem;
-            }
-
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    else:
-        st.markdown(
-            """
-            <style>
-            .block-container {
-                padding-top: 2rem;
-                padding-bottom: 2rem;
-            }
-
-            h1 {
-                margin-bottom: 0.2rem;
-            }
-
-            h2, h3 {
-                margin-top: 0.5rem;
-            }
-
-            div[data-testid="stVerticalBlockBorderWrapper"] {
-                border-radius: 12px;
-            }
-
-            .lista-rapida-status {
-                font-size: 0.82rem;
-                margin-top: -0.1rem;
-                margin-bottom: 0.4rem;
-            }
-
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# ============================================================
-# UTILITÁRIOS
-# ============================================================
-
 def normalizar_texto(valor):
-    if valor is None:
-        return ""
+if valor is None:
+return ""
 
-    try:
-        if pd.isna(valor):
-            return ""
-    except Exception:
-        pass
+```
+if pd.isna(valor):
+    return ""
 
-    return str(valor).strip()
+texto = str(valor).strip().upper()
 
+texto = unicodedata.normalize(
+    "NFKD",
+    texto,
+).encode(
+    "ASCII",
+    "ignore",
+).decode(
+    "ASCII"
+)
 
-def encontrar_coluna(df, candidatos):
-    mapa = {
-        normalizar_texto(col).upper(): col
-        for col in df.columns
-    }
+texto = re.sub(r"\s+", " ", texto)
 
-    for candidato in candidatos:
-        chave = normalizar_texto(candidato).upper()
+return texto.strip()
+```
 
-        if chave in mapa:
-            return mapa[chave]
+def encontrar_coluna(df, nomes):
+if df is None or df.empty:
+return None
 
-    return None
+```
+mapa = {
+    normalizar_texto(coluna): coluna
+    for coluna in df.columns
+}
 
+for nome in nomes:
+    chave = normalizar_texto(nome)
+
+    if chave in mapa:
+        return mapa[chave]
+
+return None
+```
 
 def normalizar_numero(valor):
-    if valor is None:
-        return None
+if valor is None or pd.isna(valor):
+return None
 
-    try:
-        if pd.isna(valor):
-            return None
-    except Exception:
-        pass
+```
+texto = str(valor).strip()
 
-    texto = str(valor).strip()
-
-    if not texto:
-        return None
-
-    if re.fullmatch(r"\d+\.0+", texto):
-        texto = texto.split(".")[0]
-
-    numero = re.sub(r"\D", "", texto)
-
-    return numero or None
-
-
-def normalizar_ano(valor):
-    if valor is None:
-        return None
-
-    try:
-        if pd.isna(valor):
-            return None
-    except Exception:
-        pass
-
-    texto = str(valor).strip()
-
-    if re.fullmatch(r"\d+\.0+", texto):
-        texto = texto.split(".")[0]
-
-    match = re.search(r"\b(19|20)\d{2}\b", texto)
-
-    if match:
-        return match.group(0)
-
-    somente_digitos = re.sub(r"\D", "", texto)
-
-    if len(somente_digitos) == 4:
-        return somente_digitos
-
+if not texto:
     return None
 
+texto = texto.replace(",", ".")
+
+try:
+    numero = float(texto)
+
+    if numero.is_integer():
+        return str(int(numero))
+
+except (ValueError, TypeError):
+    pass
+
+numeros = re.findall(r"\d+", texto)
+
+if not numeros:
+    return None
+
+return str(int("".join(numeros)))
+```
+
+def normalizar_ano(valor):
+if valor is None or pd.isna(valor):
+return None
+
+```
+texto = str(valor).strip()
+
+if not texto:
+    return None
+
+match = re.search(r"(19|20)\d{2}", texto)
+
+if match:
+    return match.group(0)
+
+try:
+    numero = float(texto)
+
+    if numero.is_integer():
+        numero = int(numero)
+
+        if 1900 <= numero <= 2100:
+            return str(numero)
+
+except (ValueError, TypeError):
+    pass
+
+return None
+```
 
 def parse_protocolo(valor):
-    """
-    Aceita:
-        123456/2026
-        123456-2026
-        123456 / 2026
-        123456
-    """
+texto = str(valor).strip()
 
-    texto = normalizar_texto(valor)
-
-    if not texto:
-        return None, None
-
-    match = re.fullmatch(
-        r"(\d+)\s*[/\\\-]\s*(\d{4})",
-        texto,
-    )
-
-    if match:
-        return (
-            match.group(1),
-            match.group(2),
-        )
-
-    match = re.fullmatch(
-        r"(\d+)\s+(\d{4})",
-        texto,
-    )
-
-    if match:
-        return (
-            match.group(1),
-            match.group(2),
-        )
-
-    somente_digitos = re.sub(r"\D", "", texto)
-
-    if somente_digitos:
-        return somente_digitos, None
-
+```
+if not texto:
     return None, None
 
+texto = re.sub(r"\s+", "", texto)
+
+match = re.fullmatch(
+    r"(\d+)\s*/\s*(\d{4})",
+    texto,
+)
+
+if match:
+    return (
+        str(int(match.group(1))),
+        match.group(2),
+    )
+
+match = re.fullmatch(
+    r"(\d+)",
+    texto,
+)
+
+if match:
+    return (
+        str(int(match.group(1))),
+        None,
+    )
+
+match = re.search(
+    r"(\d+)\s*/\s*(\d{4})",
+    texto,
+)
+
+if match:
+    return (
+        str(int(match.group(1))),
+        match.group(2),
+    )
+
+match = re.search(
+    r"\d+",
+    texto,
+)
+
+if match:
+    return (
+        str(int(match.group(0))),
+        None,
+    )
+
+return None, None
+```
 
 def extrair_protocolos(texto):
-    if texto is None:
-        return []
+if not texto:
+return []
 
-    texto = str(texto).strip()
+```
+partes = re.split(
+    r"[\n,;]+",
+    str(texto),
+)
 
-    if not texto:
-        return []
+protocolos = []
 
-    itens = re.split(
-        r"[\n,;]+",
-        texto,
-    )
+for parte in partes:
+    parte = parte.strip()
 
-    return [
-        item.strip()
-        for item in itens
-        if item.strip()
-    ]
+    if not parte:
+        continue
 
+    numero, ano = parse_protocolo(parte)
 
-# ============================================================
-# PREPARAÇÃO DO BACKLOG
-# ============================================================
-
-def preparar_backlog(df):
-    coluna_numero = encontrar_coluna(
-        df,
-        [
-            "COD. PROTOCOLO ORIGEM",
-            "COD PROTOCOLO ORIGEM",
-            "PROTOCOLO ORIGEM",
-        ],
-    )
-
-    coluna_ano = encontrar_coluna(
-        df,
-        [
-            "ANO DO PEDIDO",
-            "ANO DO PEDIDO ORIGEM",
-            "ANO",
-        ],
-    )
-
-    coluna_matricula = encontrar_coluna(
-        df,
-        [
-            "MATRICULA",
-            "MATRÍCULA",
-        ],
-    )
-
-    coluna_cidade = encontrar_coluna(
-        df,
-        [
-            "CIDADE",
-        ],
-    )
-
-    if coluna_numero is None:
-        raise ValueError(
-            "A base selecionada não possui a coluna "
-            "'COD. PROTOCOLO ORIGEM'."
-        )
-
-    if coluna_ano is None:
-        raise ValueError(
-            "A base selecionada não possui a coluna "
-            "'ANO DO PEDIDO'."
-        )
-
-    if coluna_matricula is None:
-        raise ValueError(
-            "A base selecionada não possui a coluna "
-            "'MATRICULA'."
-        )
-
-    if coluna_cidade is None:
-        raise ValueError(
-            "A base selecionada não possui a coluna "
-            "'CIDADE'."
-        )
-
-    backlog = df.copy()
-
-    backlog["_lista_numero"] = backlog[
-        coluna_numero
-    ].apply(normalizar_numero)
-
-    backlog["_lista_ano"] = backlog[
-        coluna_ano
-    ].apply(normalizar_ano)
-
-    backlog["_lista_cidade"] = backlog[
-        coluna_cidade
-    ].apply(normalizar_texto)
-
-    return (
-        backlog,
-        coluna_matricula,
-    )
-
-
-# ============================================================
-# CRUZAMENTO
-# ============================================================
-
-def cruzar_lista_com_backlog(
-    df,
-    itens_lista,
-    modo,
-    observacoes,
-):
-    backlog, coluna_matricula = preparar_backlog(df)
-
-    encontrados = []
-    nao_encontrados = []
-
-    incluidos = set()
-
-    for item in itens_lista:
-
-        numero, ano = parse_protocolo(item)
-
-        if numero is None:
-            nao_encontrados.append(
-                {
-                    "Entrada": item,
-                    "Motivo": "O.S. inválida",
-                }
-            )
-            continue
-
-        # ----------------------------------------------------
-        # PRIMEIRA TENTATIVA:
-        # número + ano
-        # ----------------------------------------------------
-
-        candidatos = pd.DataFrame()
-
-        if ano is not None:
-            candidatos = backlog[
-                (backlog["_lista_numero"] == numero)
-                & (backlog["_lista_ano"] == ano)
-            ]
-
-        # ----------------------------------------------------
-        # SEGUNDA TENTATIVA:
-        # somente número
-        # ----------------------------------------------------
-
-        if candidatos.empty:
-            candidatos = backlog[
-                backlog["_lista_numero"] == numero
-            ]
-
-        if candidatos.empty:
-            nao_encontrados.append(
-                {
-                    "Entrada": item,
-                    "Motivo": "O.S. não encontrada",
-                }
-            )
-            continue
-
-        # ----------------------------------------------------
-        # SE HOUVER MAIS DE UMA OCORRÊNCIA,
-        # utiliza a primeira ocorrência encontrada.
-        # ----------------------------------------------------
-
-        linha = candidatos.iloc[0]
-
-        numero_encontrado = normalizar_numero(
-            linha["_lista_numero"]
-        )
-
-        ano_encontrado = normalizar_ano(
-            linha["_lista_ano"]
-        )
-
-        chave = (
-            numero_encontrado,
-            ano_encontrado,
-        )
-
-        # ----------------------------------------------------
-        # EVITA DUPLICIDADE NA PRÓPRIA LISTA
-        # ----------------------------------------------------
-
-        if chave in incluidos:
-            continue
-
-        cidade = normalizar_texto(
-            linha["_lista_cidade"]
-        )
-
-        # ----------------------------------------------------
-        # ZONA
-        # ----------------------------------------------------
-
-        if modo == "THE":
-            zona = 1
-        else:
-            zona = obter_zona(cidade)
-
-        if zona is None:
-            nao_encontrados.append(
-                {
-                    "Entrada": item,
-                    "Motivo": (
-                        f"Cidade sem zona cadastrada: {cidade}"
-                    ),
-                }
-            )
-            continue
-
-        # ----------------------------------------------------
-        # REGISTRO DO LOTE
-        # ----------------------------------------------------
-
-        encontrados.append(
+    if numero is None:
+        protocolos.append(
             {
-                "Matricula": linha[coluna_matricula],
-                "Zona Ligacao": zona,
-                "Numero Do Pedido": numero_encontrado,
-                "Ano Do Pedido": ano_encontrado,
-                "Tipo Encerramento": TIPO_ENCERRAMENTO,
-                "Observações": observacoes,
+                "entrada": parte,
+                "numero": None,
+                "ano": None,
+                "valido": False,
             }
         )
+        continue
 
-        incluidos.add(chave)
-
-    resultado = pd.DataFrame(
-        encontrados,
-        columns=COLUNAS_LOTE,
+    protocolos.append(
+        {
+            "entrada": parte,
+            "numero": numero,
+            "ano": ano,
+            "valido": True,
+        }
     )
 
-    return resultado, nao_encontrados
+return protocolos
+```
 
+def preparar_backlog(df):
+if df is None or df.empty:
+return None, None
 
-# ============================================================
-# ESTADO
-# ============================================================
+```
+col_numero = encontrar_coluna(
+    df,
+    [
+        "COD. PROTOCOLO ORIGEM",
+        "COD PROTOCOLO ORIGEM",
+        "CODIGO PROTOCOLO ORIGEM",
+    ],
+)
 
-def inicializar_estado_lista_rapida():
+col_ano = encontrar_coluna(
+    df,
+    [
+        "ANO",
+        "ANO DO PEDIDO",
+        "ANO PEDIDO",
+    ],
+)
 
-    if "lista_rapida_modo_api_the" not in st.session_state:
-        st.session_state[
-            "lista_rapida_modo_api_the"
-        ] = None
+col_matricula = encontrar_coluna(
+    df,
+    [
+        "MATRICULA",
+        "MATRÍCULA",
+    ],
+)
 
-    if "lista_rapida_protocolos" not in st.session_state:
-        st.session_state[
-            "lista_rapida_protocolos"
-        ] = ""
+col_cidade = encontrar_coluna(
+    df,
+    [
+        "CIDADE",
+        "MUNICIPIO",
+        "MUNICÍPIO",
+    ],
+)
 
-    if "lista_rapida_observacoes" not in st.session_state:
-        st.session_state[
-            "lista_rapida_observacoes"
-        ] = ""
+if col_numero is None:
+    return None, (
+        "A base selecionada não possui a coluna "
+        "'COD. PROTOCOLO ORIGEM'."
+    )
 
-    if "lista_rapida_gerada" not in st.session_state:
-        st.session_state[
-            "lista_rapida_gerada"
-        ] = False
+if col_matricula is None:
+    return None, (
+        "A base selecionada não possui a coluna "
+        "'MATRICULA'."
+    )
 
-    if "lista_rapida_resultado" not in st.session_state:
-        st.session_state[
-            "lista_rapida_resultado"
-        ] = None
+if col_cidade is None:
+    return None, (
+        "A base selecionada não possui a coluna "
+        "'CIDADE'."
+    )
 
-    if "lista_rapida_nao_encontrados" not in st.session_state:
-        st.session_state[
-            "lista_rapida_nao_encontrados"
-        ] = []
+base = df.copy()
 
+base["_numero_lista_rapida"] = base[
+    col_numero
+].apply(normalizar_numero)
+
+if col_ano is not None:
+    base["_ano_lista_rapida"] = base[
+        col_ano
+    ].apply(normalizar_ano)
+else:
+    base["_ano_lista_rapida"] = None
+
+base["_matricula_lista_rapida"] = base[
+    col_matricula
+]
+
+base["_cidade_lista_rapida"] = base[
+    col_cidade
+]
+
+base = base[
+    base["_numero_lista_rapida"].notna()
+].copy()
+
+return base, None
+```
+
+def cruzar_lista_com_backlog(
+protocolos,
+df_backlog,
+modo,
+observacoes,
+):
+base, erro = preparar_backlog(df_backlog)
+
+```
+if erro:
+    return (
+        pd.DataFrame(columns=COLUNAS_LOTE),
+        [],
+        [],
+        erro,
+    )
+
+if base is None or base.empty:
+    return (
+        pd.DataFrame(columns=COLUNAS_LOTE),
+        [],
+        [],
+        "A base selecionada não possui registros válidos.",
+    )
+
+resultado = []
+
+encontrados = 0
+nao_encontrados = []
+entradas_invalidas = []
+
+processados = set()
+
+for item in protocolos:
+    entrada = item["entrada"]
+    numero = item["numero"]
+    ano = item["ano"]
+
+    if not item["valido"] or numero is None:
+        entradas_invalidas.append(entrada)
+        continue
+
+    chave_entrada = (
+        numero,
+        ano,
+    )
+
+    if chave_entrada in processados:
+        continue
+
+    processados.add(chave_entrada)
+
+    candidato = base[
+        base["_numero_lista_rapida"] == numero
+    ]
+
+    if ano is not None:
+        candidato_ano = candidato[
+            candidato["_ano_lista_rapida"] == ano
+        ]
+
+        if not candidato_ano.empty:
+            candidato = candidato_ano
+
+    if candidato.empty:
+        nao_encontrados.append(
+            entrada
+        )
+        continue
+
+    linha = candidato.iloc[0]
+
+    cidade = linha[
+        "_cidade_lista_rapida"
+    ]
+
+    if modo == "THE":
+        zona = 1
+    else:
+        zona = obter_zona(cidade)
+
+    if zona is None:
+        nao_encontrados.append(
+            f"{entrada} — cidade sem zona: {cidade}"
+        )
+        continue
+
+    matricula = linha[
+        "_matricula_lista_rapida"
+    ]
+
+    ano_final = linha[
+        "_ano_lista_rapida"
+    ]
+
+    if ano_final is None:
+        ano_final = ano
+
+    resultado.append(
+        {
+            "Matricula": matricula,
+            "Zona Ligacao": zona,
+            "Numero Do Pedido": numero,
+            "Ano Do Pedido": ano_final,
+            "Tipo Encerramento": TIPO_ENCERRAMENTO,
+            "Observações": observacoes,
+        }
+    )
+
+    encontrados += 1
+
+df_resultado = pd.DataFrame(
+    resultado,
+    columns=COLUNAS_LOTE,
+)
+
+return (
+    df_resultado,
+    nao_encontrados,
+    entradas_invalidas,
+    None,
+)
+```
 
 def limpar_estado_lista_rapida():
+chaves = [
+"lista_rapida_resultado",
+"lista_rapida_log",
+"lista_rapida_nome_arquivo",
+"lista_rapida_protocolos",
+"lista_rapida_observacoes",
+"lista_rapida_geracao_info",
+]
 
-    st.session_state[
-        "lista_rapida_protocolos"
-    ] = ""
+```
+for chave in chaves:
+    if chave in st.session_state:
+        st.session_state[chave] = None
+```
 
-    st.session_state[
-        "lista_rapida_observacoes"
-    ] = ""
+def aplicar_estilo_lista_rapida():
+st.markdown(
+""" <style>
+.lista-rapida-card {
+border: 1px solid rgba(128, 128, 128, 0.25);
+border-radius: 12px;
+padding: 18px;
+margin-bottom: 18px;
+}
 
-    st.session_state[
-        "lista_rapida_gerada"
-    ] = False
+```
+    .lista-rapida-titulo {
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-bottom: 4px;
+    }
 
-    st.session_state[
-        "lista_rapida_resultado"
-    ] = None
+    .lista-rapida-subtitulo {
+        color: #888;
+        font-size: 0.9rem;
+        margin-bottom: 12px;
+    }
 
-    st.session_state[
-        "lista_rapida_nao_encontrados"
-    ] = []
+    .lista-rapida-metricas {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 12px 0 18px 0;
+    }
 
+    .lista-rapida-metrica {
+        border: 1px solid rgba(128, 128, 128, 0.25);
+        border-radius: 10px;
+        padding: 10px 16px;
+        min-width: 150px;
+    }
 
-# ============================================================
-# RENDERIZAÇÃO
-# ============================================================
+    .lista-rapida-metrica-label {
+        font-size: 0.8rem;
+        opacity: 0.7;
+    }
+
+    .lista-rapida-metrica-valor {
+        font-size: 1.35rem;
+        font-weight: 700;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+```
 
 def render_lista_rapida():
+aplicar_estilo_lista_rapida()
 
-    inicializar_estado_lista_rapida()
+```
+st.markdown(
+    "## 📋 Lista Rápida"
+)
 
-    modo_escuro = st.session_state.get(
-        "modo_escuro_gerador",
-        False,
+st.caption(
+    "Geração de lote de cancelamento a partir de uma lista de O.S./protocolos."
+)
+
+if not base_carregada("api") and not base_carregada("the"):
+    st.warning(
+        "Nenhuma base de operação disponível. "
+        "Carregue a base API e/ou THE no Hub."
     )
-
-    aplicar_modo_visual(modo_escuro)
-
-    # ========================================================
-    # CABEÇALHO
-    # ========================================================
-
-    st.title("⚡ Lista Rápida")
-
-    st.caption(
-        "Cole uma lista de protocolos/O.S. para gerar "
-        "rapidamente um lote de cancelamento."
-    )
-
-    st.divider()
-
-    # ========================================================
-    # BASE DE OPERAÇÃO
-    # ========================================================
-
-    bases_disponiveis = []
-
-    if base_carregada("api"):
-        bases_disponiveis.append("API")
-
-    if base_carregada("the"):
-        bases_disponiveis.append("THE")
-
-    if not bases_disponiveis:
-
-        st.warning(
-            "Nenhuma base API ou THE está carregada."
-        )
-
-        st.info(
-            "Volte ao Hub, carregue uma base API ou THE "
-            "e depois acesse novamente esta ferramenta."
-        )
-
-        st.divider()
-
-        if st.button(
-            "⬅️ Voltar ao Hub",
-            use_container_width=True,
-            key="btn_voltar_hub_lista_rapida_sem_base",
-        ):
-            st.session_state.ferramenta_atual = None
-            limpar_estado_lista_rapida()
-            limpar_resultado()
-            st.rerun()
-
-        st.stop()
-
-    modo_anterior = st.session_state.get(
-        "lista_rapida_modo_api_the"
-    )
-
-    if modo_anterior not in bases_disponiveis:
-        modo_anterior = bases_disponiveis[0]
-
-    modo = st.radio(
-        "Base de operação",
-        bases_disponiveis,
-        index=bases_disponiveis.index(
-            modo_anterior
-        ),
-        horizontal=True,
-        key="lista_rapida_modo_api_the",
-    )
-
-    nome_base = (
-        "api"
-        if modo == "API"
-        else "the"
-    )
-
-    df = obter_base(nome_base)
-
-    if df is None or df.empty:
-        st.warning(
-            f"A base {modo} não possui dados disponíveis."
-        )
-        st.stop()
-
-    # ========================================================
-    # INFORMAÇÕES DA BASE
-    # ========================================================
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "Base",
-            modo,
-        )
-
-    with col2:
-        st.metric(
-            "Registros",
-            f"{len(df):,}".replace(",", "."),
-        )
-
-    with col3:
-        st.metric(
-            "Colunas",
-            f"{len(df.columns):,}".replace(",", "."),
-        )
-
-    st.divider()
-
-    # ========================================================
-    # LISTA
-    # ========================================================
-
-    st.markdown("### 📋 Protocolos / O.S.")
-
-    st.caption(
-        "Cole um item por linha ou utilize vírgulas ou "
-        "ponto e vírgula para separar os protocolos."
-    )
-
-    st.text_area(
-        "Lista de protocolos",
-        height=220,
-        placeholder=(
-            "Exemplo:\n"
-            "123456/2026\n"
-            "123457/2026\n"
-            "123458/2026"
-        ),
-        key="lista_rapida_protocolos",
-        label_visibility="collapsed",
-    )
-
-    # ========================================================
-    # OBSERVAÇÕES
-    # ========================================================
-
-    st.markdown("### 📝 Observações")
-
-    st.caption(
-        "Digite a observação que deverá ser gravada "
-        "no lote gerado."
-    )
-
-    st.text_area(
-        "Observações do lote",
-        height=120,
-        placeholder=(
-            "Digite aqui a observação que será aplicada "
-            "aos registros do lote."
-        ),
-        key="lista_rapida_observacoes",
-        label_visibility="collapsed",
-    )
-
-    st.divider()
-
-    # ========================================================
-    # GERAÇÃO
-    # ========================================================
 
     if st.button(
-        "⚡ Gerar Lote",
-        type="primary",
-        use_container_width=True,
-        key="btn_gerar_lista_rapida",
+        "⬅️ Voltar ao Gerador de Lotes",
+        use_container_width=False,
     ):
-
-        texto = st.session_state.get(
-            "lista_rapida_protocolos",
-            "",
-        )
-
-        itens_lista = extrair_protocolos(texto)
-
-        if not itens_lista:
-            st.warning(
-                "Informe pelo menos uma O.S. ou protocolo."
-            )
-            st.stop()
-
-        observacoes = st.session_state.get(
-            "lista_rapida_observacoes",
-            "",
-        ).strip()
-
-        with st.spinner(
-            "Cruzando a lista com o backlog..."
-        ):
-
-            resultado, nao_encontrados = (
-                cruzar_lista_com_backlog(
-                    df=df,
-                    itens_lista=itens_lista,
-                    modo=modo,
-                    observacoes=observacoes,
-                )
-            )
-
-        st.session_state[
-            "lista_rapida_resultado"
-        ] = resultado
-
-        st.session_state[
-            "lista_rapida_nao_encontrados"
-        ] = nao_encontrados
-
-        st.session_state[
-            "lista_rapida_gerada"
-        ] = True
-
+        st.session_state["ferramenta_atual"] = None
         st.rerun()
 
-    # ========================================================
-    # RESULTADO
-    # ========================================================
+    return
 
-    if not st.session_state.get(
-        "lista_rapida_gerada",
-        False,
-    ):
+if "lista_rapida_resultado" not in st.session_state:
+    st.session_state["lista_rapida_resultado"] = None
 
-        st.divider()
+if "lista_rapida_log" not in st.session_state:
+    st.session_state["lista_rapida_log"] = None
 
-        if st.button(
-            "⬅️ Voltar ao Hub",
-            use_container_width=True,
-            key="btn_voltar_hub_lista_rapida",
-        ):
-            st.session_state.ferramenta_atual = None
-            limpar_estado_lista_rapida()
-            limpar_resultado()
-            st.rerun()
+if "lista_rapida_nome_arquivo" not in st.session_state:
+    st.session_state["lista_rapida_nome_arquivo"] = None
 
-        return
+if "lista_rapida_protocolos" not in st.session_state:
+    st.session_state["lista_rapida_protocolos"] = ""
 
-    resultado = st.session_state.get(
+if "lista_rapida_observacoes" not in st.session_state:
+    st.session_state["lista_rapida_observacoes"] = ""
+
+modo, df_backlog = selecionar_modo_api_the(
+    key="lista_rapida_modo",
+    titulo="Base de operação",
+    limpar_resultado_callback=limpar_estado_lista_rapida,
+)
+
+if modo is None or df_backlog is None:
+    return
+
+st.markdown(
+    '<div class="lista-rapida-card">',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="lista-rapida-titulo">📋 Lista de protocolos</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="lista-rapida-subtitulo">'
+    "Informe uma O.S./protocolo por linha ou separe os registros por vírgula."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+protocolos_texto = st.text_area(
+    "Protocolos / O.S.",
+    height=230,
+    placeholder=(
+        "Exemplo:\n"
+        "123456/2026\n"
+        "123457/2026\n"
+        "123458/2026"
+    ),
+    key="lista_rapida_protocolos",
+    label_visibility="visible",
+)
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="lista-rapida-card">',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="lista-rapida-titulo">📝 Observações</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="lista-rapida-subtitulo">'
+    "Texto definido livremente pelo usuário e aplicado ao lote gerado."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+observacoes = st.text_area(
+    "Observações do lote",
+    height=120,
+    placeholder="Digite a observação que deverá constar no lote.",
+    key="lista_rapida_observacoes",
+    label_visibility="visible",
+)
+
+st.markdown(
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+st.markdown("### 📦 Geração do lote")
+
+if st.button(
+    "⚙️ Gerar lote",
+    type="primary",
+    use_container_width=True,
+):
+    limpar_estado_lista_rapida()
+
+    if not protocolos_texto.strip():
+        st.warning(
+            "Informe pelo menos uma O.S./protocolo."
+        )
+        st.stop()
+
+    protocolos = extrair_protocolos(
+        protocolos_texto
+    )
+
+    if not protocolos:
+        st.warning(
+            "Nenhum protocolo válido foi identificado."
+        )
+        st.stop()
+
+    (
+        df_resultado,
+        nao_encontrados,
+        entradas_invalidas,
+        erro,
+    ) = cruzar_lista_com_backlog(
+        protocolos=protocolos,
+        df_backlog=df_backlog,
+        modo=modo,
+        observacoes=observacoes,
+    )
+
+    if erro:
+        st.error(erro)
+        st.stop()
+
+    st.session_state[
         "lista_rapida_resultado"
+    ] = df_resultado
+
+    st.session_state[
+        "lista_rapida_log"
+    ] = {
+        "nao_encontrados": nao_encontrados,
+        "entradas_invalidas": entradas_invalidas,
+        "total_informado": len(protocolos),
+        "total_gerado": len(df_resultado),
+    }
+
+    nome_base = (
+        "API"
+        if modo == "API"
+        else "THE"
     )
 
-    nao_encontrados = st.session_state.get(
-        "lista_rapida_nao_encontrados",
-        [],
+    st.session_state[
+        "lista_rapida_nome_arquivo"
+    ] = f"Lista Rapida {nome_base}.xlsx"
+
+    st.session_state[
+        "lista_rapida_geracao_info"
+    ] = {
+        "modo": modo,
+        "total_informado": len(protocolos),
+        "total_gerado": len(df_resultado),
+    }
+
+    st.rerun()
+
+df_resultado = st.session_state.get(
+    "lista_rapida_resultado"
+)
+
+log = st.session_state.get(
+    "lista_rapida_log"
+)
+
+if df_resultado is not None:
+    st.markdown("---")
+
+    st.markdown("### 📊 Prévia do lote")
+
+    total_informado = (
+        log.get("total_informado", 0)
+        if log
+        else 0
     )
 
-    if resultado is None:
-        resultado = pd.DataFrame(
-            columns=COLUNAS_LOTE
-        )
-
-    itens_informados = extrair_protocolos(
-        st.session_state.get(
-            "lista_rapida_protocolos",
-            "",
-        )
+    total_gerado = (
+        len(df_resultado)
     )
 
-    st.divider()
-
-    st.markdown("### 📊 Resultado")
-
-    col_resultado_1, col_resultado_2, col_resultado_3 = (
-        st.columns(3)
+    nao_encontrados = (
+        log.get("nao_encontrados", [])
+        if log
+        else []
     )
 
-    with col_resultado_1:
-        st.metric(
-            "Itens informados",
-            f"{len(itens_informados):,}".replace(
-                ",",
-                ".",
-            ),
-        )
+    entradas_invalidas = (
+        log.get("entradas_invalidas", [])
+        if log
+        else []
+    )
 
-    with col_resultado_2:
-        st.metric(
-            "Incluídos no lote",
-            f"{len(resultado):,}".replace(
-                ",",
-                ".",
-            ),
-        )
+    st.markdown(
+        '<div class="lista-rapida-metricas">'
+        f'<div class="lista-rapida-metrica">'
+        '<div class="lista-rapida-metrica-label">'
+        "Informados"
+        "</div>"
+        f'<div class="lista-rapida-metrica-valor">'
+        f"{total_informado}"
+        "</div>"
+        "</div>"
+        f'<div class="lista-rapida-metrica">'
+        '<div class="lista-rapida-metrica-label">'
+        "Gerados"
+        "</div>"
+        f'<div class="lista-rapida-metrica-valor">'
+        f"{total_gerado}"
+        "</div>"
+        "</div>"
+        f'<div class="lista-rapida-metrica">'
+        '<div class="lista-rapida-metrica-label">'
+        "Não encontrados"
+        "</div>"
+        f'<div class="lista-rapida-metrica-valor">'
+        f"{len(nao_encontrados)}"
+        "</div>"
+        "</div>"
+        f'<div class="lista-rapida-metrica">'
+        '<div class="lista-rapida-metrica-label">'
+        "Inválidos"
+        "</div>"
+        f'<div class="lista-rapida-metrica-valor">'
+        f"{len(entradas_invalidas)}"
+        "</div>"
+        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
-    with col_resultado_3:
-        st.metric(
-            "Não encontrados",
-            f"{len(nao_encontrados):,}".replace(
-                ",",
-                ".",
-            ),
+    if entradas_invalidas:
+        st.warning(
+            "Entradas não reconhecidas como protocolo: "
+            + ", ".join(
+                str(item)
+                for item in entradas_invalidas
+            )
         )
-
-    # ========================================================
-    # NÃO ENCONTRADOS
-    # ========================================================
 
     if nao_encontrados:
-
         st.warning(
-            f"{len(nao_encontrados)} item(ns) não foram "
-            "incluídos no lote."
+            "O.S. não encontrada: "
+            + ", ".join(
+                str(item)
+                for item in nao_encontrados
+            )
         )
 
-        with st.expander(
-            "Ver O.S. não encontradas",
-            expanded=False,
-        ):
-
-            df_nao_encontrados = pd.DataFrame(
-                nao_encontrados
-            )
-
-            st.dataframe(
-                df_nao_encontrados,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-    # ========================================================
-    # LOTE
-    # ========================================================
-
-    if resultado.empty:
-
+    if df_resultado.empty:
         st.error(
-            "Nenhuma O.S. válida foi encontrada no backlog."
+            "Nenhum registro da lista foi encontrado no backlog."
         )
-
     else:
-
-        st.markdown("#### 📦 Lote gerado")
-
         st.dataframe(
-            resultado,
+            df_resultado,
             use_container_width=True,
             hide_index=True,
         )
 
         arquivo = dataframe_para_excel(
-            resultado,
-            nome_aba="Lote",
+            df_resultado,
+            nome_aba="Lista Rápida",
         )
 
-        st.download_button(
-            "📥 Baixar lote Excel",
-            data=(
-                arquivo
-                if arquivo is not None
-                else b""
-            ),
-            file_name="Lista_Rapida_Cancelamento.xlsx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            use_container_width=True,
-            disabled=arquivo is None,
-            key="btn_baixar_lista_rapida",
-        )
+        if arquivo is not None:
+            st.download_button(
+                label="⬇️ Baixar lote",
+                data=arquivo.getvalue(),
+                file_name=st.session_state.get(
+                    "lista_rapida_nome_arquivo",
+                    "Lista Rapida.xlsx",
+                ),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+            )
 
-    st.divider()
+    st.markdown("---")
 
-    # ========================================================
-    # AÇÕES
-    # ========================================================
+    col1, col2 = st.columns(2)
 
-    col_acao_1, col_acao_2 = st.columns(2)
-
-    with col_acao_1:
-
+    with col1:
         if st.button(
-            "🗑️ Limpar lista",
+            "🧹 Limpar resultado",
             use_container_width=True,
-            key="btn_limpar_lista_rapida",
         ):
-            limpar_estado_lista_rapida()
-            st.rerun()
-
-    with col_acao_2:
-
-        if st.button(
-            "⬅️ Voltar ao Hub",
-            use_container_width=True,
-            key="btn_voltar_hub_lista_rapida_resultado",
-        ):
-            st.session_state.ferramenta_atual = None
-            limpar_estado_lista_rapida()
             limpar_resultado()
+            limpar_estado_lista_rapida()
             st.rerun()
+
+    with col2:
+        if st.button(
+            "⬅️ Voltar",
+            use_container_width=True,
+        ):
+            limpar_resultado()
+            limpar_estado_lista_rapida()
+            st.session_state[
+                "ferramenta_atual"
+            ] = None
+            st.rerun()
+else:
+    st.markdown("---")
+
+    if st.button(
+        "⬅️ Voltar",
+        use_container_width=False,
+    ):
+        st.session_state[
+            "ferramenta_atual"
+        ] = None
+        st.rerun()
+```
