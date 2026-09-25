@@ -136,6 +136,11 @@ if modo_escuro_cadastros:
         unsafe_allow_html=True,
     )
 
+# ============================================================
+# CONSTANTES
+# ============================================================
+
+SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
