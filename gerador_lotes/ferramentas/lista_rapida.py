@@ -554,32 +554,32 @@ def render_lista_rapida():
         )
 
         arquivo = dataframe_para_excel(
-    df_resultado,
-    nome_aba="Lista Rápida",
-)
+            df_resultado,
+            nome_aba="Lista Rápida",
+        )
 
-if arquivo is not None:
-    # dataframe_para_excel já retorna bytes
-    dados_excel = (
-        arquivo
-        if isinstance(arquivo, (bytes, bytearray))
-        else arquivo.getvalue()
-    )
+        if arquivo is not None:
+            # dataframe_para_excel pode retornar bytes ou BytesIO
+            dados_excel = (
+                arquivo
+                if isinstance(arquivo, (bytes, bytearray))
+                else arquivo.getvalue()
+            )
 
-    st.download_button(
-        label="⬇️ Baixar lote",
-        data=dados_excel,
-        file_name=st.session_state.get(
-            "lista_rapida_nome_arquivo",
-            "Lista Rapida.xlsx",
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-        key="lista_rapida_download",
-    )
+            st.download_button(
+                label="⬇️ Baixar lote",
+                data=dados_excel,
+                file_name=st.session_state.get(
+                    "lista_rapida_nome_arquivo",
+                    "Lista Rapida.xlsx",
+                ),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+                key="lista_rapida_download",
+            )
 
     st.markdown("---")
     col1, col2 = st.columns(2)
