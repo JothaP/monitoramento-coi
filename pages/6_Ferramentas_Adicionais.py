@@ -16,6 +16,36 @@ st.set_page_config(
 
 
 # ============================================================
+# SIDEBAR
+# ============================================================
+
+if "modo_escuro_ferramentas" not in st.session_state:
+    st.session_state["modo_escuro_ferramentas"] = False
+
+with st.sidebar:
+    st.markdown("## ⚙️ Opções")
+
+    modo_escuro = st.toggle(
+        "🌙 Modo escuro",
+        value=st.session_state["modo_escuro_ferramentas"],
+        key="toggle_modo_escuro_ferramentas",
+    )
+
+    if modo_escuro != st.session_state["modo_escuro_ferramentas"]:
+        st.session_state["modo_escuro_ferramentas"] = modo_escuro
+        st.rerun()
+
+    st.divider()
+
+    if st.button(
+        "🏢 Voltar ao Hub Central",
+        key="voltar_hub_sidebar_ferramentas",
+        use_container_width=True,
+    ):
+        st.switch_page("app.py")
+
+
+# ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
@@ -38,8 +68,25 @@ if st.session_state.get("perfil") != "admin":
 # ESTILO
 # ============================================================
 
+DARK_CSS = """
+<style>
+[data-testid="stAppViewContainer"] {
+    background-color: #0e1117;
+}
+[data-testid="stHeader"] {
+    background-color: #0e1117;
+}
+[data-testid="stSidebar"] {
+    background-color: #161b22;
+}
+[data-testid="stSidebar"] * {
+    color: #f0f2f6;
+}
+</style>
+""" if st.session_state.get("modo_escuro_ferramentas") else ""
+
 st.markdown(
-    """
+    DARK_CSS + """
     <style>
     .titulo-ferramentas {
         background: linear-gradient(135deg, #17365D, #1F4E78);
@@ -87,6 +134,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 # ============================================================
