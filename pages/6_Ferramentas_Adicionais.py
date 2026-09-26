@@ -1,7 +1,7 @@
-import io
-import re
+```python
+import importlib.util
+import os
 
-import pandas as pd
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -57,34 +57,66 @@ verificar_autenticacao()
 
 if not st.session_state.get("autenticado"):
     st.warning("Sessão não iniciada ou expirada.")
-    if st.button("🔐 Ir para o login", key="ir_login_ferramentas", use_container_width=True):
+
+    if st.button(
+        "🔐 Ir para o login",
+        key="ir_login_ferramentas",
+        use_container_width=True,
+    ):
         st.switch_page("app.py")
+
     st.stop()
+
 
 if st.session_state.get("perfil") != "admin":
     st.error("Este módulo é restrito a administradores.")
-    if st.button("↩️ Voltar ao Hub", key="voltar_hub_restrito_ferramentas", use_container_width=True):
+
+    if st.button(
+        "↩️ Voltar ao Hub",
+        key="voltar_hub_restrito_ferramentas",
+        use_container_width=True,
+    ):
         st.switch_page("app.py")
+
     st.stop()
 
 
 # ============================================================
-# ESTILO
+# ESTILO — MODO ESCURO
 # ============================================================
 
 if st.session_state.get("modo_escuro_ferramentas"):
     st.markdown(
         """
         <style>
-        [data-testid="stAppViewContainer"] { background-color: #0e1117; }
-        [data-testid="stHeader"] { background-color: #0e1117; }
-        [data-testid="stSidebar"] { background-color: #161b22; }
-        [data-testid="stSidebar"] * { color: #f0f2f6; }
-        .secao-ferramentas p { color: #b8c0cc !important; }
+        [data-testid="stAppViewContainer"] {
+            background-color: #0e1117;
+        }
+
+        [data-testid="stHeader"] {
+            background-color: #0e1117;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #161b22;
+        }
+
+        [data-testid="stSidebar"] * {
+            color: #f0f2f6;
+        }
+
+        .secao-ferramentas p {
+            color: #b8c0cc !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+# ============================================================
+# ESTILO GERAL
+# ============================================================
 
 st.markdown(
     """
@@ -96,28 +128,34 @@ st.markdown(
         border-radius: 14px;
         margin-bottom: 24px;
     }
+
     .titulo-ferramentas h1 {
         margin: 0;
         font-size: 28px;
         font-weight: 700;
     }
+
     .titulo-ferramentas p {
         margin: 7px 0 0 0;
         font-size: 14px;
         opacity: 0.92;
     }
+
     .secao-ferramentas {
         margin-top: 10px;
         margin-bottom: 12px;
     }
+
     .secao-ferramentas h2 {
         font-size: 21px;
         margin-bottom: 4px;
     }
+
     .secao-ferramentas p {
         margin-top: 0;
         margin-bottom: 14px;
     }
+
     div.stButton > button {
         min-height: 64px;
         border-radius: 10px;
@@ -146,21 +184,63 @@ st.markdown(
 
 
 # ============================================================
-# EXCEL TOOLS — JUNTAR EXCEL
+# IMPORTAÇÃO DO MÓDULO EXCEL TOOLS
 # ============================================================
 
-import os
-import sys
+CAMINHO_EXCEL_TOOLS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "ferramentas_adicionais",
+    "excel_tools.py",
+)
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ferramentas_adicionais.excel_tools import render_juntar_excel
+if not os.path.exists(CAMINHO_EXCEL_TOOLS):
+    st.error(
+        "O módulo de Excel Tools não foi encontrado."
+    )
+    st.code(CAMINHO_EXCEL_TOOLS)
+    st.stop()
 
+
+spec = importlib.util.spec_from_file_location(
+    "excel_tools",
+    CAMINHO_EXCEL_TOOLS,
+)
+
+if spec is None or spec.loader is None:
+    st.error(
+        "Não foi possível carregar o módulo Excel Tools."
+    )
+    st.stop()
+
+
+excel_tools_modulo = importlib.util.module_from_spec(spec)
+
+try:
+    spec.loader.exec_module(excel_tools_modulo)
+except Exception as exc:
+    st.error(
+        "Erro ao carregar o módulo Excel Tools."
+    )
+    st.exception(exc)
+    st.stop()
+
+
+render_juntar_excel = excel_tools_modulo.render_juntar_excel
+
+
+# ============================================================
+# EXCEL TOOLS — JUNTAR EXCEL
+# ============================================================
 
 @st.dialog("🔗 Juntar Excel", width="large")
 def abrir_juntar_excel():
     render_juntar_excel()
 
+
+# ============================================================
+# EXCEL TOOLS — OUTRAS FERRAMENTAS
+# ============================================================
 
 @st.dialog("👁️ Visualizar Excel", width="large")
 def abrir_visualizar_excel():
@@ -191,6 +271,10 @@ def abrir_exportar_excel():
     st.markdown("### Exportar / Converter Excel")
     st.info("A ferramenta será implementada neste popup.")
 
+
+# ============================================================
+# CALCULADORAS
+# ============================================================
 
 @st.dialog("💧 Vazão", width="large")
 def abrir_vazao():
@@ -242,11 +326,14 @@ st.markdown(
     """
     <div class="secao-ferramentas">
         <h2>📊 Excel Tools</h2>
-        <p>Ferramentas rápidas para manipulação e tratamento de arquivos Excel.</p>
+        <p>
+            Ferramentas rápidas para manipulação e tratamento de arquivos Excel.
+        </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
 
 excel_tools = [
     ("🔗 Juntar Excel", abrir_juntar_excel),
@@ -257,11 +344,17 @@ excel_tools = [
     ("📤 Exportar/Converter Excel", abrir_exportar_excel),
 ]
 
+
 colunas_excel = st.columns(4)
+
 
 for indice, (nome, funcao) in enumerate(excel_tools):
     with colunas_excel[indice % 4]:
-        if st.button(nome, key=f"ferramenta_excel_{indice}", use_container_width=True):
+        if st.button(
+            nome,
+            key=f"ferramenta_excel_{indice}",
+            use_container_width=True,
+        ):
             funcao()
 
 
@@ -276,11 +369,14 @@ st.markdown(
     """
     <div class="secao-ferramentas">
         <h2>🧮 Calculadoras</h2>
-        <p>Calculadoras rápidas para operações e conversões.</p>
+        <p>
+            Calculadoras rápidas para operações e conversões.
+        </p>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
 
 calculadoras = [
     ("💧 Vazão", abrir_vazao),
@@ -292,15 +388,31 @@ calculadoras = [
     ("🔄 Conversor de Unidades", abrir_unidades),
 ]
 
+
 colunas_calculadoras = st.columns(4)
+
 
 for indice, (nome, funcao) in enumerate(calculadoras):
     with colunas_calculadoras[indice % 4]:
-        if st.button(nome, key=f"calculadora_{indice}", use_container_width=True):
+        if st.button(
+            nome,
+            key=f"calculadora_{indice}",
+            use_container_width=True,
+        ):
             funcao()
 
 
 st.divider()
 
-if st.button("🏢 Voltar ao Hub Central", key="voltar_hub_ferramentas", use_container_width=True):
+
+# ============================================================
+# VOLTAR AO HUB
+# ============================================================
+
+if st.button(
+    "🏢 Voltar ao Hub Central",
+    key="voltar_hub_ferramentas",
+    use_container_width=True,
+):
     st.switch_page("app.py")
+```
