@@ -135,21 +135,10 @@ def render_juntar_excel():
         "juntar_excel_assinatura"
     ) != assinatura:
 
-        st.session_state[
-            "juntar_excel_assinatura"
-        ] = assinatura
-
-        st.session_state[
-            "juntar_excel_resultado"
-        ] = None
-
-        st.session_state[
-            "juntar_excel_nome"
-        ] = None
-
-        st.session_state[
-            "juntar_excel_estruturas_iguais"
-        ] = None
+        st.session_state["juntar_excel_assinatura"] = assinatura
+        st.session_state["juntar_excel_resultado"] = None
+        st.session_state["juntar_excel_nome"] = None
+        st.session_state["juntar_excel_estruturas_iguais"] = None
 
     if len(arquivos) < 2:
         st.warning(
@@ -157,9 +146,7 @@ def render_juntar_excel():
         )
         return
 
-    st.write(
-        f"**{len(arquivos)} arquivos selecionados.**"
-    )
+    st.write(f"**{len(arquivos)} arquivos selecionados.**")
 
     dataframes = []
     erros = []
@@ -167,17 +154,11 @@ def render_juntar_excel():
     for arquivo in arquivos:
         try:
             arquivo.seek(0)
-
             df = _ler_excel(arquivo)
-
-            dataframes.append(
-                (arquivo.name, df)
-            )
+            dataframes.append((arquivo.name, df))
 
         except Exception as exc:
-            erros.append(
-                f"**{arquivo.name}:** {exc}"
-            )
+            erros.append(f"**{arquivo.name}:** {exc}")
 
     if erros:
         st.error(
@@ -201,19 +182,15 @@ def render_juntar_excel():
         for estrutura in estruturas[1:]
     )
 
-    st.markdown(
-        "#### 📋 Estrutura dos arquivos"
-    )
+    st.markdown("#### 📋 Estrutura dos arquivos")
 
     resumo = pd.DataFrame(
         {
             "Arquivo": [
-                nome
-                for nome, _ in dataframes
+                nome for nome, _ in dataframes
             ],
             "Registros": [
-                len(df)
-                for _, df in dataframes
+                len(df) for _, df in dataframes
             ],
             "Colunas": [
                 len(df.columns)
@@ -245,7 +222,6 @@ def render_juntar_excel():
 
         for _, df in dataframes:
             for coluna in df.columns:
-
                 chave = _normalizar_coluna(coluna)
 
                 if chave not in todas_colunas:
@@ -269,12 +245,8 @@ def render_juntar_excel():
             detalhes.append(
                 {
                     "Arquivo": nome,
-                    "Colunas presentes": len(
-                        presentes
-                    ),
-                    "Colunas ausentes": len(
-                        faltantes
-                    ),
+                    "Colunas presentes": len(presentes),
+                    "Colunas ausentes": len(faltantes),
                     "Ausentes": (
                         ", ".join(faltantes)
                         if faltantes
@@ -289,9 +261,7 @@ def render_juntar_excel():
             hide_index=True,
         )
 
-        st.markdown(
-            "#### Escolha como proceder"
-        )
+        st.markdown("#### Escolha como proceder")
 
         modo_juncao = st.radio(
             "",
@@ -331,14 +301,10 @@ def render_juntar_excel():
                 estruturas_iguais,
             )
 
-            st.session_state[
-                "juntar_excel_resultado"
-            ] = resultado
-
-            st.session_state[
-                "juntar_excel_nome"
-            ] = "Excel_Consolidado.xlsx"
-
+            st.session_state["juntar_excel_resultado"] = resultado
+            st.session_state["juntar_excel_nome"] = (
+                "Excel_Consolidado.xlsx"
+            )
             st.session_state[
                 "juntar_excel_estruturas_iguais"
             ] = estruturas_iguais
@@ -420,10 +386,6 @@ def render_visualizar_excel():
             "visualizar_excel_assinatura"
         ] = assinatura
 
-        st.session_state[
-            "visualizar_excel_df"
-        ] = None
-
         try:
             arquivo.seek(0)
 
@@ -463,446 +425,7 @@ def render_visualizar_excel():
         f"{len(df_original):,} registros e "
         f"{len(df_original.columns):,} colunas."
     )
-# ============================================================
-# 6.1.3 — COMPARAR BASES
-# ============================================================
 
-def _normalizar_valor_comparacao(valor):
-    if pd.isna(valor):
-        return ""
-
-    texto = str(valor).strip()
-
-    texto = re.sub(r"\s+", " ", texto)
-
-    return texto.casefold()
-
-
-def _criar_chave_comparacao(df, colunas_chave):
-    return df[colunas_chave].apply(
-        lambda linha: "¦".join(
-            _normalizar_valor_comparacao(valor)
-            for valor in linha
-        ),
-        axis=1,
-    )
-
-
-def _montar_excel_comparacao(
-    somente_base_1,
-    somente_base_2,
-    em_ambas,
-):
-    buffer = io.BytesIO()
-
-    with pd.ExcelWriter(
-        buffer,
-        engine="openpyxl",
-    ) as writer:
-
-        somente_base_1.to_excel(
-            writer,
-            index=False,
-            sheet_name="Somente_Base_1",
-        )
-
-        somente_base_2.to_excel(
-            writer,
-            index=False,
-            sheet_name="Somente_Base_2",
-        )
-
-        em_ambas.to_excel(
-            writer,
-            index=False,
-            sheet_name="Em_Ambas",
-        )
-
-    buffer.seek(0)
-
-    return buffer.getvalue()
-
-
-def render_comparar_bases():
-    """Renderiza a ferramenta 6.1.3 — Comparar Bases."""
-
-    st.markdown("### Comparar bases Excel")
-
-    st.caption(
-        "Compare dois arquivos Excel utilizando uma ou mais colunas "
-        "como chave de comparação. Os arquivos originais não serão alterados."
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        arquivo_1 = st.file_uploader(
-            "📂 Base 1",
-            type=["xlsx", "xls"],
-            accept_multiple_files=False,
-            key="comparar_bases_arquivo_1",
-        )
-
-    with col2:
-        arquivo_2 = st.file_uploader(
-            "📂 Base 2",
-            type=["xlsx", "xls"],
-            accept_multiple_files=False,
-            key="comparar_bases_arquivo_2",
-        )
-
-    if arquivo_1 is None or arquivo_2 is None:
-        st.info(
-            "Selecione os dois arquivos para iniciar a comparação."
-        )
-        return
-
-    assinatura = (
-        arquivo_1.name,
-        arquivo_1.size,
-        arquivo_2.name,
-        arquivo_2.size,
-    )
-
-    if st.session_state.get(
-        "comparar_bases_assinatura"
-    ) != assinatura:
-
-        st.session_state[
-            "comparar_bases_assinatura"
-        ] = assinatura
-
-        st.session_state[
-            "comparar_bases_df_1"
-        ] = None
-
-        st.session_state[
-            "comparar_bases_df_2"
-        ] = None
-
-        st.session_state[
-            "comparar_bases_resultado"
-        ] = None
-
-    # --------------------------------------------------------
-    # LEITURA DOS ARQUIVOS
-    # --------------------------------------------------------
-
-    if st.session_state.get(
-        "comparar_bases_df_1"
-    ) is None:
-
-        try:
-            arquivo_1.seek(0)
-
-            st.session_state[
-                "comparar_bases_df_1"
-            ] = _ler_excel(arquivo_1)
-
-        except Exception as exc:
-
-            st.error(
-                f"Não foi possível ler a Base 1: {exc}"
-            )
-
-            return
-
-    if st.session_state.get(
-        "comparar_bases_df_2"
-    ) is None:
-
-        try:
-            arquivo_2.seek(0)
-
-            st.session_state[
-                "comparar_bases_df_2"
-            ] = _ler_excel(arquivo_2)
-
-        except Exception as exc:
-
-            st.error(
-                f"Não foi possível ler a Base 2: {exc}"
-            )
-
-            return
-
-    df1 = st.session_state[
-        "comparar_bases_df_1"
-    ]
-
-    df2 = st.session_state[
-        "comparar_bases_df_2"
-    ]
-
-    if df1.empty:
-        st.warning("A Base 1 não possui registros.")
-        return
-
-    if df2.empty:
-        st.warning("A Base 2 não possui registros.")
-        return
-
-    # --------------------------------------------------------
-    # RESUMO DAS BASES
-    # --------------------------------------------------------
-
-    st.markdown("#### 📊 Resumo das bases")
-
-    resumo = pd.DataFrame(
-        {
-            "Base": [
-                arquivo_1.name,
-                arquivo_2.name,
-            ],
-            "Registros": [
-                len(df1),
-                len(df2),
-            ],
-            "Colunas": [
-                len(df1.columns),
-                len(df2.columns),
-            ],
-        }
-    )
-
-    st.dataframe(
-        resumo,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    # --------------------------------------------------------
-    # COLUNAS DISPONÍVEIS
-    # --------------------------------------------------------
-
-    colunas_base_1 = list(df1.columns)
-    colunas_base_2 = list(df2.columns)
-
-    mapa_base_2 = {
-        _normalizar_coluna(coluna): coluna
-        for coluna in colunas_base_2
-    }
-
-    colunas_comuns = []
-
-    for coluna in colunas_base_1:
-
-        chave = _normalizar_coluna(coluna)
-
-        if chave in mapa_base_2:
-            colunas_comuns.append(
-                coluna
-            )
-
-    if not colunas_comuns:
-
-        st.error(
-            "As bases não possuem nenhuma coluna em comum "
-            "para realizar a comparação."
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # SELEÇÃO DAS CHAVES
-    # --------------------------------------------------------
-
-    st.markdown(
-        "#### 🔑 Colunas utilizadas na comparação"
-    )
-
-    st.caption(
-        "Selecione uma ou mais colunas que identificam o registro. "
-        "As colunas selecionadas precisam existir nas duas bases."
-    )
-
-    colunas_chave = st.multiselect(
-        "Colunas-chave",
-        options=colunas_comuns,
-        key="comparar_bases_colunas_chave",
-    )
-
-    if not colunas_chave:
-
-        st.info(
-            "Selecione pelo menos uma coluna-chave."
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # MAPA DE COLUNAS ENTRE AS BASES
-    # --------------------------------------------------------
-
-    colunas_chave_base_2 = [
-        mapa_base_2[
-            _normalizar_coluna(coluna)
-        ]
-        for coluna in colunas_chave
-    ]
-
-    # --------------------------------------------------------
-    # COMPARAÇÃO
-    # --------------------------------------------------------
-
-    if st.button(
-        "🔍 Comparar bases",
-        type="primary",
-        use_container_width=True,
-        key="executar_comparar_bases",
-    ):
-
-        try:
-
-            temp1 = df1.copy()
-            temp2 = df2.copy()
-
-            temp1["__chave_comparacao__"] = (
-                _criar_chave_comparacao(
-                    temp1,
-                    colunas_chave,
-                )
-            )
-
-            temp2["__chave_comparacao__"] = (
-                _criar_chave_comparacao(
-                    temp2,
-                    colunas_chave_base_2,
-                )
-            )
-
-            chaves_1 = set(
-                temp1["__chave_comparacao__"]
-            )
-
-            chaves_2 = set(
-                temp2["__chave_comparacao__"]
-            )
-
-            chaves_comuns = (
-                chaves_1 & chaves_2
-            )
-
-            chaves_somente_1 = (
-                chaves_1 - chaves_2
-            )
-
-            chaves_somente_2 = (
-                chaves_2 - chaves_1
-            )
-
-            somente_base_1 = temp1[
-                temp1[
-                    "__chave_comparacao__"
-                ].isin(chaves_somente_1)
-            ].drop(
-                columns=["__chave_comparacao__"]
-            )
-
-            somente_base_2 = temp2[
-                temp2[
-                    "__chave_comparacao__"
-                ].isin(chaves_somente_2)
-            ].drop(
-                columns=["__chave_comparacao__"]
-            )
-
-            em_ambas = temp1[
-                temp1[
-                    "__chave_comparacao__"
-                ].isin(chaves_comuns)
-            ].drop(
-                columns=["__chave_comparacao__"]
-            )
-
-            st.session_state[
-                "comparar_bases_resultado"
-            ] = {
-                "somente_base_1": somente_base_1,
-                "somente_base_2": somente_base_2,
-                "em_ambas": em_ambas,
-            }
-
-        except Exception as exc:
-
-            st.error(
-                f"Não foi possível comparar as bases: {exc}"
-            )
-
-            return
-
-    resultado = st.session_state.get(
-        "comparar_bases_resultado"
-    )
-
-    if resultado is None:
-        return
-
-    somente_base_1 = resultado[
-        "somente_base_1"
-    ]
-
-    somente_base_2 = resultado[
-        "somente_base_2"
-    ]
-
-    em_ambas = resultado[
-        "em_ambas"
-    ]
-
-    # --------------------------------------------------------
-    # RESULTADO
-    # --------------------------------------------------------
-
-    st.markdown("#### 📊 Resultado da comparação")
-
-    r1, r2, r3 = st.columns(3)
-
-    with r1:
-        st.metric(
-            "Somente na Base 1",
-            f"{len(somente_base_1):,}",
-        )
-
-    with r2:
-        st.metric(
-            "Somente na Base 2",
-            f"{len(somente_base_2):,}",
-        )
-
-    with r3:
-        st.metric(
-            "Presentes nas duas",
-            f"{len(em_ambas):,}",
-        )
-
-    st.caption(
-        "A comparação considera os valores das colunas-chave, "
-        "ignorando diferenças de maiúsculas/minúsculas e espaços "
-        "excedentes."
-    )
-
-    # --------------------------------------------------------
-    # EXPORTAÇÃO
-    # --------------------------------------------------------
-
-    arquivo_resultado = _montar_excel_comparacao(
-        somente_base_1,
-        somente_base_2,
-        em_ambas,
-    )
-
-    st.download_button(
-        "📥 Baixar resultado da comparação",
-        data=arquivo_resultado,
-        file_name="Comparacao_Bases.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-"
-            "officedocument.spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-        key="download_comparar_bases",
-    )
     # --------------------------------------------------------
     # PESQUISA GERAL
     # --------------------------------------------------------
@@ -988,24 +511,25 @@ def render_comparar_bases():
 
     resultado = df_original.copy()
 
-    # Pesquisa geral
     if pesquisa.strip():
 
         termo = pesquisa.strip().casefold()
 
-        mascara = resultado.astype(
-            str
-        ).apply(
-            lambda coluna: coluna.str.casefold().str.contains(
-                termo,
-                na=False,
-                regex=False,
+        mascara = (
+            resultado.astype(str)
+            .apply(
+                lambda coluna: coluna.str.casefold()
+                .str.contains(
+                    termo,
+                    na=False,
+                    regex=False,
+                )
             )
-        ).any(axis=1)
+            .any(axis=1)
+        )
 
         resultado = resultado.loc[mascara]
 
-    # Filtro específico
     if (
         coluna_filtro != "Nenhum"
         and valor_filtro.strip()
@@ -1026,7 +550,6 @@ def render_comparar_bases():
 
         resultado = resultado.loc[mascara]
 
-    # Ordenação
     if coluna_ordenacao != "Nenhum":
 
         try:
@@ -1041,6 +564,7 @@ def render_comparar_bases():
             )
 
         except Exception:
+
             resultado = resultado.sort_values(
                 by=coluna_ordenacao,
                 ascending=(
@@ -1053,7 +577,6 @@ def render_comparar_bases():
     total_original = len(df_original)
     total_filtrado = len(resultado)
 
-    # Limitação apenas para exibição
     resultado_exibicao = resultado.head(
         int(quantidade_maxima)
     )
@@ -1103,12 +626,473 @@ def render_comparar_bases():
             f"Exibindo {total_filtrado:,} registros."
         )
 
-    # --------------------------------------------------------
-    # TABELA
-    # --------------------------------------------------------
-
     st.dataframe(
         resultado_exibicao,
         use_container_width=True,
         hide_index=True,
+    )
+
+
+# ============================================================
+# 6.1.3 — COMPARAR BASES
+# ============================================================
+
+def _normalizar_valor_comparacao(valor):
+    if pd.isna(valor):
+        return ""
+
+    texto = str(valor).strip()
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto.casefold()
+
+
+def _criar_chave_comparacao(df, colunas_chave):
+    return df[colunas_chave].apply(
+        lambda linha: "¦".join(
+            _normalizar_valor_comparacao(valor)
+            for valor in linha
+        ),
+        axis=1,
+    )
+
+
+def _montar_excel_comparacao(
+    somente_base_1,
+    somente_base_2,
+    em_ambas,
+):
+    buffer = io.BytesIO()
+
+    with pd.ExcelWriter(
+        buffer,
+        engine="openpyxl",
+    ) as writer:
+
+        somente_base_1.to_excel(
+            writer,
+            index=False,
+            sheet_name="Somente_Base_1",
+        )
+
+        somente_base_2.to_excel(
+            writer,
+            index=False,
+            sheet_name="Somente_Base_2",
+        )
+
+        em_ambas.to_excel(
+            writer,
+            index=False,
+            sheet_name="Em_Ambas",
+        )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
+
+
+def render_comparar_bases():
+    """Renderiza a ferramenta 6.1.3 — Comparar Bases."""
+
+    st.markdown("### Comparar bases Excel")
+
+    st.caption(
+        "Compare dois arquivos Excel utilizando uma ou mais colunas "
+        "como chave de comparação. Os arquivos originais não serão alterados."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        arquivo_1 = st.file_uploader(
+            "📂 Base 1",
+            type=["xlsx", "xls"],
+            accept_multiple_files=False,
+            key="comparar_bases_arquivo_1",
+        )
+
+    with col2:
+
+        arquivo_2 = st.file_uploader(
+            "📂 Base 2",
+            type=["xlsx", "xls"],
+            accept_multiple_files=False,
+            key="comparar_bases_arquivo_2",
+        )
+
+    if arquivo_1 is None or arquivo_2 is None:
+
+        st.info(
+            "Selecione os dois arquivos para iniciar a comparação."
+        )
+
+        return
+
+    assinatura = (
+        arquivo_1.name,
+        arquivo_1.size,
+        arquivo_2.name,
+        arquivo_2.size,
+    )
+
+    if st.session_state.get(
+        "comparar_bases_assinatura"
+    ) != assinatura:
+
+        st.session_state[
+            "comparar_bases_assinatura"
+        ] = assinatura
+
+        st.session_state[
+            "comparar_bases_df_1"
+        ] = None
+
+        st.session_state[
+            "comparar_bases_df_2"
+        ] = None
+
+        st.session_state[
+            "comparar_bases_resultado"
+        ] = None
+
+    # --------------------------------------------------------
+    # LEITURA DAS BASES
+    # --------------------------------------------------------
+
+    if st.session_state.get(
+        "comparar_bases_df_1"
+    ) is None:
+
+        try:
+
+            arquivo_1.seek(0)
+
+            st.session_state[
+                "comparar_bases_df_1"
+            ] = _ler_excel(arquivo_1)
+
+        except Exception as exc:
+
+            st.error(
+                f"Não foi possível ler a Base 1: {exc}"
+            )
+
+            return
+
+    if st.session_state.get(
+        "comparar_bases_df_2"
+    ) is None:
+
+        try:
+
+            arquivo_2.seek(0)
+
+            st.session_state[
+                "comparar_bases_df_2"
+            ] = _ler_excel(arquivo_2)
+
+        except Exception as exc:
+
+            st.error(
+                f"Não foi possível ler a Base 2: {exc}"
+            )
+
+            return
+
+    df1 = st.session_state[
+        "comparar_bases_df_1"
+    ]
+
+    df2 = st.session_state[
+        "comparar_bases_df_2"
+    ]
+
+    if df1.empty:
+
+        st.warning(
+            "A Base 1 não possui registros."
+        )
+
+        return
+
+    if df2.empty:
+
+        st.warning(
+            "A Base 2 não possui registros."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # RESUMO
+    # --------------------------------------------------------
+
+    st.markdown("#### 📊 Resumo das bases")
+
+    resumo = pd.DataFrame(
+        {
+            "Base": [
+                arquivo_1.name,
+                arquivo_2.name,
+            ],
+            "Registros": [
+                len(df1),
+                len(df2),
+            ],
+            "Colunas": [
+                len(df1.columns),
+                len(df2.columns),
+            ],
+        }
+    )
+
+    st.dataframe(
+        resumo,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # --------------------------------------------------------
+    # COLUNAS COMUNS
+    # --------------------------------------------------------
+
+    colunas_base_2 = list(df2.columns)
+
+    mapa_base_2 = {
+        _normalizar_coluna(coluna): coluna
+        for coluna in colunas_base_2
+    }
+
+    colunas_comuns = []
+
+    for coluna in df1.columns:
+
+        chave = _normalizar_coluna(coluna)
+
+        if chave in mapa_base_2:
+
+            colunas_comuns.append(
+                coluna
+            )
+
+    if not colunas_comuns:
+
+        st.error(
+            "As bases não possuem nenhuma coluna em comum "
+            "para realizar a comparação."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # SELEÇÃO DAS CHAVES
+    # --------------------------------------------------------
+
+    st.markdown(
+        "#### 🔑 Colunas utilizadas na comparação"
+    )
+
+    st.caption(
+        "Selecione uma ou mais colunas que identificam o registro. "
+        "As colunas selecionadas precisam existir nas duas bases."
+    )
+
+    colunas_chave = st.multiselect(
+        "Colunas-chave",
+        options=colunas_comuns,
+        key="comparar_bases_colunas_chave",
+    )
+
+    if not colunas_chave:
+
+        st.info(
+            "Selecione pelo menos uma coluna-chave."
+        )
+
+        return
+
+    colunas_chave_base_2 = [
+        mapa_base_2[
+            _normalizar_coluna(coluna)
+        ]
+        for coluna in colunas_chave
+    ]
+
+    # --------------------------------------------------------
+    # COMPARAÇÃO
+    # --------------------------------------------------------
+
+    if st.button(
+        "🔍 Comparar bases",
+        type="primary",
+        use_container_width=True,
+        key="executar_comparar_bases",
+    ):
+
+        try:
+
+            temp1 = df1.copy()
+            temp2 = df2.copy()
+
+            temp1[
+                "__chave_comparacao__"
+            ] = _criar_chave_comparacao(
+                temp1,
+                colunas_chave,
+            )
+
+            temp2[
+                "__chave_comparacao__"
+            ] = _criar_chave_comparacao(
+                temp2,
+                colunas_chave_base_2,
+            )
+
+            chaves_1 = set(
+                temp1[
+                    "__chave_comparacao__"
+                ]
+            )
+
+            chaves_2 = set(
+                temp2[
+                    "__chave_comparacao__"
+                ]
+            )
+
+            chaves_comuns = (
+                chaves_1 & chaves_2
+            )
+
+            chaves_somente_1 = (
+                chaves_1 - chaves_2
+            )
+
+            chaves_somente_2 = (
+                chaves_2 - chaves_1
+            )
+
+            somente_base_1 = temp1[
+                temp1[
+                    "__chave_comparacao__"
+                ].isin(chaves_somente_1)
+            ].drop(
+                columns=[
+                    "__chave_comparacao__"
+                ]
+            )
+
+            somente_base_2 = temp2[
+                temp2[
+                    "__chave_comparacao__"
+                ].isin(chaves_somente_2)
+            ].drop(
+                columns=[
+                    "__chave_comparacao__"
+                ]
+            )
+
+            em_ambas = temp1[
+                temp1[
+                    "__chave_comparacao__"
+                ].isin(chaves_comuns)
+            ].drop(
+                columns=[
+                    "__chave_comparacao__"
+                ]
+            )
+
+            st.session_state[
+                "comparar_bases_resultado"
+            ] = {
+                "somente_base_1": somente_base_1,
+                "somente_base_2": somente_base_2,
+                "em_ambas": em_ambas,
+            }
+
+        except Exception as exc:
+
+            st.error(
+                f"Não foi possível comparar as bases: {exc}"
+            )
+
+            return
+
+    resultado = st.session_state.get(
+        "comparar_bases_resultado"
+    )
+
+    if resultado is None:
+        return
+
+    somente_base_1 = resultado[
+        "somente_base_1"
+    ]
+
+    somente_base_2 = resultado[
+        "somente_base_2"
+    ]
+
+    em_ambas = resultado[
+        "em_ambas"
+    ]
+
+    # --------------------------------------------------------
+    # RESULTADO
+    # --------------------------------------------------------
+
+    st.markdown(
+        "#### 📊 Resultado da comparação"
+    )
+
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+
+        st.metric(
+            "Somente na Base 1",
+            f"{len(somente_base_1):,}",
+        )
+
+    with r2:
+
+        st.metric(
+            "Somente na Base 2",
+            f"{len(somente_base_2):,}",
+        )
+
+    with r3:
+
+        st.metric(
+            "Presentes nas duas",
+            f"{len(em_ambas):,}",
+        )
+
+    st.caption(
+        "A comparação considera os valores das colunas-chave, "
+        "ignorando diferenças de maiúsculas/minúsculas e espaços excedentes."
+    )
+
+    # --------------------------------------------------------
+    # EXPORTAÇÃO
+    # --------------------------------------------------------
+
+    arquivo_resultado = _montar_excel_comparacao(
+        somente_base_1,
+        somente_base_2,
+        em_ambas,
+    )
+
+    st.download_button(
+        "📥 Baixar resultado da comparação",
+        data=arquivo_resultado,
+        file_name="Comparacao_Bases.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+        key="download_comparar_bases",
     )
