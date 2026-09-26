@@ -149,6 +149,11 @@ st.markdown(
 # EXCEL TOOLS — JUNTAR EXCEL
 # ============================================================
 
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from ferramentas_adicionais.excel_tools import render_juntar_excel
 
 
