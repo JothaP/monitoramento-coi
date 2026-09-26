@@ -1,4 +1,3 @@
-```python
 import io
 import re
 
@@ -1231,4 +1230,3 @@ def render_exportar_excel():
         use_container_width=True,
         key="download_exportar_excel",
     )
-```
