@@ -558,7 +558,28 @@ for indice, base in enumerate(BASES_CONFIG):
                 )
 
                 if processado:
-                    st.rerun()
+                    if processado:
+    st.write(
+        "DEBUG APÓS CARREGAMENTO:",
+        {
+            "base": chave,
+            "df_api": (
+                None
+                if st.session_state.get("df_api") is None
+                else st.session_state["df_api"].shape
+            ),
+            "df_the": (
+                None
+                if st.session_state.get("df_the") is None
+                else st.session_state["df_the"].shape
+            ),
+            "df_eventos": (
+                None
+                if st.session_state.get("df_eventos") is None
+                else st.session_state["df_eventos"].shape
+            ),
+        },
+    )
 
             arquivos_carregados = st.session_state.get(
                 f"arquivos_{chave}",
