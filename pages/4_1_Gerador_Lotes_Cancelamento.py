@@ -740,5 +740,3 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True,
                 )
-
-O ponto que vamos observar agora é **`DEBUG APÓS CARREGAMENTO`**. Depois de carregar, por exemplo, a base **API**, me envie exatamente o que aparecer nesse DEBUG.
