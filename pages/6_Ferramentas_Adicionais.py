@@ -202,8 +202,7 @@ def abrir_visualizar_excel():
 
 @st.dialog("🔍 Comparar Bases", width="large")
 def abrir_comparar_bases():
-    st.markdown("### Comparador de Bases")
-    st.info("A ferramenta será implementada neste popup.")
+    render_comparar_bases()
 
 
 @st.dialog("🧹 Remover Duplicidades", width="large")
