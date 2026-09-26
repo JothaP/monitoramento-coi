@@ -7,6 +7,7 @@ from pages.ferramentas_adicionais.excel_tools import (
     render_comparar_bases,
     render_remover_duplicidades,
     render_separar_excel,
+    render_exportar_excel,
 )
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -219,8 +220,7 @@ def abrir_separar_excel():
 
 @st.dialog("📤 Exportar / Converter Excel", width="large")
 def abrir_exportar_excel():
-    st.markdown("### Exportar / Converter Excel")
-    st.info("A ferramenta será implementada neste popup.")
+    render_exportar_excel()
 
 
 # ============================================================
