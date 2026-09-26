@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -557,29 +558,33 @@ for indice, base in enumerate(BASES_CONFIG):
                     arquivos,
                 )
 
+                # ====================================================
+                # DEBUG — IMEDIATAMENTE APÓS O CARREGAMENTO
+                # ====================================================
+
                 if processado:
-                    if processado:
-    st.write(
-        "DEBUG APÓS CARREGAMENTO:",
-        {
-            "base": chave,
-            "df_api": (
-                None
-                if st.session_state.get("df_api") is None
-                else st.session_state["df_api"].shape
-            ),
-            "df_the": (
-                None
-                if st.session_state.get("df_the") is None
-                else st.session_state["df_the"].shape
-            ),
-            "df_eventos": (
-                None
-                if st.session_state.get("df_eventos") is None
-                else st.session_state["df_eventos"].shape
-            ),
-        },
-    )
+
+                    st.write(
+                        "DEBUG APÓS CARREGAMENTO:",
+                        {
+                            "base": chave,
+                            "df_api": (
+                                None
+                                if st.session_state.get("df_api") is None
+                                else st.session_state["df_api"].shape
+                            ),
+                            "df_the": (
+                                None
+                                if st.session_state.get("df_the") is None
+                                else st.session_state["df_the"].shape
+                            ),
+                            "df_eventos": (
+                                None
+                                if st.session_state.get("df_eventos") is None
+                                else st.session_state["df_eventos"].shape
+                            ),
+                        },
+                    )
 
             arquivos_carregados = st.session_state.get(
                 f"arquivos_{chave}",
@@ -736,3 +741,6 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True,
                 )
+```
+
+O ponto que vamos observar agora é **`DEBUG APÓS CARREGAMENTO`**. Depois de carregar, por exemplo, a base **API**, me envie exatamente o que aparecer nesse DEBUG.
