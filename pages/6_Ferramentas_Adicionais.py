@@ -1,9 +1,10 @@
 import streamlit as st
 
 from auth import verificar_autenticacao
-from pages.ferramentas_adicionais.excel_tools import render_juntar_excel
-
-
+from pages.ferramentas_adicionais.excel_tools import (
+    render_juntar_excel,
+    render_visualizar_excel,
+)
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================
