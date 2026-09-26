@@ -1,3 +1,4 @@
+```python
 import json
 import re
 
@@ -804,7 +805,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
         ]
     )
 
-        with aba_consulta:
+    with aba_consulta:
 
         if df_municipios.empty:
 
@@ -827,7 +828,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                 )
 
                 # ====================================================
-                # 1. PESQUISA POR MUNICÍPIO
+                # PESQUISA POR MUNICÍPIO
                 # ====================================================
 
                 encontrados_municipio = df_municipios[
@@ -853,7 +854,16 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                                 "REGIONAL",
                                 "ZONA",
                             ]
-                        ],
+                        ]
+                        .drop_duplicates()
+                        .sort_values(
+                            [
+                                "MUNICIPIO",
+                                "BASE",
+                                "REGIONAL",
+                                "ZONA",
+                            ]
+                        ),
                         use_container_width=True,
                         hide_index=True,
                     )
@@ -861,7 +871,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                 else:
 
                     # ====================================================
-                    # 2. PESQUISA POR BASE
+                    # PESQUISA POR BASE
                     # ====================================================
 
                     encontrados_base = df_municipios[
@@ -894,6 +904,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                                     "BASE",
                                     "REGIONAL",
                                     "MUNICIPIO",
+                                    "ZONA",
                                 ]
                             ),
                             use_container_width=True,
@@ -903,7 +914,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                     else:
 
                         # ====================================================
-                        # 3. PESQUISA POR ZONA
+                        # PESQUISA POR ZONA
                         # ====================================================
 
                         encontrados_zona = df_municipios[
@@ -2240,3 +2251,4 @@ if st.button(
     key="voltar_hub_cadastros",
 ):
     st.switch_page("app.py")
+```
