@@ -11,4 +11,5 @@ __all__ = [
     "render_visualizar_excel",
     "render_comparar_bases",
     "render_remover_duplicidades",
+    "render_separar_excel",
 ]
