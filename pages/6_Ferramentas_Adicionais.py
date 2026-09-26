@@ -196,8 +196,7 @@ def abrir_juntar_excel():
 
 @st.dialog("👁️ Visualizar Excel", width="large")
 def abrir_visualizar_excel():
-    st.markdown("### Visualizador de Excel")
-    st.info("A ferramenta será implementada neste popup.")
+    render_visualizar_excel()
 
 
 @st.dialog("🔍 Comparar Bases", width="large")
