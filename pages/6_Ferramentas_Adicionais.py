@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -365,4 +364,3 @@ if st.button(
     use_container_width=True,
 ):
     st.switch_page("app.py")
-```
