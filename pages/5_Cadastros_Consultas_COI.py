@@ -804,7 +804,7 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
         ]
     )
 
-    with aba_consulta:
+        with aba_consulta:
 
         if df_municipios.empty:
 
@@ -815,8 +815,9 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
         else:
 
             busca_municipio = st.text_input(
-                "Pesquisar município",
+                "Pesquisar município, base ou zona",
                 key="busca_municipio",
+                placeholder="Digite município, base ou zona",
             )
 
             if busca_municipio.strip():
@@ -825,7 +826,11 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                     busca_municipio
                 )
 
-                df_exibicao = df_municipios[
+                # ====================================================
+                # 1. PESQUISA POR MUNICÍPIO
+                # ====================================================
+
+                encontrados_municipio = df_municipios[
                     df_municipios["MUNICIPIO"]
                     .apply(normalizar_texto)
                     .str.contains(
@@ -834,16 +839,14 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                     )
                 ]
 
-                if df_exibicao.empty:
+                if not encontrados_municipio.empty:
 
-                    st.info(
-                        "Nenhum município encontrado para a consulta."
+                    st.markdown(
+                        "### 🏘️ Resultado por município"
                     )
 
-                else:
-
                     st.dataframe(
-                        df_exibicao[
+                        encontrados_municipio[
                             [
                                 "MUNICIPIO",
                                 "BASE",
@@ -854,6 +857,98 @@ elif opcao == "🗺️ Municípios, Bases e Regionais":
                         use_container_width=True,
                         hide_index=True,
                     )
+
+                else:
+
+                    # ====================================================
+                    # 2. PESQUISA POR BASE
+                    # ====================================================
+
+                    encontrados_base = df_municipios[
+                        df_municipios["BASE"]
+                        .apply(normalizar_texto)
+                        .str.contains(
+                            termo,
+                            regex=False,
+                        )
+                    ]
+
+                    if not encontrados_base.empty:
+
+                        st.markdown(
+                            "### 🏢 Resultado por base"
+                        )
+
+                        st.dataframe(
+                            encontrados_base[
+                                [
+                                    "MUNICIPIO",
+                                    "BASE",
+                                    "REGIONAL",
+                                    "ZONA",
+                                ]
+                            ]
+                            .drop_duplicates()
+                            .sort_values(
+                                [
+                                    "BASE",
+                                    "REGIONAL",
+                                    "MUNICIPIO",
+                                ]
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    else:
+
+                        # ====================================================
+                        # 3. PESQUISA POR ZONA
+                        # ====================================================
+
+                        encontrados_zona = df_municipios[
+                            df_municipios["ZONA"]
+                            .apply(normalizar_texto)
+                            .str.contains(
+                                termo,
+                                regex=False,
+                            )
+                        ]
+
+                        if not encontrados_zona.empty:
+
+                            st.markdown(
+                                "### 📍 Resultado por zona"
+                            )
+
+                            st.dataframe(
+                                encontrados_zona[
+                                    [
+                                        "MUNICIPIO",
+                                        "BASE",
+                                        "REGIONAL",
+                                        "ZONA",
+                                    ]
+                                ]
+                                .drop_duplicates()
+                                .sort_values(
+                                    [
+                                        "ZONA",
+                                        "BASE",
+                                        "REGIONAL",
+                                        "MUNICIPIO",
+                                    ]
+                                ),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                        else:
+
+                            st.info(
+                                "Nenhum município, base ou zona "
+                                "encontrado para a consulta."
+                            )
 
     with aba_cadastro:
 
