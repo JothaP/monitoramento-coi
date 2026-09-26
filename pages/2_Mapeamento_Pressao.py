@@ -286,8 +286,10 @@ def gerar_kml(df):
 # ============================================================
 hoje = date.today()
 
-if "data_selecionada" not in st.session_state:
-    st.session_state.data_selecionada = hoje
+if "data_inicial_selecionada" not in st.session_state:
+    st.session_state.data_inicial_selecionada = hoje
+if "data_final_selecionada" not in st.session_state:
+    st.session_state.data_final_selecionada = hoje
 if "clicked_lat" not in st.session_state:
     st.session_state.clicked_lat = None
 if "clicked_lon" not in st.session_state:
@@ -310,7 +312,7 @@ def modal_novo_ponto():
     lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
 
     with st.form("form_novo_ponto_modal", clear_on_submit=True):
-        data_cadastro = st.date_input("Data do Registro", value=st.session_state.data_selecionada, format="DD/MM/YYYY")
+        data_cadastro = st.date_input("Data do Registro", value=st.session_state.data_final_selecionada, format="DD/MM/YYYY")
         municipio = st.text_input("Município *", placeholder="Ex: Teresina")
         pontos = st.text_input("Pontos / Local *", placeholder="Ex: Ponto A-01")
 
@@ -423,27 +425,50 @@ with st.sidebar:
     st.markdown("### 🗺️ COI - Mapeamento")
     st.caption("⚙️ Painel Operacional")
 
-    st.markdown("#### 📅 Selecionar Data")
-    data_escolhida = st.date_input(
-        "Data",
-        value=st.session_state.data_selecionada,
-        format="DD/MM/YYYY",
-        label_visibility="collapsed",
-        key="calendario_principal"
-    )
-    st.session_state.data_selecionada = data_escolhida
-    data_str_selecionada = data_para_str(data_escolhida)
+    st.markdown("#### 📅 Selecionar Período")
+    c_data_ini, c_data_fim = st.columns(2)
+    with c_data_ini:
+        data_inicial = st.date_input(
+            "Data inicial",
+            value=st.session_state.data_inicial_selecionada,
+            format="DD/MM/YYYY",
+            key="calendario_data_inicial"
+        )
+    with c_data_fim:
+        data_final = st.date_input(
+            "Data final",
+            value=st.session_state.data_final_selecionada,
+            format="DD/MM/YYYY",
+            key="calendario_data_final"
+        )
 
-    if data_escolhida == hoje:
-        st.success("Exibindo dados de **hoje**")
+    st.session_state.data_inicial_selecionada = data_inicial
+    st.session_state.data_final_selecionada = data_final
+
+    periodo_valido = data_inicial <= data_final
+    if not periodo_valido:
+        st.error("A data inicial não pode ser maior que a data final.")
+    elif data_inicial == data_final:
+        st.info(f"Exibindo dados de **{data_para_str(data_inicial)}**")
     else:
-        st.info(f"Exibindo dados de **{data_str_selecionada}**")
+        st.info(
+            f"Exibindo dados de **{data_para_str(data_inicial)}** a **{data_para_str(data_final)}**"
+        )
 
     st.divider()
 
     st.markdown("#### 🔍 Filtros")
     df_all = carregar_dados()
-    df_data = df_all[df_all["Data"] == data_str_selecionada] if not df_all.empty else df_all
+    if not df_all.empty and periodo_valido:
+        df_all["DataObjFiltro"] = pd.to_datetime(
+            df_all["Data"], format="%d/%m/%Y", errors="coerce"
+        )
+        df_data = df_all[
+            (df_all["DataObjFiltro"].dt.date >= data_inicial)
+            & (df_all["DataObjFiltro"].dt.date <= data_final)
+        ].copy()
+    else:
+        df_data = df_all.iloc[0:0].copy() if not df_all.empty else df_all
 
     municipios_opts = ["Todos"] + sorted(df_data["Município"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
     municipio_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
@@ -506,7 +531,7 @@ with st.sidebar:
                     raw_data = row.get("Data", row.get("date", ""))
                     data_val = normalizar_data(raw_data)
                     if not data_val:
-                        data_val = data_str_selecionada
+                        data_val = data_para_str(data_final)
 
                     municipio_val = str(row.get("Município", row.get("Municipio", row.get("cidade", ""))))
                     ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
@@ -663,10 +688,27 @@ with st.sidebar:
 # ÁREA PRINCIPAL
 # ============================================================
 st.title("🗺️ Painel de Mapeamento de Pressão - COI")
-st.caption(f"Visualizando dados da data: **{data_str_selecionada}**")
+if periodo_valido:
+    if data_inicial == data_final:
+        st.caption(f"Visualizando dados da data: **{data_para_str(data_inicial)}**")
+    else:
+        st.caption(
+            f"Visualizando dados do período: **{data_para_str(data_inicial)} a {data_para_str(data_final)}**"
+        )
+else:
+    st.caption("Período inválido. Ajuste as datas para visualizar os dados.")
 
 df = carregar_dados()
-df_filtrado = df[df["Data"] == data_str_selecionada].copy() if not df.empty else df.copy()
+if not df.empty and periodo_valido:
+    df["DataObjFiltro"] = pd.to_datetime(
+        df["Data"], format="%d/%m/%Y", errors="coerce"
+    )
+    df_filtrado = df[
+        (df["DataObjFiltro"].dt.date >= data_inicial)
+        & (df["DataObjFiltro"].dt.date <= data_final)
+    ].copy()
+else:
+    df_filtrado = df.iloc[0:0].copy() if not df.empty else df.copy()
 
 if municipio_sel != "Todos":
     df_filtrado = df_filtrado[df_filtrado["Município"] == municipio_sel]
@@ -693,7 +735,16 @@ if not df_filtrado.empty:
     k3.metric("Em Atenção (≤ 5 MCA)", atencao)
     k4.metric("Normais (> 5 MCA)", normais)
 else:
-    st.info(f"Nenhum ponto registrado para a data {data_str_selecionada} com os filtros selecionados.")
+    if periodo_valido:
+        if data_inicial == data_final:
+            st.info(f"Nenhum ponto registrado para a data {data_para_str(data_inicial)} com os filtros selecionados.")
+        else:
+            st.info(
+                f"Nenhum ponto registrado no período de {data_para_str(data_inicial)} "
+                f"a {data_para_str(data_final)} com os filtros selecionados."
+            )
+    else:
+        st.info("Ajuste o período selecionado para visualizar os dados.")
 
 st.divider()
 
@@ -863,4 +914,13 @@ if not df_filtrado.empty:
             st.button("🗑️ Excluir Selecionados", disabled=True, use_container_width=True)
 
 else:
-    st.info(f"Nenhum ponto registrado para a data {data_str_selecionada} com os filtros selecionados.")
+    if periodo_valido:
+        if data_inicial == data_final:
+            st.info(f"Nenhum ponto registrado para a data {data_para_str(data_inicial)} com os filtros selecionados.")
+        else:
+            st.info(
+                f"Nenhum ponto registrado no período de {data_para_str(data_inicial)} "
+                f"a {data_para_str(data_final)} com os filtros selecionados."
+            )
+    else:
+        st.info("Ajuste o período selecionado para visualizar os dados.")
