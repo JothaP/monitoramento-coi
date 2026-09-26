@@ -13,3 +13,4 @@ matplotlib
 pillow
 numpy
 pyxlsb
+xlrd
