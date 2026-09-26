@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -685,4 +684,3 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True,
                 )
-```
