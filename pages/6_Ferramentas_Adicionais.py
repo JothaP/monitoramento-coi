@@ -1,4 +1,3 @@
-```python
 import importlib.util
 import os
 
@@ -415,4 +414,3 @@ if st.button(
     use_container_width=True,
 ):
     st.switch_page("app.py")
-```
