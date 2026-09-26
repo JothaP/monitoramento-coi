@@ -3,13 +3,14 @@ import gspread
 import pandas as pd
 import folium
 import plotly.express as px
+import json
 
 from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
 from datetime import date, datetime, timedelta
 from auth import verificar_autenticacao
 
-
+SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 # ============================================================
 # CONFIGURAÇÃO
 # ============================================================
@@ -80,13 +81,6 @@ if st.session_state.modo_escuro_pocos:
 # ============================================================
 # GOOGLE SHEETS
 # ============================================================
-
-SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID")
-
-if not SPREADSHEET_ID:
-    st.error("SPREADSHEET_ID não está configurado nos Secrets.")
-    st.stop()
-
 
 @st.cache_resource
 def conectar_google_sheets():
