@@ -306,8 +306,11 @@ def carregar_leituras():
         .str.strip()
     )
 
+    # Conversão robusta da data
     df["DATA_LEITURA"] = pd.to_datetime(
-        df["DATA_LEITURA"],
+        df["DATA_LEITURA"]
+        .astype(str)
+        .str.strip(),
         errors="coerce",
         dayfirst=True,
     )
@@ -383,6 +386,13 @@ def obter_ultima_leitura(
         df_leituras["ID_POCO"].astype(str)
         == str(poco_id)
     ].copy()
+
+    # Garantia adicional de tipo datetime
+    dados["DATA_LEITURA"] = pd.to_datetime(
+        dados["DATA_LEITURA"],
+        errors="coerce",
+        dayfirst=True,
+    )
 
     dados = dados.dropna(
         subset=["DATA_LEITURA"]
@@ -1259,6 +1269,15 @@ if data_inicial > data_final:
 
 leituras_periodo = leituras.copy()
 
+# Garantia adicional de datetime antes de usar .dt
+leituras_periodo["DATA_LEITURA"] = pd.to_datetime(
+    leituras_periodo["DATA_LEITURA"]
+    .astype(str)
+    .str.strip(),
+    errors="coerce",
+    dayfirst=True,
+)
+
 leituras_periodo = leituras_periodo.dropna(
     subset=["DATA_LEITURA"]
 )
@@ -1724,6 +1743,13 @@ else:
         how="left",
     )
 
+    # Garantia final do tipo da data
+    historico["DATA_LEITURA"] = pd.to_datetime(
+        historico["DATA_LEITURA"],
+        errors="coerce",
+        dayfirst=True,
+    )
+
     historico["DATA_LEITURA"] = (
         historico[
             "DATA_LEITURA"
@@ -1866,6 +1892,16 @@ else:
         ].astype(str)
         == str(id_grafico)
     ].copy()
+
+    # Correção importante:
+    # garantir datetime antes de usar .dt
+    dados_grafico["DATA_LEITURA"] = pd.to_datetime(
+        dados_grafico["DATA_LEITURA"]
+        .astype(str)
+        .str.strip(),
+        errors="coerce",
+        dayfirst=True,
+    )
 
     dados_grafico = dados_grafico.dropna(
         subset=[
