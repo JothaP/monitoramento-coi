@@ -387,6 +387,7 @@ def render_visualizar_excel():
         ] = assinatura
 
         try:
+
             arquivo.seek(0)
 
             df = _ler_excel(arquivo)
@@ -1156,10 +1157,6 @@ def render_remover_duplicidades():
         f"{len(df_original.columns):,} colunas."
     )
 
-    # --------------------------------------------------------
-    # COLUNAS PARA IDENTIFICAÇÃO
-    # --------------------------------------------------------
-
     st.markdown(
         "#### 🔑 Colunas para identificar duplicidades"
     )
@@ -1186,10 +1183,6 @@ def render_remover_duplicidades():
 
         return
 
-    # --------------------------------------------------------
-    # OPÇÃO DE MANUTENÇÃO
-    # --------------------------------------------------------
-
     st.markdown(
         "#### 📌 Registro que será mantido"
     )
@@ -1203,10 +1196,6 @@ def render_remover_duplicidades():
         horizontal=True,
         key="remover_duplicidades_modo",
     )
-
-    # --------------------------------------------------------
-    # INFORMAÇÃO SOBRE DUPLICIDADES
-    # --------------------------------------------------------
 
     try:
 
@@ -1267,10 +1256,6 @@ def render_remover_duplicidades():
             "com as colunas selecionadas."
         )
 
-    # --------------------------------------------------------
-    # EXECUÇÃO
-    # --------------------------------------------------------
-
     if st.button(
         "🧹 Remover duplicidades",
         type="primary",
@@ -1318,10 +1303,6 @@ def render_remover_duplicidades():
     if resultado is None:
         return
 
-    # --------------------------------------------------------
-    # RESULTADO
-    # --------------------------------------------------------
-
     registros_removidos = (
         len(df_original) - len(resultado)
     )
@@ -1364,7 +1345,7 @@ def render_remover_duplicidades():
         st.success(
             f"✅ Limpeza concluída. "
             f"{registros_removidos:,} registros duplicados "
-            f"foram removidos."
+            "foram removidos."
         )
 
     st.caption(
@@ -1730,3 +1711,258 @@ def render_separar_excel():
                     f"{indice}"
                 ),
             )
+
+
+# ============================================================
+# 6.1.6 — EXPORTAR / CONVERTER EXCEL
+# ============================================================
+
+def render_exportar_excel():
+    """Renderiza a ferramenta 6.1.6 — Exportar/Converter Excel."""
+
+    st.markdown("### Exportar / Converter Excel")
+
+    st.caption(
+        "Converta arquivos Excel e CSV para outros formatos "
+        "sem alterar o arquivo original."
+    )
+
+    arquivo = st.file_uploader(
+        "Selecione o arquivo",
+        type=["xlsx", "xls", "csv"],
+        accept_multiple_files=False,
+        key="exportar_excel_arquivo",
+    )
+
+    if arquivo is None:
+
+        st.info(
+            "Selecione um arquivo para começar."
+        )
+
+        return
+
+    extensao = arquivo.name.lower().rsplit(
+        ".",
+        1,
+    )[-1]
+
+    try:
+
+        arquivo.seek(0)
+
+        if extensao == "csv":
+
+            df = pd.read_csv(arquivo)
+
+            abas_disponiveis = []
+
+        elif extensao == "xlsx":
+
+            arquivo.seek(0)
+
+            excel = pd.ExcelFile(
+                arquivo,
+                engine="openpyxl",
+            )
+
+            abas_disponiveis = excel.sheet_names
+
+            if len(abas_disponiveis) > 1:
+
+                aba = st.selectbox(
+                    "Selecione a planilha",
+                    abas_disponiveis,
+                    key="exportar_excel_aba",
+                )
+
+            else:
+
+                aba = abas_disponiveis[0]
+
+            arquivo.seek(0)
+
+            df = pd.read_excel(
+                arquivo,
+                sheet_name=aba,
+                engine="openpyxl",
+            )
+
+        elif extensao == "xls":
+
+            arquivo.seek(0)
+
+            excel = pd.ExcelFile(
+                arquivo,
+                engine="xlrd",
+            )
+
+            abas_disponiveis = excel.sheet_names
+
+            if len(abas_disponiveis) > 1:
+
+                aba = st.selectbox(
+                    "Selecione a planilha",
+                    abas_disponiveis,
+                    key="exportar_excel_aba",
+                )
+
+            else:
+
+                aba = abas_disponiveis[0]
+
+            arquivo.seek(0)
+
+            df = pd.read_excel(
+                arquivo,
+                sheet_name=aba,
+                engine="xlrd",
+            )
+
+        else:
+
+            st.error(
+                "Formato não suportado."
+            )
+
+            return
+
+    except ImportError as exc:
+
+        st.error(
+            f"Não foi possível abrir o arquivo: {exc}"
+        )
+
+        return
+
+    except Exception as exc:
+
+        st.error(
+            f"Não foi possível ler o arquivo: {exc}"
+        )
+
+        return
+
+    if df.empty:
+
+        st.warning(
+            "O arquivo não possui registros."
+        )
+
+        return
+
+    st.success(
+        f"Arquivo carregado: **{arquivo.name}** — "
+        f"{len(df):,} registros e "
+        f"{len(df.columns):,} colunas."
+    )
+
+    st.markdown(
+        "#### 📤 Formato de saída"
+    )
+
+    if extensao == "csv":
+
+        formatos_saida = [
+            "Excel (.xlsx)",
+        ]
+
+    else:
+
+        formatos_saida = [
+            "CSV (.csv)",
+            "Excel (.xlsx)",
+        ]
+
+    formato_saida = st.radio(
+        "Escolha o formato",
+        options=formatos_saida,
+        horizontal=True,
+        key="exportar_excel_formato_saida",
+    )
+
+    if st.button(
+        "📤 Converter arquivo",
+        type="primary",
+        use_container_width=True,
+        key="executar_exportar_excel",
+    ):
+
+        try:
+
+            if formato_saida == "CSV (.csv)":
+
+                buffer = io.StringIO()
+
+                df.to_csv(
+                    buffer,
+                    index=False,
+                    encoding="utf-8-sig",
+                )
+
+                dados = buffer.getvalue().encode(
+                    "utf-8-sig"
+                )
+
+                nome_saida = (
+                    arquivo.name.rsplit(
+                        ".",
+                        1,
+                    )[0]
+                    + ".csv"
+                )
+
+                mime = "text/csv"
+
+            else:
+
+                dados = _montar_excel(df)
+
+                nome_saida = (
+                    arquivo.name.rsplit(
+                        ".",
+                        1,
+                    )[0]
+                    + ".xlsx"
+                )
+
+                mime = (
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                )
+
+            st.session_state[
+                "exportar_excel_resultado"
+            ] = {
+                "dados": dados,
+                "nome": nome_saida,
+                "mime": mime,
+            }
+
+        except Exception as exc:
+
+            st.error(
+                f"Não foi possível converter o arquivo: {exc}"
+            )
+
+            return
+
+    resultado = st.session_state.get(
+        "exportar_excel_resultado"
+    )
+
+    if resultado is None:
+        return
+
+    st.success(
+        f"✅ Conversão concluída: **{resultado['nome']}**"
+    )
+
+    st.download_button(
+        "📥 Baixar arquivo convertido",
+        data=resultado["dados"],
+        file_name=resultado["nome"],
+        mime=resultado["mime"],
+        use_container_width=True,
+        key="download_exportar_excel",
+    )
