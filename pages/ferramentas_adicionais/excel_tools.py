@@ -426,10 +426,6 @@ def render_visualizar_excel():
         f"{len(df_original.columns):,} colunas."
     )
 
-    # --------------------------------------------------------
-    # PESQUISA GERAL
-    # --------------------------------------------------------
-
     st.markdown("#### 🔍 Pesquisa")
 
     pesquisa = st.text_input(
@@ -437,10 +433,6 @@ def render_visualizar_excel():
         placeholder="Digite um texto para pesquisar...",
         key="visualizar_excel_pesquisa",
     )
-
-    # --------------------------------------------------------
-    # FILTRO POR COLUNA
-    # --------------------------------------------------------
 
     st.markdown("#### 🔽 Filtro por coluna")
 
@@ -463,10 +455,6 @@ def render_visualizar_excel():
             ),
             key="visualizar_excel_valor_filtro",
         )
-
-    # --------------------------------------------------------
-    # ORDENAÇÃO
-    # --------------------------------------------------------
 
     st.markdown("#### ↕️ Ordenação")
 
@@ -492,10 +480,6 @@ def render_visualizar_excel():
             key="visualizar_excel_ordem",
         )
 
-    # --------------------------------------------------------
-    # QUANTIDADE DE LINHAS
-    # --------------------------------------------------------
-
     quantidade_maxima = st.number_input(
         "Quantidade máxima de linhas exibidas",
         min_value=10,
@@ -504,10 +488,6 @@ def render_visualizar_excel():
         step=100,
         key="visualizar_excel_quantidade",
     )
-
-    # --------------------------------------------------------
-    # APLICAÇÃO DOS FILTROS
-    # --------------------------------------------------------
 
     resultado = df_original.copy()
 
@@ -580,10 +560,6 @@ def render_visualizar_excel():
     resultado_exibicao = resultado.head(
         int(quantidade_maxima)
     )
-
-    # --------------------------------------------------------
-    # RESUMO
-    # --------------------------------------------------------
 
     col1, col2, col3 = st.columns(3)
 
@@ -757,10 +733,6 @@ def render_comparar_bases():
             "comparar_bases_resultado"
         ] = None
 
-    # --------------------------------------------------------
-    # LEITURA DAS BASES
-    # --------------------------------------------------------
-
     if st.session_state.get(
         "comparar_bases_df_1"
     ) is None:
@@ -825,10 +797,6 @@ def render_comparar_bases():
 
         return
 
-    # --------------------------------------------------------
-    # RESUMO
-    # --------------------------------------------------------
-
     st.markdown("#### 📊 Resumo das bases")
 
     resumo = pd.DataFrame(
@@ -854,10 +822,6 @@ def render_comparar_bases():
         hide_index=True,
     )
 
-    # --------------------------------------------------------
-    # COLUNAS COMUNS
-    # --------------------------------------------------------
-
     colunas_base_2 = list(df2.columns)
 
     mapa_base_2 = {
@@ -873,9 +837,7 @@ def render_comparar_bases():
 
         if chave in mapa_base_2:
 
-            colunas_comuns.append(
-                coluna
-            )
+            colunas_comuns.append(coluna)
 
     if not colunas_comuns:
 
@@ -885,10 +847,6 @@ def render_comparar_bases():
         )
 
         return
-
-    # --------------------------------------------------------
-    # SELEÇÃO DAS CHAVES
-    # --------------------------------------------------------
 
     st.markdown(
         "#### 🔑 Colunas utilizadas na comparação"
@@ -919,10 +877,6 @@ def render_comparar_bases():
         ]
         for coluna in colunas_chave
     ]
-
-    # --------------------------------------------------------
-    # COMPARAÇÃO
-    # --------------------------------------------------------
 
     if st.button(
         "🔍 Comparar bases",
@@ -1039,10 +993,6 @@ def render_comparar_bases():
         "em_ambas"
     ]
 
-    # --------------------------------------------------------
-    # RESULTADO
-    # --------------------------------------------------------
-
     st.markdown(
         "#### 📊 Resultado da comparação"
     )
@@ -1075,10 +1025,6 @@ def render_comparar_bases():
         "ignorando diferenças de maiúsculas/minúsculas e espaços excedentes."
     )
 
-    # --------------------------------------------------------
-    # EXPORTAÇÃO
-    # --------------------------------------------------------
-
     arquivo_resultado = _montar_excel_comparacao(
         somente_base_1,
         somente_base_2,
@@ -1095,4 +1041,349 @@ def render_comparar_bases():
         ),
         use_container_width=True,
         key="download_comparar_bases",
+    )
+
+
+# ============================================================
+# 6.1.4 — REMOVER DUPLICIDADES
+# ============================================================
+
+def _normalizar_dataframe_para_duplicidade(
+    df,
+    colunas_chave,
+):
+    normalizado = pd.DataFrame(index=df.index)
+
+    for coluna in colunas_chave:
+
+        normalizado[coluna] = (
+            df[coluna]
+            .apply(_normalizar_valor_comparacao)
+        )
+
+    return normalizado
+
+
+def render_remover_duplicidades():
+    """Renderiza a ferramenta 6.1.4 — Remover Duplicidades."""
+
+    st.markdown("### Remover duplicidades")
+
+    st.caption(
+        "Carregue um arquivo Excel e selecione as colunas que serão "
+        "utilizadas para identificar registros duplicados. "
+        "O arquivo original não será alterado."
+    )
+
+    arquivo = st.file_uploader(
+        "Selecione o arquivo Excel",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="remover_duplicidades_arquivo",
+    )
+
+    if arquivo is None:
+
+        st.info(
+            "Selecione um arquivo Excel para começar."
+        )
+
+        return
+
+    assinatura = (
+        arquivo.name,
+        arquivo.size,
+    )
+
+    if st.session_state.get(
+        "remover_duplicidades_assinatura"
+    ) != assinatura:
+
+        st.session_state[
+            "remover_duplicidades_assinatura"
+        ] = assinatura
+
+        st.session_state[
+            "remover_duplicidades_df"
+        ] = None
+
+        st.session_state[
+            "remover_duplicidades_resultado"
+        ] = None
+
+    if st.session_state.get(
+        "remover_duplicidades_df"
+    ) is None:
+
+        try:
+
+            arquivo.seek(0)
+
+            st.session_state[
+                "remover_duplicidades_df"
+            ] = _ler_excel(arquivo)
+
+        except Exception as exc:
+
+            st.session_state[
+                "remover_duplicidades_df"
+            ] = None
+
+            st.error(
+                f"Não foi possível ler o arquivo: {exc}"
+            )
+
+            return
+
+    df_original = st.session_state.get(
+        "remover_duplicidades_df"
+    )
+
+    if df_original is None:
+        return
+
+    if df_original.empty:
+
+        st.warning(
+            "O arquivo não possui registros."
+        )
+
+        return
+
+    st.success(
+        f"Arquivo carregado: **{arquivo.name}** — "
+        f"{len(df_original):,} registros e "
+        f"{len(df_original.columns):,} colunas."
+    )
+
+    # --------------------------------------------------------
+    # COLUNAS PARA IDENTIFICAÇÃO
+    # --------------------------------------------------------
+
+    st.markdown(
+        "#### 🔑 Colunas para identificar duplicidades"
+    )
+
+    st.caption(
+        "Selecione uma ou mais colunas. Registros com os mesmos "
+        "valores nessas colunas serão considerados duplicados."
+    )
+
+    colunas = list(df_original.columns)
+
+    colunas_chave = st.multiselect(
+        "Colunas utilizadas",
+        options=colunas,
+        key="remover_duplicidades_colunas_chave",
+    )
+
+    if not colunas_chave:
+
+        st.info(
+            "Selecione pelo menos uma coluna para identificar "
+            "os registros duplicados."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # OPÇÃO DE MANUTENÇÃO
+    # --------------------------------------------------------
+
+    st.markdown(
+        "#### 📌 Registro que será mantido"
+    )
+
+    modo_manter = st.radio(
+        "Escolha qual ocorrência manter",
+        options=[
+            "Manter a primeira ocorrência",
+            "Manter a última ocorrência",
+        ],
+        horizontal=True,
+        key="remover_duplicidades_modo",
+    )
+
+    # --------------------------------------------------------
+    # INFORMAÇÃO SOBRE DUPLICIDADES
+    # --------------------------------------------------------
+
+    try:
+
+        normalizado = _normalizar_dataframe_para_duplicidade(
+            df_original,
+            colunas_chave,
+        )
+
+        mascara_duplicado = normalizado.duplicated(
+            keep=False
+        )
+
+        quantidade_registros_duplicados = int(
+            mascara_duplicado.sum()
+        )
+
+        quantidade_grupos_duplicados = int(
+            normalizado.loc[
+                mascara_duplicado
+            ].drop_duplicates().shape[0]
+        )
+
+    except Exception as exc:
+
+        st.error(
+            f"Não foi possível analisar as duplicidades: {exc}"
+        )
+
+        return
+
+    d1, d2, d3 = st.columns(3)
+
+    with d1:
+
+        st.metric(
+            "Registros originais",
+            f"{len(df_original):,}",
+        )
+
+    with d2:
+
+        st.metric(
+            "Registros em grupos duplicados",
+            f"{quantidade_registros_duplicados:,}",
+        )
+
+    with d3:
+
+        st.metric(
+            "Grupos duplicados",
+            f"{quantidade_grupos_duplicados:,}",
+        )
+
+    if quantidade_registros_duplicados == 0:
+
+        st.success(
+            "✅ Nenhum registro duplicado foi encontrado "
+            "com as colunas selecionadas."
+        )
+
+    # --------------------------------------------------------
+    # EXECUÇÃO
+    # --------------------------------------------------------
+
+    if st.button(
+        "🧹 Remover duplicidades",
+        type="primary",
+        use_container_width=True,
+        key="executar_remover_duplicidades",
+    ):
+
+        try:
+
+            manter = (
+                "first"
+                if modo_manter.startswith("Manter a primeira")
+                else "last"
+            )
+
+            indices_manter = normalizado.drop_duplicates(
+                subset=colunas_chave,
+                keep=manter,
+            ).index
+
+            resultado = df_original.loc[
+                indices_manter
+            ].copy()
+
+            resultado = resultado.reset_index(
+                drop=True
+            )
+
+            st.session_state[
+                "remover_duplicidades_resultado"
+            ] = resultado
+
+        except Exception as exc:
+
+            st.error(
+                f"Não foi possível remover as duplicidades: {exc}"
+            )
+
+            return
+
+    resultado = st.session_state.get(
+        "remover_duplicidades_resultado"
+    )
+
+    if resultado is None:
+        return
+
+    # --------------------------------------------------------
+    # RESULTADO
+    # --------------------------------------------------------
+
+    registros_removidos = (
+        len(df_original) - len(resultado)
+    )
+
+    st.markdown(
+        "#### 📊 Resultado"
+    )
+
+    r1, r2, r3 = st.columns(3)
+
+    with r1:
+
+        st.metric(
+            "Registros originais",
+            f"{len(df_original):,}",
+        )
+
+    with r2:
+
+        st.metric(
+            "Registros após limpeza",
+            f"{len(resultado):,}",
+        )
+
+    with r3:
+
+        st.metric(
+            "Duplicidades removidas",
+            f"{registros_removidos:,}",
+        )
+
+    if registros_removidos == 0:
+
+        st.info(
+            "Nenhum registro foi removido."
+        )
+
+    else:
+
+        st.success(
+            f"✅ Limpeza concluída. "
+            f"{registros_removidos:,} registros duplicados "
+            f"foram removidos."
+        )
+
+    st.caption(
+        "A comparação ignora diferenças de maiúsculas/minúsculas "
+        "e espaços excedentes nos valores das colunas selecionadas."
+    )
+
+    arquivo_resultado = _montar_excel(
+        resultado
+    )
+
+    st.download_button(
+        "📥 Baixar Excel sem duplicidades",
+        data=arquivo_resultado,
+        file_name="Excel_Sem_Duplicidades.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        ),
+        use_container_width=True,
+        key="download_remover_duplicidades",
     )
