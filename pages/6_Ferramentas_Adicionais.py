@@ -1,9 +1,8 @@
-import importlib.util
-import os
-
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
+from pages.ferramentas_adicionais.excel_tools import render_juntar_excel
 
 
 # ============================================================
@@ -81,7 +80,7 @@ if st.session_state.get("perfil") != "admin":
 
 
 # ============================================================
-# ESTILO — MODO ESCURO
+# MODO ESCURO
 # ============================================================
 
 if st.session_state.get("modo_escuro_ferramentas"):
@@ -183,53 +182,7 @@ st.markdown(
 
 
 # ============================================================
-# IMPORTAÇÃO DO MÓDULO EXCEL TOOLS
-# ============================================================
-
-CAMINHO_EXCEL_TOOLS = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "ferramentas_adicionais",
-    "excel_tools.py",
-)
-
-
-if not os.path.exists(CAMINHO_EXCEL_TOOLS):
-    st.error(
-        "O módulo de Excel Tools não foi encontrado."
-    )
-    st.code(CAMINHO_EXCEL_TOOLS)
-    st.stop()
-
-
-spec = importlib.util.spec_from_file_location(
-    "excel_tools",
-    CAMINHO_EXCEL_TOOLS,
-)
-
-if spec is None or spec.loader is None:
-    st.error(
-        "Não foi possível carregar o módulo Excel Tools."
-    )
-    st.stop()
-
-
-excel_tools_modulo = importlib.util.module_from_spec(spec)
-
-try:
-    spec.loader.exec_module(excel_tools_modulo)
-except Exception as exc:
-    st.error(
-        "Erro ao carregar o módulo Excel Tools."
-    )
-    st.exception(exc)
-    st.stop()
-
-
-render_juntar_excel = excel_tools_modulo.render_juntar_excel
-
-
-# ============================================================
-# EXCEL TOOLS — JUNTAR EXCEL
+# POPUP — JUNTAR EXCEL
 # ============================================================
 
 @st.dialog("🔗 Juntar Excel", width="large")
@@ -238,7 +191,7 @@ def abrir_juntar_excel():
 
 
 # ============================================================
-# EXCEL TOOLS — OUTRAS FERRAMENTAS
+# POPUPS — EXCEL TOOLS
 # ============================================================
 
 @st.dialog("👁️ Visualizar Excel", width="large")
@@ -272,7 +225,7 @@ def abrir_exportar_excel():
 
 
 # ============================================================
-# CALCULADORAS
+# POPUPS — CALCULADORAS
 # ============================================================
 
 @st.dialog("💧 Vazão", width="large")
@@ -346,7 +299,6 @@ excel_tools = [
 
 colunas_excel = st.columns(4)
 
-
 for indice, (nome, funcao) in enumerate(excel_tools):
     with colunas_excel[indice % 4]:
         if st.button(
@@ -390,7 +342,6 @@ calculadoras = [
 
 colunas_calculadoras = st.columns(4)
 
-
 for indice, (nome, funcao) in enumerate(calculadoras):
     with colunas_calculadoras[indice % 4]:
         if st.button(
@@ -405,7 +356,7 @@ st.divider()
 
 
 # ============================================================
-# VOLTAR AO HUB
+# VOLTAR AO HUB CENTRAL
 # ============================================================
 
 if st.button(
@@ -414,3 +365,4 @@ if st.button(
     use_container_width=True,
 ):
     st.switch_page("app.py")
+```
