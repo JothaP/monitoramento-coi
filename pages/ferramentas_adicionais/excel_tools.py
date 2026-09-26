@@ -1,45 +1,129 @@
 import io
+import re
+
 import pandas as pd
 import streamlit as st
 
 
-def _ler_excel(uploaded_file):
-    return pd.read_excel(uploaded_file)
+def _normalizar_coluna(nome):
+    return re.sub(r"\s+", " ", str(nome).strip()).casefold()
+
+
+def _ler_excel(arquivo):
+    nome = arquivo.name.lower()
+
+    if nome.endswith(".xlsx"):
+        return pd.read_excel(arquivo, engine="openpyxl")
+
+    if nome.endswith(".xls"):
+        try:
+            return pd.read_excel(arquivo, engine="xlrd")
+        except ImportError as exc:
+            raise ValueError(
+                "Arquivos .xls exigem a dependência 'xlrd'. "
+                "Adicione 'xlrd' ao requirements.txt e faça o novo deploy."
+            ) from exc
+
+    raise ValueError(f"Formato não suportado: {arquivo.name}")
+
+
+def _estrutura_dataframe(df):
+    return [_normalizar_coluna(coluna) for coluna in df.columns]
+
+
+def _montar_excel(df):
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Dados")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _assinatura_arquivos(arquivos):
+    return tuple((arquivo.name, arquivo.size) for arquivo in arquivos)
+
+
+def _preparar_resultado(dataframes, estruturas_iguais):
+    if estruturas_iguais:
+        return pd.concat(
+            [df for _, df in dataframes],
+            ignore_index=True,
+        )
+
+    ordem_colunas = []
+    chaves_colunas = set()
+    nomes_por_chave = {}
+
+    for _, df in dataframes:
+        for coluna in df.columns:
+            chave = _normalizar_coluna(coluna)
+            if chave not in chaves_colunas:
+                chaves_colunas.add(chave)
+                ordem_colunas.append(chave)
+                nomes_por_chave[chave] = coluna
+
+    padronizados = []
+
+    for _, df in dataframes:
+        novo = pd.DataFrame(index=df.index)
+        colunas_df = {_normalizar_coluna(col): col for col in df.columns}
+
+        for chave in ordem_colunas:
+            nome_saida = nomes_por_chave[chave]
+            if chave in colunas_df:
+                novo[nome_saida] = df[colunas_df[chave]].values
+            else:
+                novo[nome_saida] = pd.NA
+
+        padronizados.append(novo)
+
+    return pd.concat(padronizados, ignore_index=True)
 
 
 def render_juntar_excel():
-    """Sessão 6.1 — Excel Tools: Juntar Excel."""
-    st.markdown("### 🔗 Juntar arquivos Excel")
-    st.caption("Consolide vários arquivos Excel em uma única base, preservando os arquivos originais.")
+    """Renderiza a ferramenta 6.1.1 — Juntar Excel."""
+
+    st.markdown("### Juntar arquivos Excel")
+    st.caption(
+        "Selecione dois ou mais arquivos. As estruturas serão verificadas antes da junção. "
+        "Os arquivos originais não serão alterados."
+    )
 
     arquivos = st.file_uploader(
         "Selecione os arquivos Excel",
         type=["xlsx", "xls"],
         accept_multiple_files=True,
-        key="excel_tools_juntar_upload",
-        help="Você pode selecionar vários arquivos .xlsx ou .xls.",
+        key="juntar_excel_arquivos",
     )
 
     if not arquivos:
-        st.info("Selecione pelo menos dois arquivos Excel para iniciar a consolidação.")
+        st.info("Selecione os arquivos que deseja juntar.")
         return
 
-    st.markdown(f"**{len(arquivos)} arquivo(s) selecionado(s).**")
+    assinatura = _assinatura_arquivos(arquivos)
 
-    dados = []
+    if st.session_state.get("juntar_excel_assinatura") != assinatura:
+        st.session_state["juntar_excel_assinatura"] = assinatura
+        st.session_state["juntar_excel_resultado"] = None
+        st.session_state["juntar_excel_nome"] = None
+        st.session_state["juntar_excel_estruturas_iguais"] = None
+
+    if len(arquivos) < 2:
+        st.warning("Selecione pelo menos 2 arquivos para realizar a junção.")
+        return
+
+    st.write(f"**{len(arquivos)} arquivos selecionados.**")
+
+    dataframes = []
     erros = []
 
     for arquivo in arquivos:
         try:
+            arquivo.seek(0)
             df = _ler_excel(arquivo)
-            dados.append({
-                "nome": arquivo.name,
-                "df": df,
-                "colunas": list(df.columns),
-                "registros": len(df),
-            })
+            dataframes.append((arquivo.name, df))
         except Exception as exc:
-            erros.append(f"{arquivo.name}: {exc}")
+            erros.append(f"**{arquivo.name}:** {exc}")
 
     if erros:
         st.error("Não foi possível ler um ou mais arquivos:")
@@ -47,103 +131,116 @@ def render_juntar_excel():
             st.write(f"- {erro}")
         return
 
-    if not dados:
-        st.warning("Nenhum arquivo válido foi carregado.")
-        return
+    estruturas = [_estrutura_dataframe(df) for _, df in dataframes]
+    estrutura_base = estruturas[0]
+    estruturas_iguais = all(estrutura == estrutura_base for estrutura in estruturas[1:])
 
-    total_registros = sum(item["registros"] for item in dados)
-    estruturas = [item["colunas"] for item in dados]
-    estruturas_iguais = all(colunas == estruturas[0] for colunas in estruturas[1:])
+    st.markdown("#### 📋 Estrutura dos arquivos")
 
-    st.markdown("#### Resumo dos arquivos")
-    resumo = pd.DataFrame([
+    resumo = pd.DataFrame(
         {
-            "Arquivo": item["nome"],
-            "Registros": item["registros"],
-            "Colunas": len(item["colunas"]),
+            "Arquivo": [nome for nome, _ in dataframes],
+            "Registros": [len(df) for _, df in dataframes],
+            "Colunas": [len(df.columns) for _, df in dataframes],
         }
-        for item in dados
-    ])
+    )
     st.dataframe(resumo, use_container_width=True, hide_index=True)
 
     if estruturas_iguais:
-        st.success("As estruturas são iguais. Os arquivos podem ser juntados diretamente.")
-        modo_juncao = "direta"
+        st.success(
+            "✅ Todos os arquivos possuem a mesma estrutura. "
+            "A junção pode ser realizada diretamente."
+        )
     else:
-        st.warning("Os arquivos possuem estruturas diferentes.")
+        st.warning("⚠️ Os arquivos possuem estruturas diferentes.")
 
         todas_colunas = []
-        for item in dados:
-            for coluna in item["colunas"]:
-                if coluna not in todas_colunas:
-                    todas_colunas.append(coluna)
+        for _, df in dataframes:
+            for coluna in df.columns:
+                chave = _normalizar_coluna(coluna)
+                if chave not in todas_colunas:
+                    todas_colunas.append(chave)
 
-        tabela_diferencas = []
-        for item in dados:
-            conjunto = set(item["colunas"])
-            tabela_diferencas.append({
-                "Arquivo": item["nome"],
-                "Colunas presentes": len(item["colunas"]),
-                "Colunas ausentes": len([c for c in todas_colunas if c not in conjunto]),
-                "Ausentes neste arquivo": ", ".join(
-                    str(c) for c in todas_colunas if c not in conjunto
-                ) or "—",
-            })
+        detalhes = []
+        for nome, df in dataframes:
+            presentes = {_normalizar_coluna(col) for col in df.columns}
+            faltantes = [col for col in todas_colunas if col not in presentes]
+            detalhes.append(
+                {
+                    "Arquivo": nome,
+                    "Colunas presentes": len(presentes),
+                    "Colunas ausentes": len(faltantes),
+                    "Ausentes": ", ".join(faltantes) if faltantes else "—",
+                }
+            )
 
         st.dataframe(
-            pd.DataFrame(tabela_diferencas),
+            pd.DataFrame(detalhes),
             use_container_width=True,
             hide_index=True,
         )
 
+        st.markdown("#### Escolha como proceder")
         modo_juncao = st.radio(
-            "Como deseja tratar as estruturas diferentes?",
-            options=[
-                "A — Juntar mesmo (colunas ausentes ficam em branco)",
-                "B — Bloquear operação",
+            "",
+            [
+                "A — Juntar mesmo, preenchendo colunas ausentes em branco",
+                "B — Bloquear a operação",
             ],
-            key="excel_tools_juntar_modo",
+            key="juntar_excel_modo_estrutura",
         )
 
         if modo_juncao.startswith("B"):
-            st.error("Operação bloqueada. Nenhum arquivo foi alterado ou gerado.")
+            st.error("A operação está bloqueada. Nenhum arquivo foi alterado.")
             return
 
-    try:
-        if modo_juncao == "direta":
-            resultado = pd.concat(
-                [item["df"] for item in dados],
-                ignore_index=True,
-            )
-        else:
-            resultado = pd.concat(
-                [item["df"] for item in dados],
-                ignore_index=True,
-                sort=False,
-            )
-    except Exception as exc:
-        st.error(f"Erro ao juntar os arquivos: {exc}")
+        st.info(
+            "As colunas serão unificadas. Quando uma coluna não existir em determinado arquivo, "
+            "as células correspondentes ficarão em branco."
+        )
+
+    if st.button(
+        "🔗 Juntar arquivos",
+        type="primary",
+        use_container_width=True,
+        key="executar_juntar_excel",
+    ):
+        try:
+            resultado = _preparar_resultado(dataframes, estruturas_iguais)
+
+            st.session_state["juntar_excel_resultado"] = resultado
+            st.session_state["juntar_excel_nome"] = "Excel_Consolidado.xlsx"
+            st.session_state["juntar_excel_estruturas_iguais"] = estruturas_iguais
+
+        except Exception as exc:
+            st.error(f"Não foi possível juntar os arquivos: {exc}")
+            return
+
+    resultado = st.session_state.get("juntar_excel_resultado")
+
+    if resultado is None:
         return
 
-    st.markdown("#### Resultado")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Arquivos", len(dados))
-    c2.metric("Registros", len(resultado))
-    c3.metric("Colunas", len(resultado.columns))
+    st.success(
+        f"✅ Junção concluída: {len(resultado):,} registros e "
+        f"{len(resultado.columns):,} colunas."
+    )
 
-    st.markdown("**Prévia — primeiros 100 registros**")
-    st.dataframe(resultado.head(100), use_container_width=True, hide_index=True)
-
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        resultado.to_excel(writer, index=False, sheet_name="Consolidado")
-    buffer.seek(0)
+    st.markdown("#### 👁️ Prévia do resultado")
+    st.dataframe(
+        resultado.head(100),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     st.download_button(
-        "📥 Baixar Excel Consolidado",
-        data=buffer.getvalue(),
-        file_name="Excel_Consolidado.xlsx",
+        "📥 Baixar Excel consolidado",
+        data=_montar_excel(resultado),
+        file_name=st.session_state.get(
+            "juntar_excel_nome",
+            "Excel_Consolidado.xlsx",
+        ),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
-        key="excel_tools_baixar_consolidado",
+        key="download_juntar_excel",
     )
