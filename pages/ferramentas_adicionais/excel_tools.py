@@ -226,13 +226,6 @@ def render_juntar_excel():
         f"{len(resultado.columns):,} colunas."
     )
 
-    st.markdown("#### 👁️ Prévia do resultado")
-    st.dataframe(
-        resultado.head(100),
-        use_container_width=True,
-        hide_index=True,
-    )
-
     st.download_button(
         "📥 Baixar Excel consolidado",
         data=_montar_excel(resultado),
