@@ -214,6 +214,20 @@ else:
 
 
 # ============================================================
+# DEBUG — ANTES DA AUTENTICAÇÃO
+# ============================================================
+
+st.write(
+    "DEBUG ANTES AUTENTICAÇÃO:",
+    {
+        "df_api": st.session_state.get("df_api"),
+        "df_the": st.session_state.get("df_the"),
+        "df_eventos": st.session_state.get("df_eventos"),
+    },
+)
+
+
+# ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
@@ -228,6 +242,20 @@ if not verificar_autenticacao():
         st.switch_page("app.py")
 
     st.stop()
+
+
+# ============================================================
+# DEBUG — DEPOIS DA AUTENTICAÇÃO
+# ============================================================
+
+st.write(
+    "DEBUG DEPOIS AUTENTICAÇÃO:",
+    {
+        "df_api": st.session_state.get("df_api"),
+        "df_the": st.session_state.get("df_the"),
+        "df_eventos": st.session_state.get("df_eventos"),
+    },
+)
 
 
 # ============================================================
@@ -549,12 +577,9 @@ for indice, base in enumerate(BASES_CONFIG):
                     use_container_width=True,
                 ):
 
-                    # Remove somente a base selecionada.
                     st.session_state[f"df_{chave}"] = None
                     st.session_state[f"arquivos_{chave}"] = []
 
-                    # Remove a assinatura para permitir que o mesmo
-                    # arquivo seja carregado novamente.
                     assinaturas = st.session_state.get(
                         "assinaturas_upload",
                         {},
@@ -564,8 +589,6 @@ for indice, base in enumerate(BASES_CONFIG):
 
                     st.session_state["assinaturas_upload"] = assinaturas
 
-                    # Troca a chave do file_uploader para limpar
-                    # visualmente o componente.
                     if f"versao_upload_{chave}" not in st.session_state:
                         st.session_state[f"versao_upload_{chave}"] = 0
 
@@ -610,6 +633,7 @@ FERRAMENTAS_LIBERADAS_USUARIO = {
     "Lista Rápida",
     "Lotes",
 }
+
 
 for indice, ferramenta in enumerate(FERRAMENTAS):
 
@@ -689,5 +713,5 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "<p style='font-size:12px; color:gray;'>"
                     "🔒 Restrito a administradores"
                     "</p>",
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
