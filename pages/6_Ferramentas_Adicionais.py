@@ -208,8 +208,7 @@ def abrir_comparar_bases():
 
 @st.dialog("🧹 Remover Duplicidades", width="large")
 def abrir_remover_duplicidades():
-    st.markdown("### Remover Duplicidades")
-    st.info("A ferramenta será implementada neste popup.")
+    render_remover_duplicidades()
 
 
 @st.dialog("✂️ Separar Excel", width="large")
