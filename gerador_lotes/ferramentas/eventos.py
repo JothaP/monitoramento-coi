@@ -977,6 +977,15 @@ def limpar_estado_eventos():
 
 def render_eventos():
 
+    st.write("DEBUG eventos:", {
+        "df_api": "df_api" in st.session_state,
+        "df_the": "df_the" in st.session_state,
+        "df_eventos": "df_eventos" in st.session_state,
+        "api": base_carregada("api"),
+        "the": base_carregada("the"),
+        "eventos": base_carregada("eventos"),
+    })
+
     aplicar_modo_visual()
 
     # --------------------------------------------------------
