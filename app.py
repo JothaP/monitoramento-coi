@@ -94,6 +94,7 @@ modo_escuro_hub = st.toggle(
 
 st.session_state.modo_escuro_hub = modo_escuro_hub
 
+
 if modo_escuro_hub:
     st.markdown(
         """
@@ -269,10 +270,11 @@ with col4:
 with col5:
     st.markdown("#### 📋 Módulo 5")
     st.markdown("**Cadastros e Consultas COI**")
-    st.caption("Status: Em desenvolvimento")
+    st.caption("Status: Ativo")
 
     if st.button(
         "Acessar Cadastros e Consultas",
+        type="primary",
         use_container_width=True,
         key="acessar_cadastros_consultas",
     ):
