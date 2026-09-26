@@ -1,6 +1,7 @@
 import streamlit as st
 
 from auth import verificar_autenticacao
+
 from pages.ferramentas_adicionais.excel_tools import (
     render_juntar_excel,
     render_visualizar_excel,
@@ -9,6 +10,18 @@ from pages.ferramentas_adicionais.excel_tools import (
     render_separar_excel,
     render_exportar_excel,
 )
+
+from pages.ferramentas_adicionais.calculadoras import (
+    render_vazao,
+    render_pressao,
+    render_consumo,
+    render_volume,
+    render_tempo,
+    render_sla,
+    render_conversor_unidades,
+)
+
+
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================
@@ -229,44 +242,37 @@ def abrir_exportar_excel():
 
 @st.dialog("💧 Vazão", width="large")
 def abrir_vazao():
-    st.markdown("### Calculadora de Vazão")
-    st.info("A calculadora será implementada neste popup.")
+    render_vazao()
 
 
 @st.dialog("📈 Pressão", width="large")
 def abrir_pressao():
-    st.markdown("### Calculadora de Pressão")
-    st.info("A calculadora será implementada neste popup.")
+    render_pressao()
 
 
 @st.dialog("🚰 Consumo", width="large")
 def abrir_consumo():
-    st.markdown("### Calculadora de Consumo")
-    st.info("A calculadora será implementada neste popup.")
+    render_consumo()
 
 
 @st.dialog("📦 Volume", width="large")
 def abrir_volume():
-    st.markdown("### Calculadora de Volume")
-    st.info("A calculadora será implementada neste popup.")
+    render_volume()
 
 
 @st.dialog("⏱️ Tempo", width="large")
 def abrir_tempo():
-    st.markdown("### Calculadora de Tempo")
-    st.info("A calculadora será implementada neste popup.")
+    render_tempo()
 
 
 @st.dialog("📅 SLA", width="large")
 def abrir_sla():
-    st.markdown("### Calculadora de SLA")
-    st.info("A calculadora será implementada neste popup.")
+    render_sla()
 
 
 @st.dialog("🔄 Conversor de Unidades", width="large")
 def abrir_unidades():
-    st.markdown("### Conversor de Unidades")
-    st.info("O conversor será implementado neste popup.")
+    render_conversor_unidades()
 
 
 # ============================================================
@@ -312,7 +318,7 @@ st.divider()
 
 
 # ============================================================
-# CALCULADORAS
+# 6.2 — CALCULADORAS
 # ============================================================
 
 st.markdown(
