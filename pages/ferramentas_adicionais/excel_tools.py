@@ -1387,3 +1387,346 @@ def render_remover_duplicidades():
         use_container_width=True,
         key="download_remover_duplicidades",
     )
+
+
+# ============================================================
+# 6.1.5 — SEPARAR EXCEL
+# ============================================================
+
+def _valor_separacao(valor):
+    if pd.isna(valor):
+        return ""
+
+    texto = str(valor).strip()
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto.casefold()
+
+
+def _nome_arquivo_seguro(valor):
+    valor = str(valor).strip()
+
+    if not valor:
+        valor = "Vazios"
+
+    valor = re.sub(
+        r'[\\/:*?"<>|]+',
+        "_",
+        valor,
+    )
+
+    valor = re.sub(
+        r"\s+",
+        " ",
+        valor,
+    )
+
+    return valor[:120]
+
+
+def render_separar_excel():
+    """Renderiza a ferramenta 6.1.5 — Separar Excel."""
+
+    st.markdown("### Separar Excel")
+
+    st.caption(
+        "Divida uma base em vários arquivos Excel utilizando "
+        "os valores de uma coluna. O arquivo original não será alterado."
+    )
+
+    arquivo = st.file_uploader(
+        "Selecione o arquivo Excel",
+        type=["xlsx", "xls"],
+        accept_multiple_files=False,
+        key="separar_excel_arquivo",
+    )
+
+    if arquivo is None:
+
+        st.info(
+            "Selecione um arquivo Excel para começar."
+        )
+
+        return
+
+    assinatura = (
+        arquivo.name,
+        arquivo.size,
+    )
+
+    if st.session_state.get(
+        "separar_excel_assinatura"
+    ) != assinatura:
+
+        st.session_state[
+            "separar_excel_assinatura"
+        ] = assinatura
+
+        st.session_state[
+            "separar_excel_df"
+        ] = None
+
+        st.session_state[
+            "separar_excel_resultados"
+        ] = None
+
+        st.session_state[
+            "separar_excel_coluna"
+        ] = None
+
+        st.session_state[
+            "separar_excel_valores"
+        ] = []
+
+        try:
+
+            arquivo.seek(0)
+
+            df = _ler_excel(arquivo)
+
+            st.session_state[
+                "separar_excel_df"
+            ] = df
+
+        except Exception as exc:
+
+            st.session_state[
+                "separar_excel_df"
+            ] = None
+
+            st.error(
+                f"Não foi possível ler o arquivo: {exc}"
+            )
+
+            return
+
+    df = st.session_state.get(
+        "separar_excel_df"
+    )
+
+    if df is None:
+        return
+
+    if df.empty:
+
+        st.warning(
+            "O arquivo não possui registros."
+        )
+
+        return
+
+    st.success(
+        f"Arquivo carregado: **{arquivo.name}** — "
+        f"{len(df):,} registros e "
+        f"{len(df.columns):,} colunas."
+    )
+
+    st.markdown(
+        "#### 🔑 Coluna utilizada para separar"
+    )
+
+    coluna = st.selectbox(
+        "Selecione a coluna",
+        options=list(df.columns),
+        key="separar_excel_coluna",
+    )
+
+    if coluna is None:
+        return
+
+    valores_mapeados = {}
+
+    for valor in df[coluna]:
+
+        chave = _valor_separacao(valor)
+
+        if chave not in valores_mapeados:
+
+            if pd.isna(valor) or str(valor).strip() == "":
+                valores_mapeados[chave] = "Vazios"
+
+            else:
+                valores_mapeados[chave] = str(
+                    valor
+                ).strip()
+
+    opcoes = list(
+        valores_mapeados.items()
+    )
+
+    opcoes.sort(
+        key=lambda item: item[1].casefold()
+    )
+
+    labels = [
+        rotulo
+        for _, rotulo in opcoes
+    ]
+
+    st.markdown(
+        "#### 📂 Valores para gerar"
+    )
+
+    selecionados = st.multiselect(
+        "Selecione os valores que deseja transformar em arquivos",
+        options=labels,
+        key="separar_excel_valores",
+    )
+
+    if not selecionados:
+
+        st.info(
+            "Selecione pelo menos um valor para gerar os arquivos."
+        )
+
+        return
+
+    resumo = []
+
+    for chave, rotulo in opcoes:
+
+        if rotulo not in selecionados:
+            continue
+
+        if chave == "":
+
+            mascara = (
+                df[coluna].isna()
+                | df[coluna]
+                .astype(str)
+                .str.strip()
+                .eq("")
+            )
+
+        else:
+
+            mascara = (
+                df[coluna]
+                .apply(_valor_separacao)
+                .eq(chave)
+            )
+
+        resumo.append(
+            {
+                "Valor": rotulo,
+                "Registros": int(
+                    mascara.sum()
+                ),
+            }
+        )
+
+    st.markdown(
+        "#### 📊 Resumo da separação"
+    )
+
+    st.dataframe(
+        pd.DataFrame(resumo),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if st.button(
+        "✂️ Gerar arquivos separados",
+        type="primary",
+        use_container_width=True,
+        key="executar_separar_excel",
+    ):
+
+        resultados = []
+
+        for chave, rotulo in opcoes:
+
+            if rotulo not in selecionados:
+                continue
+
+            if chave == "":
+
+                mascara = (
+                    df[coluna].isna()
+                    | df[coluna]
+                    .astype(str)
+                    .str.strip()
+                    .eq("")
+                )
+
+            else:
+
+                mascara = (
+                    df[coluna]
+                    .apply(_valor_separacao)
+                    .eq(chave)
+                )
+
+            df_separado = df.loc[
+                mascara
+            ].copy()
+
+            resultados.append(
+                {
+                    "valor": rotulo,
+                    "registros": df_separado,
+                    "nome_arquivo": (
+                        "Separado_"
+                        f"{_nome_arquivo_seguro(rotulo)}.xlsx"
+                    ),
+                }
+            )
+
+        st.session_state[
+            "separar_excel_resultados"
+        ] = resultados
+
+    resultados = st.session_state.get(
+        "separar_excel_resultados"
+    )
+
+    if not resultados:
+        return
+
+    st.success(
+        f"✅ {len(resultados)} arquivo(s) separado(s) com sucesso."
+    )
+
+    st.markdown(
+        "#### 📥 Arquivos para download"
+    )
+
+    for indice, resultado in enumerate(
+        resultados
+    ):
+
+        df_resultado = resultado[
+            "registros"
+        ]
+
+        col1, col2 = st.columns(
+            [2, 1]
+        )
+
+        with col1:
+
+            st.write(
+                f"**{resultado['nome_arquivo']}**  \n"
+                f"{len(df_resultado):,} registros"
+            )
+
+        with col2:
+
+            st.download_button(
+                "📥 Baixar",
+                data=_montar_excel(
+                    df_resultado
+                ),
+                file_name=resultado[
+                    "nome_arquivo"
+                ],
+                mime=(
+                    "application/vnd.openxmlformats-"
+                    "officedocument.spreadsheetml.sheet"
+                ),
+                use_container_width=True,
+                key=(
+                    "download_separar_excel_"
+                    f"{indice}"
+                ),
+            )
