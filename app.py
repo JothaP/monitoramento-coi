@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import fazer_login, verificar_autenticacao, fazer_logout
@@ -288,35 +289,15 @@ with col5:
 with col6:
     st.markdown("#### 🔧 Módulo 6")
     st.markdown("**Ferramentas Adicionais**")
+    st.caption("Status: Ativo")
 
-    if st.session_state.perfil == "admin":
-
-        st.caption("Status: Em desenvolvimento (Admin)")
-
-        if st.button(
-            "Acessar Ferramentas Adicionais",
-            use_container_width=True,
-            key="acessar_ferramentas_adicionais",
-        ):
-            st.switch_page("pages/6_Ferramentas_Adicionais.py")
-
-    else:
-
-        st.caption("Status: Em desenvolvimento")
-
-        st.button(
-            "Acessar Ferramentas Adicionais",
-            disabled=True,
-            use_container_width=True,
-            key="ferramentas_adicionais_restrito",
-        )
-
-        st.markdown(
-            "<p style='font-size:12px; color:gray;'>"
-            "🔒 Restrito a administradores"
-            "</p>",
-            unsafe_allow_html=True,
-        )
+    if st.button(
+        "Acessar Ferramentas Adicionais",
+        type="primary",
+        use_container_width=True,
+        key="acessar_ferramentas_adicionais",
+    ):
+        st.switch_page("pages/6_Ferramentas_Adicionais.py")
 
 
 # ============================================================
@@ -334,3 +315,4 @@ if st.button(
     st.success("Sessão encerrada com sucesso!")
 
     st.rerun()
+```
