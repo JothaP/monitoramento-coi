@@ -68,25 +68,37 @@ if st.session_state.get("perfil") != "admin":
 # ESTILO
 # ============================================================
 
-DARK_CSS = """
-<style>
-[data-testid="stAppViewContainer"] {
-    background-color: #0e1117;
-}
-[data-testid="stHeader"] {
-    background-color: #0e1117;
-}
-[data-testid="stSidebar"] {
-    background-color: #161b22;
-}
-[data-testid="stSidebar"] * {
-    color: #f0f2f6;
-}
-</style>
-""" if st.session_state.get("modo_escuro_ferramentas") else ""
+if st.session_state.get("modo_escuro_ferramentas"):
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {
+            background-color: #0e1117;
+        }
 
+        [data-testid="stHeader"] {
+            background-color: #0e1117;
+        }
+
+        [data-testid="stSidebar"] {
+            background-color: #161b22;
+        }
+
+        [data-testid="stSidebar"] * {
+            color: #f0f2f6;
+        }
+
+        .secao-ferramentas p {
+            color: #b8c0cc !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# CSS principal da página — mantido separado do CSS do modo escuro.
 st.markdown(
-    DARK_CSS + """
+    """
     <style>
     .titulo-ferramentas {
         background: linear-gradient(135deg, #17365D, #1F4E78);
@@ -119,7 +131,6 @@ st.markdown(
     }
 
     .secao-ferramentas p {
-        color: #666;
         margin-top: 0;
         margin-bottom: 14px;
     }
@@ -134,7 +145,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 
 # ============================================================
