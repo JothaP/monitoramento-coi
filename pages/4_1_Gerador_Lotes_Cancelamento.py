@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 
 from auth import verificar_autenticacao
@@ -214,20 +215,6 @@ else:
 
 
 # ============================================================
-# DEBUG — ANTES DA AUTENTICAÇÃO
-# ============================================================
-
-st.write(
-    "DEBUG ANTES AUTENTICAÇÃO:",
-    {
-        "df_api": st.session_state.get("df_api"),
-        "df_the": st.session_state.get("df_the"),
-        "df_eventos": st.session_state.get("df_eventos"),
-    },
-)
-
-
-# ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
@@ -242,20 +229,6 @@ if not verificar_autenticacao():
         st.switch_page("app.py")
 
     st.stop()
-
-
-# ============================================================
-# DEBUG — DEPOIS DA AUTENTICAÇÃO
-# ============================================================
-
-st.write(
-    "DEBUG DEPOIS AUTENTICAÇÃO:",
-    {
-        "df_api": st.session_state.get("df_api"),
-        "df_the": st.session_state.get("df_the"),
-        "df_eventos": st.session_state.get("df_eventos"),
-    },
-)
 
 
 # ============================================================
@@ -552,38 +525,10 @@ for indice, base in enumerate(BASES_CONFIG):
 
             if arquivos:
 
-                processado = processar_upload_multiplo(
+                processar_upload_multiplo(
                     chave,
                     arquivos,
                 )
-
-                # ====================================================
-                # DEBUG — IMEDIATAMENTE APÓS O CARREGAMENTO
-                # ====================================================
-
-                if processado:
-
-                    st.write(
-                        "DEBUG APÓS CARREGAMENTO:",
-                        {
-                            "base": chave,
-                            "df_api": (
-                                None
-                                if st.session_state.get("df_api") is None
-                                else st.session_state["df_api"].shape
-                            ),
-                            "df_the": (
-                                None
-                                if st.session_state.get("df_the") is None
-                                else st.session_state["df_the"].shape
-                            ),
-                            "df_eventos": (
-                                None
-                                if st.session_state.get("df_eventos") is None
-                                else st.session_state["df_eventos"].shape
-                            ),
-                        },
-                    )
 
             arquivos_carregados = st.session_state.get(
                 f"arquivos_{chave}",
@@ -740,3 +685,4 @@ for indice, ferramenta in enumerate(FERRAMENTAS):
                     "</p>",
                     unsafe_allow_html=True,
                 )
+```
