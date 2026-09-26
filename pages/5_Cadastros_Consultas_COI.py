@@ -1,4 +1,3 @@
-```python
 import json
 import re
 
@@ -2251,4 +2250,3 @@ if st.button(
     key="voltar_hub_cadastros",
 ):
     st.switch_page("app.py")
-```
