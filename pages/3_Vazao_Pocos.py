@@ -758,28 +758,6 @@ except Exception as erro:
 
     st.stop()
 
-
-# ============================================================
-# DEBUG TEMPORÁRIO — LEITURA BRUTA DO GOOGLE SHEETS
-# ============================================================
-
-st.write(
-    "DEBUG ABA POCOS - CABEÇALHOS"
-)
-
-st.write(
-    aba_pocos.row_values(1)
-)
-
-st.write(
-    "DEBUG ABA POCOS - PRIMEIRAS LINHAS"
-)
-
-st.write(
-    aba_pocos.get_all_values()[:8]
-)
-
-
 # ============================================================
 # DADOS
 # ============================================================
@@ -801,28 +779,6 @@ except Exception as erro:
     )
 
     st.stop()
-
-
-# ============================================================
-# DEBUG TEMPORÁRIO DOS PONTOS FIXOS
-# ============================================================
-
-st.write("DEBUG POCOS")
-
-st.dataframe(
-    df_pocos[
-        [
-            "ID_POCO",
-            "IDENTIFICACAO_ATIVO",
-            "NOME_POCO",
-            "MUNICIPIO",
-            "LATITUDE",
-            "LONGITUDE",
-        ]
-    ],
-    width="stretch",
-)
-
 
 # ============================================================
 # GARANTIR CABEÇALHOS
@@ -2040,12 +1996,13 @@ mapa = folium.Map(
     attr=config_mapa["attr"],
 )
 
-
 # ============================================================
 # MARCADORES
 # ============================================================
 
-for _, poco in coordenadas.iterrows():
+if municipio_filtro != "Todos":
+
+    for _, poco in coordenadas.iterrows():
 
     id_poco = str(
         poco["ID_POCO"]
@@ -2137,7 +2094,10 @@ for _, poco in coordenadas.iterrows():
 # AJUSTE AUTOMÁTICO DO ENQUADRAMENTO
 # ============================================================
 
-if not coordenadas.empty:
+if (
+    municipio_filtro != "Todos"
+    and not coordenadas.empty
+):
 
     mapa.fit_bounds(
         [
