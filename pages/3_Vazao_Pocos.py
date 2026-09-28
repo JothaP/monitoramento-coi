@@ -165,6 +165,7 @@ def carregar_pocos():
     valores = aba_pocos.get_all_values()
 
     if not valores:
+
         return pd.DataFrame(
             columns=CABECALHO_POCOS
         )
@@ -182,12 +183,59 @@ def carregar_pocos():
     )
 
     for coluna in CABECALHO_POCOS:
+
         if coluna not in df.columns:
+
             df[coluna] = ""
 
     return df[
         CABECALHO_POCOS
     ].copy()
+
+
+@st.cache_data(
+    ttl=30,
+    show_spinner=False,
+)
+def carregar_leituras():
+
+    _, aba_leituras = obter_abas()
+
+    valores = aba_leituras.get_all_values()
+
+    if not valores:
+
+        return pd.DataFrame(
+            columns=CABECALHO_LEITURAS
+        )
+
+    cabecalho = [
+        str(coluna).strip()
+        for coluna in valores[0]
+    ]
+
+    registros = valores[1:]
+
+    df = pd.DataFrame(
+        registros,
+        columns=cabecalho,
+    )
+
+    for coluna in CABECALHO_LEITURAS:
+
+        if coluna not in df.columns:
+
+            df[coluna] = ""
+
+    return df[
+        CABECALHO_LEITURAS
+    ].copy()
+
+
+def invalidar_cache_dados():
+
+    carregar_pocos.clear()
+    carregar_leituras.clear()
 
 
 # ============================================================
@@ -715,7 +763,9 @@ except Exception as erro:
 # DEBUG TEMPORÁRIO — LEITURA BRUTA DO GOOGLE SHEETS
 # ============================================================
 
-st.write("DEBUG ABA POCOS - CABEÇALHOS")
+st.write(
+    "DEBUG ABA POCOS - CABEÇALHOS"
+)
 
 st.write(
     aba_pocos.row_values(1)
@@ -770,7 +820,7 @@ st.dataframe(
             "LONGITUDE",
         ]
     ],
-    use_container_width=True,
+    width="stretch",
 )
 
 
@@ -859,7 +909,7 @@ def modal_novo_poco():
         salvar_poco = st.form_submit_button(
             "Cadastrar poço",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if salvar_poco:
@@ -1046,7 +1096,7 @@ def modal_editar_poco():
         salvar_edicao = st.form_submit_button(
             "💾 Salvar alterações",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if salvar_edicao:
@@ -1154,7 +1204,7 @@ def modal_editar_poco():
     if st.button(
         "🗑️ Excluir poço",
         type="secondary",
-        use_container_width=True,
+        width="stretch",
         key="btn_excluir_poco_modal",
     ):
 
@@ -1249,7 +1299,7 @@ def modal_nova_leitura():
         salvar_leitura = st.form_submit_button(
             "Registrar leitura",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if salvar_leitura:
@@ -1499,7 +1549,7 @@ def modal_editar_leitura():
         salvar_leitura_editada = st.form_submit_button(
             "💾 Salvar alterações",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if salvar_leitura_editada:
@@ -1551,7 +1601,7 @@ def modal_editar_leitura():
     if st.button(
         "🗑️ Excluir leitura",
         type="secondary",
-        use_container_width=True,
+        width="stretch",
         key="btn_excluir_leitura_modal",
     ):
 
@@ -1691,7 +1741,7 @@ st.sidebar.markdown(
 if st.sidebar.button(
     "➕ Cadastrar novo poço",
     type="primary",
-    use_container_width=True,
+    width="stretch",
 ):
 
     modal_novo_poco()
@@ -1699,7 +1749,7 @@ if st.sidebar.button(
 
 if st.sidebar.button(
     "✏️ Editar ou excluir poço",
-    use_container_width=True,
+    width="stretch",
 ):
 
     modal_editar_poco()
@@ -1707,7 +1757,7 @@ if st.sidebar.button(
 
 if st.sidebar.button(
     "📋 Registrar nova leitura",
-    use_container_width=True,
+    width="stretch",
 ):
 
     modal_nova_leitura()
@@ -1715,7 +1765,7 @@ if st.sidebar.button(
 
 if st.sidebar.button(
     "📝 Editar ou excluir leitura",
-    use_container_width=True,
+    width="stretch",
 ):
 
     modal_editar_leitura()
@@ -1725,7 +1775,7 @@ st.sidebar.divider()
 
 if st.sidebar.button(
     "🏠 Voltar ao Menu Principal",
-    use_container_width=True,
+    width="stretch",
 ):
 
     st.switch_page("app.py")
@@ -2198,7 +2248,7 @@ else:
         historico[
             colunas_historico
         ],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -2275,7 +2325,7 @@ else:
 
         st.plotly_chart(
             fig,
-            use_container_width=True,
+            width="stretch",
         )
 
 
