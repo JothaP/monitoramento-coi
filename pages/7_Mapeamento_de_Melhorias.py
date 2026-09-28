@@ -174,25 +174,44 @@ def gerar_id():
 
 
 def converter_float(valor):
+    """Converte coordenadas/números vindos do Google Sheets com robustez."""
     if valor is None:
         return None
 
-    if isinstance(valor, (int, float)):
-        if isinstance(valor, float) and math.isnan(valor):
+    try:
+        if pd.isna(valor):
             return None
+    except Exception:
+        pass
 
-        return float(valor)
+    if isinstance(valor, (int, float)):
+        try:
+            return float(valor)
+        except (TypeError, ValueError):
+            return None
 
     valor = texto(valor)
 
     if not valor:
         return None
 
-    valor = valor.replace(",", ".")
+    # Aceita decimal brasileiro e remove espaços/caracteres
+    # que podem acompanhar o valor quando ele vem da planilha.
+    valor = (
+        valor
+        .replace("−", "-")
+        .replace("–", "-")
+        .replace("°", "")
+        .replace(" ", "")
+    )
+
+    # Se houver vírgula decimal, converte para ponto.
+    if "," in valor and "." not in valor:
+        valor = valor.replace(",", ".")
 
     try:
         return float(valor)
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
@@ -1569,12 +1588,14 @@ def construir_mapa(
 
     for _, registro in df_registro.iterrows():
 
+        # As coordenadas são lidas diretamente do cadastro da melhoria.
+        # Não dependem do histórico de O.S. nem do filtro de data.
         latitude = converter_float(
-            registro["Latitude"]
+            registro.get("Latitude")
         )
 
         longitude = converter_float(
-            registro["Longitude"]
+            registro.get("Longitude")
         )
 
         if not coordenadas_validas(
@@ -1741,6 +1762,15 @@ def construir_mapa(
     folium.LayerControl().add_to(
         mapa
     )
+
+    # Garante que o mapa seja enquadrado nas coordenadas cadastradas.
+    # Isso evita que um ponto válido fique fora da área inicialmente visível.
+    if bounds:
+        if len(bounds) == 1:
+            mapa.location = bounds[0]
+            mapa.zoom_start = 16
+        else:
+            mapa.fit_bounds(bounds, padding=(20, 20))
 
     return mapa
 
