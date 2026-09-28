@@ -292,7 +292,6 @@ def normalizar_numero(valor):
 
         texto = str(valor).strip()
 
-        # Aceita números armazenados com vírgula decimal.
         texto = texto.replace(",", ".")
 
         return float(texto)
@@ -425,18 +424,6 @@ def preparar_pocos(df):
                 .astype(str)
                 .str.strip()
             )
-
-    # ========================================================
-    # CORREÇÃO DAS COORDENADAS
-    # ========================================================
-    # Os dados podem estar no Google Sheets como:
-    # - número;
-    # - texto com ponto decimal;
-    # - texto com vírgula decimal.
-    #
-    # pd.to_numeric() sozinho descarta valores como
-    # "-5,0892". Por isso usamos normalizar_numero().
-    # ========================================================
 
     df["LATITUDE"] = df[
         "LATITUDE"
@@ -802,6 +789,425 @@ poco_filtro = st.sidebar.selectbox(
 
 
 # ============================================================
+# CADASTRO DE POÇOS — SIDEBAR
+# ============================================================
+
+st.sidebar.divider()
+
+with st.sidebar.expander(
+    "Cadastrar novo poço",
+    expanded=False,
+):
+
+    with st.form(
+        "form_novo_poco",
+        clear_on_submit=True,
+    ):
+
+        identificacao = st.text_input(
+            "Identificação do ativo *",
+            placeholder="Ex.: PL-API-PCO0001",
+        )
+
+        nome = st.text_input(
+            "Nome do poço",
+            placeholder="Opcional",
+        )
+
+        municipio = st.text_input(
+            "Município *"
+        )
+
+        latitude = st.number_input(
+            "Latitude *",
+            format="%.7f",
+            value=0.0,
+        )
+
+        longitude = st.number_input(
+            "Longitude *",
+            format="%.7f",
+            value=0.0,
+        )
+
+        salvar_poco = st.form_submit_button(
+            "Cadastrar poço"
+        )
+
+    if salvar_poco:
+
+        if not identificacao.strip():
+
+            st.error(
+                "A identificação do ativo é obrigatória."
+            )
+
+        elif not municipio.strip():
+
+            st.error(
+                "O município é obrigatório."
+            )
+
+        elif latitude == 0.0:
+
+            st.error(
+                "Informe uma latitude válida."
+            )
+
+        elif longitude == 0.0:
+
+            st.error(
+                "Informe uma longitude válida."
+            )
+
+        else:
+
+            try:
+
+                id_criado = adicionar_poco(
+                    identificacao=identificacao.strip(),
+                    nome=nome.strip(),
+                    municipio=municipio.strip(),
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+
+                st.success(
+                    f"Poço cadastrado com ID {id_criado}."
+                )
+
+                st.rerun()
+
+            except Exception as erro:
+
+                st.error(
+                    f"Erro ao cadastrar poço: {erro}"
+                )
+
+
+# ============================================================
+# EDIÇÃO / EXCLUSÃO DE POÇOS — SIDEBAR
+# ============================================================
+
+if not df_pocos.empty:
+
+    with st.sidebar.expander(
+        "Editar ou excluir poço",
+        expanded=False,
+    ):
+
+        opcoes_edicao = {
+            identificacao_exibicao(row): row
+            for _, row in df_pocos.iterrows()
+        }
+
+        selecionado = st.selectbox(
+            "Selecione o poço",
+            list(opcoes_edicao.keys()),
+            key="poco_edicao",
+        )
+
+        poco_atual = opcoes_edicao[
+            selecionado
+        ]
+
+        linha_df = df_pocos.index[
+            df_pocos[
+                "ID_POCO"
+            ].astype(str)
+            == str(
+                poco_atual[
+                    "ID_POCO"
+                ]
+            )
+        ]
+
+        if len(linha_df) > 0:
+
+            indice_df = linha_df[0]
+            linha_planilha = indice_df + 2
+
+        else:
+
+            linha_planilha = None
+
+        with st.form(
+            "form_edicao_poco"
+        ):
+
+            identificacao_edit = st.text_input(
+                "Identificação do ativo *",
+                value=str(
+                    poco_atual[
+                        "IDENTIFICACAO_ATIVO"
+                    ]
+                ),
+            )
+
+            nome_edit = st.text_input(
+                "Nome do poço",
+                value=str(
+                    poco_atual[
+                        "NOME_POCO"
+                    ]
+                ),
+            )
+
+            municipio_edit = st.text_input(
+                "Município *",
+                value=str(
+                    poco_atual[
+                        "MUNICIPIO"
+                    ]
+                ),
+            )
+
+            latitude_atual = normalizar_numero(
+                poco_atual["LATITUDE"]
+            )
+
+            longitude_atual = normalizar_numero(
+                poco_atual["LONGITUDE"]
+            )
+
+            latitude_edit = st.number_input(
+                "Latitude *",
+                value=(
+                    latitude_atual
+                    if latitude_atual is not None
+                    else 0.0
+                ),
+                format="%.7f",
+            )
+
+            longitude_edit = st.number_input(
+                "Longitude *",
+                value=(
+                    longitude_atual
+                    if longitude_atual is not None
+                    else 0.0
+                ),
+                format="%.7f",
+            )
+
+            salvar_edicao = st.form_submit_button(
+                "Salvar alterações"
+            )
+
+        if salvar_edicao:
+
+            if not identificacao_edit.strip():
+
+                st.error(
+                    "A identificação do ativo é obrigatória."
+                )
+
+            elif not municipio_edit.strip():
+
+                st.error(
+                    "O município é obrigatório."
+                )
+
+            elif latitude_edit == 0.0:
+
+                st.error(
+                    "Informe uma latitude válida."
+                )
+
+            elif longitude_edit == 0.0:
+
+                st.error(
+                    "Informe uma longitude válida."
+                )
+
+            elif linha_planilha is None:
+
+                st.error(
+                    "Não foi possível localizar a linha do poço."
+                )
+
+            else:
+
+                try:
+
+                    atualizar_poco(
+                        linha_planilha=linha_planilha,
+                        id_poco=str(
+                            poco_atual[
+                                "ID_POCO"
+                            ]
+                        ),
+                        identificacao=identificacao_edit.strip(),
+                        nome=nome_edit.strip(),
+                        municipio=municipio_edit.strip(),
+                        latitude=latitude_edit,
+                        longitude=longitude_edit,
+                    )
+
+                    st.success(
+                        "Poço atualizado com sucesso."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+
+                    st.error(
+                        f"Erro ao atualizar poço: {erro}"
+                    )
+
+        leituras_vinculadas = (
+            df_leituras[
+                df_leituras[
+                    "ID_POCO"
+                ].astype(str)
+                == str(
+                    poco_atual[
+                        "ID_POCO"
+                    ]
+                )
+            ]
+            if not df_leituras.empty
+            else pd.DataFrame()
+        )
+
+        st.divider()
+
+        if not leituras_vinculadas.empty:
+
+            st.warning(
+                f"Este poço possui "
+                f"{len(leituras_vinculadas)} "
+                f"leitura(s) vinculada(s)."
+            )
+
+        confirmar_exclusao = st.checkbox(
+            "Confirmo que desejo excluir este poço.",
+            key="confirmar_exclusao_poco",
+        )
+
+        if st.button(
+            "Excluir poço",
+            type="secondary",
+            key="btn_excluir_poco",
+        ):
+
+            if not confirmar_exclusao:
+
+                st.warning(
+                    "Marque a confirmação antes de excluir."
+                )
+
+            elif linha_planilha is None:
+
+                st.error(
+                    "Não foi possível localizar a linha do poço."
+                )
+
+            else:
+
+                try:
+
+                    excluir_poco(
+                        linha_planilha
+                    )
+
+                    st.success(
+                        "Poço excluído."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+
+                    st.error(
+                        f"Erro ao excluir poço: {erro}"
+                    )
+
+
+# ============================================================
+# REGISTRO DE LEITURAS — SIDEBAR
+# ============================================================
+
+with st.sidebar.expander(
+    "Registrar nova leitura",
+    expanded=False,
+):
+
+    if df_pocos.empty:
+
+        st.info(
+            "Cadastre pelo menos um poço para registrar leituras."
+        )
+
+    else:
+
+        opcoes_leitura = {
+            identificacao_exibicao(row): row[
+                "ID_POCO"
+            ]
+            for _, row in df_pocos.iterrows()
+        }
+
+        with st.form(
+            "form_nova_leitura",
+            clear_on_submit=True,
+        ):
+
+            poco_leitura = st.selectbox(
+                "Poço",
+                list(
+                    opcoes_leitura.keys()
+                ),
+            )
+
+            data_leitura = st.date_input(
+                "Data da leitura",
+                value=date.today(),
+            )
+
+            vazao = st.number_input(
+                "Vazão",
+                min_value=0.0,
+                format="%.4f",
+            )
+
+            unidade = st.selectbox(
+                "Unidade",
+                UNIDADES_VAZAO,
+            )
+
+            salvar_leitura = st.form_submit_button(
+                "Registrar leitura"
+            )
+
+        if salvar_leitura:
+
+            try:
+
+                id_leitura = adicionar_leitura(
+                    id_poco=opcoes_leitura[
+                        poco_leitura
+                    ],
+                    data_leitura=data_leitura,
+                    vazao=vazao,
+                    unidade=unidade,
+                )
+
+                st.success(
+                    f"Leitura registrada com ID {id_leitura}."
+                )
+
+                st.rerun()
+
+            except Exception as erro:
+
+                st.error(
+                    f"Erro ao registrar leitura: {erro}"
+                )
+
+
+# ============================================================
 # LEITURAS DO PERÍODO
 # ============================================================
 
@@ -944,7 +1350,6 @@ coordenadas = pocos_mapa[
     & pocos_mapa["LONGITUDE"].notna()
 ].copy()
 
-# Mantém somente coordenadas dentro dos limites geográficos.
 coordenadas = coordenadas[
     coordenadas["LATITUDE"].between(
         -90,
@@ -1107,8 +1512,6 @@ for _, poco in coordenadas.iterrows():
     ).add_to(mapa)
 
 
-# Ajusta o mapa automaticamente aos poços
-# quando houver pelo menos um ponto válido.
 if not coordenadas.empty:
 
     mapa.fit_bounds(
@@ -1147,419 +1550,6 @@ if (
         "coordenadas válidas para exibição no mapa. "
         "Verifique Latitude e Longitude no cadastro."
     )
-
-
-# ============================================================
-# CADASTRO DE POÇOS
-# ============================================================
-
-st.subheader("Cadastro de poços")
-
-with st.expander(
-    "Cadastrar novo poço",
-    expanded=False,
-):
-
-    with st.form(
-        "form_novo_poco",
-        clear_on_submit=True,
-    ):
-
-        identificacao = st.text_input(
-            "Identificação do ativo *",
-            placeholder="Ex.: PL-API-PCO0001",
-        )
-
-        nome = st.text_input(
-            "Nome do poço",
-            placeholder="Opcional",
-        )
-
-        municipio = st.text_input(
-            "Município *"
-        )
-
-        col_lat, col_lon = st.columns(2)
-
-        with col_lat:
-
-            latitude = st.number_input(
-                "Latitude *",
-                format="%.7f",
-                value=0.0,
-            )
-
-        with col_lon:
-
-            longitude = st.number_input(
-                "Longitude *",
-                format="%.7f",
-                value=0.0,
-            )
-
-        salvar_poco = st.form_submit_button(
-            "Cadastrar poço"
-        )
-
-    if salvar_poco:
-
-        if not identificacao.strip():
-
-            st.error(
-                "A identificação do ativo é obrigatória."
-            )
-
-        elif not municipio.strip():
-
-            st.error(
-                "O município é obrigatório."
-            )
-
-        elif latitude == 0.0:
-
-            st.error(
-                "Informe uma latitude válida."
-            )
-
-        elif longitude == 0.0:
-
-            st.error(
-                "Informe uma longitude válida."
-            )
-
-        else:
-
-            try:
-
-                id_criado = adicionar_poco(
-                    identificacao=identificacao.strip(),
-                    nome=nome.strip(),
-                    municipio=municipio.strip(),
-                    latitude=latitude,
-                    longitude=longitude,
-                )
-
-                st.success(
-                    f"Poço cadastrado com ID {id_criado}."
-                )
-
-                st.rerun()
-
-            except Exception as erro:
-
-                st.error(
-                    f"Erro ao cadastrar poço: {erro}"
-                )
-
-
-# ============================================================
-# EDIÇÃO / EXCLUSÃO DE POÇOS
-# ============================================================
-
-if not df_pocos.empty:
-
-    with st.expander(
-        "Editar ou excluir poço",
-        expanded=False,
-    ):
-
-        opcoes_edicao = {
-            identificacao_exibicao(row): row
-            for _, row in df_pocos.iterrows()
-        }
-
-        selecionado = st.selectbox(
-            "Selecione o poço",
-            list(opcoes_edicao.keys()),
-            key="poco_edicao",
-        )
-
-        poco_atual = opcoes_edicao[
-            selecionado
-        ]
-
-        linha_df = df_pocos.index[
-            df_pocos[
-                "ID_POCO"
-            ].astype(str)
-            == str(
-                poco_atual[
-                    "ID_POCO"
-                ]
-            )
-        ]
-
-        if len(linha_df) > 0:
-
-            indice_df = linha_df[0]
-            linha_planilha = indice_df + 2
-
-        else:
-
-            linha_planilha = None
-
-        with st.form(
-            "form_edicao_poco"
-        ):
-
-            identificacao_edit = st.text_input(
-                "Identificação do ativo *",
-                value=str(
-                    poco_atual[
-                        "IDENTIFICACAO_ATIVO"
-                    ]
-                ),
-            )
-
-            nome_edit = st.text_input(
-                "Nome do poço",
-                value=str(
-                    poco_atual[
-                        "NOME_POCO"
-                    ]
-                ),
-            )
-
-            municipio_edit = st.text_input(
-                "Município *",
-                value=str(
-                    poco_atual[
-                        "MUNICIPIO"
-                    ]
-                ),
-            )
-
-            col_lat, col_lon = st.columns(2)
-
-            with col_lat:
-
-                latitude_edit = st.number_input(
-                    "Latitude *",
-                    value=float(
-                        poco_atual[
-                            "LATITUDE"
-                        ]
-                    ),
-                    format="%.7f",
-                )
-
-            with col_lon:
-
-                longitude_edit = st.number_input(
-                    "Longitude *",
-                    value=float(
-                        poco_atual[
-                            "LONGITUDE"
-                        ]
-                    ),
-                    format="%.7f",
-                )
-
-            salvar_edicao = st.form_submit_button(
-                "Salvar alterações"
-            )
-
-        if salvar_edicao:
-
-            if not identificacao_edit.strip():
-
-                st.error(
-                    "A identificação do ativo é obrigatória."
-                )
-
-            elif not municipio_edit.strip():
-
-                st.error(
-                    "O município é obrigatório."
-                )
-
-            else:
-
-                try:
-
-                    atualizar_poco(
-                        linha_planilha=linha_planilha,
-                        id_poco=str(
-                            poco_atual[
-                                "ID_POCO"
-                            ]
-                        ),
-                        identificacao=identificacao_edit.strip(),
-                        nome=nome_edit.strip(),
-                        municipio=municipio_edit.strip(),
-                        latitude=latitude_edit,
-                        longitude=longitude_edit,
-                    )
-
-                    st.success(
-                        "Poço atualizado com sucesso."
-                    )
-
-                    st.rerun()
-
-                except Exception as erro:
-
-                    st.error(
-                        f"Erro ao atualizar poço: {erro}"
-                    )
-
-        leituras_vinculadas = (
-            df_leituras[
-                df_leituras[
-                    "ID_POCO"
-                ].astype(str)
-                == str(
-                    poco_atual[
-                        "ID_POCO"
-                    ]
-                )
-            ]
-            if not df_leituras.empty
-            else pd.DataFrame()
-        )
-
-        st.divider()
-
-        if not leituras_vinculadas.empty:
-
-            st.warning(
-                f"Este poço possui "
-                f"{len(leituras_vinculadas)} "
-                f"leitura(s) vinculada(s)."
-            )
-
-        confirmar_exclusao = st.checkbox(
-            "Confirmo que desejo excluir este poço.",
-            key="confirmar_exclusao_poco",
-        )
-
-        if st.button(
-            "Excluir poço",
-            type="secondary",
-            key="btn_excluir_poco",
-        ):
-
-            if not confirmar_exclusao:
-
-                st.warning(
-                    "Marque a confirmação antes de excluir."
-                )
-
-            elif linha_planilha is None:
-
-                st.error(
-                    "Não foi possível localizar a linha do poço."
-                )
-
-            else:
-
-                try:
-
-                    excluir_poco(
-                        linha_planilha
-                    )
-
-                    st.success(
-                        "Poço excluído."
-                    )
-
-                    st.rerun()
-
-                except Exception as erro:
-
-                    st.error(
-                        f"Erro ao excluir poço: {erro}"
-                    )
-
-
-# ============================================================
-# REGISTRO DE LEITURAS
-# ============================================================
-
-st.subheader("Leituras de vazão")
-
-if df_pocos.empty:
-
-    st.info(
-        "Cadastre pelo menos um poço para registrar leituras."
-    )
-
-else:
-
-    with st.expander(
-        "Registrar nova leitura",
-        expanded=False,
-    ):
-
-        opcoes_leitura = {
-            identificacao_exibicao(row): row[
-                "ID_POCO"
-            ]
-            for _, row in df_pocos.iterrows()
-        }
-
-        with st.form(
-            "form_nova_leitura",
-            clear_on_submit=True,
-        ):
-
-            poco_leitura = st.selectbox(
-                "Poço",
-                list(
-                    opcoes_leitura.keys()
-                ),
-            )
-
-            data_leitura = st.date_input(
-                "Data da leitura",
-                value=date.today(),
-            )
-
-            col_vazao, col_unidade = st.columns(2)
-
-            with col_vazao:
-
-                vazao = st.number_input(
-                    "Vazão",
-                    min_value=0.0,
-                    format="%.4f",
-                )
-
-            with col_unidade:
-
-                unidade = st.selectbox(
-                    "Unidade",
-                    UNIDADES_VAZAO,
-                )
-
-            salvar_leitura = st.form_submit_button(
-                "Registrar leitura"
-            )
-
-        if salvar_leitura:
-
-            try:
-
-                id_leitura = adicionar_leitura(
-                    id_poco=opcoes_leitura[
-                        poco_leitura
-                    ],
-                    data_leitura=data_leitura,
-                    vazao=vazao,
-                    unidade=unidade,
-                )
-
-                st.success(
-                    f"Leitura registrada com ID {id_leitura}."
-                )
-
-                st.rerun()
-
-            except Exception as erro:
-
-                st.error(
-                    f"Erro ao registrar leitura: {erro}"
-                )
 
 
 # ============================================================
