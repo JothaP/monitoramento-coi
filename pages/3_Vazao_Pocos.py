@@ -243,7 +243,11 @@ def garantir_cabecalhos():
             "A1",
             [CABECALHO_LEITURAS],
         )
+st.write("DEBUG ABA POCOS - CABEÇALHOS")
+st.write(aba_pocos.row_values(1))
 
+st.write("DEBUG ABA POCOS - PRIMEIRAS LINHAS")
+st.write(aba_pocos.get_all_values()[:8])
 
 # ============================================================
 # UTILITÁRIOS
