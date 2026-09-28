@@ -141,7 +141,7 @@ SPREADSHEET_ID = st.secrets.get(
 )
 
 
-REGISTRO_COLUNAS = [
+REGISTRO_HEADERS = [
     "ID",
     "Matrícula",
     "Endereço",
@@ -149,13 +149,11 @@ REGISTRO_COLUNAS = [
     "Latitude",
     "Longitude",
     "Parecer",
-    "Mapeamento executado? (link)",
+    "Data de Registro",
     "Tratativa 1",
     "Executado?",
     "Retorno",
-    "Tratativa 02",
-    "Executado?2",
-    "Retorno 02",
+    "Responsável",
     "Grau de Impacto",
     "Resolvido",
 ]
