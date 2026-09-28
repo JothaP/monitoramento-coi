@@ -1,7 +1,6 @@
 import io
 import json
 import math
-import re
 import html
 from datetime import date, datetime
 from uuid import uuid4
@@ -100,10 +99,6 @@ HISTORICO_HEADERS = [
 
 
 REGISTROS_POR_PAGINA = 10
-
-OS_PATTERN = re.compile(
-    r"^\d{5}/\d{4}-\d+$"
-)
 
 
 # ============================================================
@@ -761,14 +756,6 @@ def os_duplicada(
         )
 
     return mascara.any()
-
-
-def os_valida(numero_os):
-    return bool(
-        OS_PATTERN.fullmatch(
-            texto(numero_os)
-        )
-    )
 
 
 # ============================================================
@@ -1822,16 +1809,42 @@ def dialogo_novo_registro(
         key="novo_data_registro",
     )
 
+    tratativa_1 = st.text_area(
+        "Tratativa 1",
+        key="novo_tratativa_1",
+    )
+
     col3, col4 = st.columns(2)
 
     with col3:
+
+        executado = st.text_input(
+            "Executado?",
+            key="novo_executado",
+        )
+
+    with col4:
+
+        retorno = st.text_area(
+            "Retorno",
+            key="novo_retorno",
+        )
+
+    responsavel = st.text_input(
+        "Responsável",
+        key="novo_responsavel",
+    )
+
+    col5, col6 = st.columns(2)
+
+    with col5:
 
         grau_impacto = st.text_input(
             "Grau de Impacto",
             key="novo_grau_impacto",
         )
 
-    with col4:
+    with col6:
 
         resolvido = st.text_input(
             "Resolvido",
@@ -1841,36 +1854,8 @@ def dialogo_novo_registro(
     st.divider()
 
     st.subheader(
-        "Tratativa"
+        "O.S. inicial"
     )
-
-    tratativa_1 = st.text_area(
-        "Tratativa 1",
-        key="novo_tratativa_1",
-    )
-
-    col5, col6 = st.columns(2)
-
-    with col5:
-
-        executado = st.text_input(
-            "Executado?",
-            key="novo_executado",
-        )
-
-    with col6:
-
-        responsavel = st.text_input(
-            "Responsável",
-            key="novo_responsavel",
-        )
-
-    retorno = st.text_area(
-        "Retorno",
-        key="novo_retorno",
-    )
-
-    st.divider()
 
     matricula = texto(
         matricula
@@ -1902,10 +1887,6 @@ def dialogo_novo_registro(
 
         return
 
-    st.subheader(
-        "O.S."
-    )
-
     adicionar_os = True
 
     if not historico_existente.empty:
@@ -1936,7 +1917,7 @@ def dialogo_novo_registro(
 
             numero_os = st.text_input(
                 "N. O.S *",
-                placeholder="12345/2026-1",
+                placeholder="Digite a identificação da O.S.",
                 key="novo_numero_os",
             )
 
@@ -2013,12 +1994,9 @@ def dialogo_novo_registro(
         or adicionar_os
     ):
 
-        if not os_valida(
-            numero_os
-        ):
+        if not texto(numero_os):
             st.error(
-                "Informe uma N. O.S. válida no formato "
-                "12345/2026-1."
+                "Informe a N. O.S."
             )
             return
 
@@ -2192,9 +2170,47 @@ def dialogo_editar_registro(
         key=f"edit_data_registro_{registro_id}",
     )
 
+    tratativa_1 = st.text_area(
+        "Tratativa 1",
+        value=texto(
+            registro["Tratativa 1"]
+        ),
+        key=f"edit_tratativa_{registro_id}",
+    )
+
     col3, col4 = st.columns(2)
 
     with col3:
+
+        executado = st.text_input(
+            "Executado?",
+            value=texto(
+                registro["Executado?"]
+            ),
+            key=f"edit_executado_{registro_id}",
+        )
+
+    with col4:
+
+        retorno = st.text_area(
+            "Retorno",
+            value=texto(
+                registro["Retorno"]
+            ),
+            key=f"edit_retorno_{registro_id}",
+        )
+
+    responsavel = st.text_input(
+        "Responsável",
+        value=texto(
+            registro["Responsável"]
+        ),
+        key=f"edit_responsavel_{registro_id}",
+    )
+
+    col5, col6 = st.columns(2)
+
+    with col5:
 
         grau_impacto = st.text_input(
             "Grau de Impacto",
@@ -2204,7 +2220,7 @@ def dialogo_editar_registro(
             key=f"edit_impacto_{registro_id}",
         )
 
-    with col4:
+    with col6:
 
         resolvido = st.text_input(
             "Resolvido",
@@ -2217,45 +2233,11 @@ def dialogo_editar_registro(
     st.divider()
 
     st.subheader(
-        "Tratativa"
+        "O.S. inicial"
     )
 
-    tratativa_1 = st.text_area(
-        "Tratativa 1",
-        value=texto(
-            registro["Tratativa 1"]
-        ),
-        key=f"edit_tratativa_{registro_id}",
-    )
-
-    col5, col6 = st.columns(2)
-
-    with col5:
-
-        executado = st.text_input(
-            "Executado?",
-            value=texto(
-                registro["Executado?"]
-            ),
-            key=f"edit_executado_{registro_id}",
-        )
-
-    with col6:
-
-        responsavel = st.text_input(
-            "Responsável",
-            value=texto(
-                registro["Responsável"]
-            ),
-            key=f"edit_responsavel_{registro_id}",
-        )
-
-    retorno = st.text_area(
-        "Retorno",
-        value=texto(
-            registro["Retorno"]
-        ),
-        key=f"edit_retorno_{registro_id}",
+    st.caption(
+        "A O.S. existente pode ser consultada e editada no histórico da matrícula."
     )
 
     st.divider()
@@ -2720,7 +2702,7 @@ def dialogo_nova_os(
 
     numero_os = st.text_input(
         "N. O.S *",
-        placeholder="12345/2026-1",
+        placeholder="Digite a identificação da O.S.",
     )
 
     data_abertura = st.datetime_input(
@@ -2752,11 +2734,10 @@ def dialogo_nova_os(
     if not salvar:
         return
 
-    if not os_valida(numero_os):
+    if not texto(numero_os):
 
         st.error(
-            "Informe uma N. O.S. válida no formato "
-            "12345/2026-1."
+            "Informe a N. O.S."
         )
 
         return
@@ -2841,6 +2822,7 @@ def dialogo_editar_os(
         value=texto(
             os_atual["N. O.S"]
         ),
+        placeholder="Digite a identificação da O.S.",
     )
 
     data_abertura = st.datetime_input(
@@ -2904,12 +2886,10 @@ def dialogo_editar_os(
     if not salvar:
         return
 
-    if not os_valida(
-        numero_os
-    ):
+    if not texto(numero_os):
 
         st.error(
-            "N. O.S. inválida."
+            "Informe a N. O.S."
         )
 
         return
