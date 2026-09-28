@@ -63,52 +63,72 @@ UNIDADES_VAZAO = [
 # CONEXÃO COM GOOGLE SHEETS
 # ============================================================
 
+from google.oauth2.service_account import Credentials
+import json
+
+
 @st.cache_resource(show_spinner=False)
 def obter_cliente_google():
     """
-    Cria o cliente gspread uma única vez por processo do Streamlit.
+    Cria o cliente gspread utilizando a mesma autenticação
+    já utilizada pelos demais módulos da Plataforma COI.
     """
-    credenciais = st.secrets["gcp_service_account"]
 
-    return gspread.service_account_from_dict(
-        dict(credenciais)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+
+    credentials_dict = json.loads(
+        st.secrets["gcp_json"]
     )
+
+    credentials = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes,
+    )
+
+    return gspread.authorize(credentials)
 
 
 @st.cache_resource(show_spinner=False)
 def obter_planilha():
     """
-    Abre a planilha uma única vez.
-
-    Isso evita que cada rerun execute novamente open_by_key().
+    Abre a planilha uma única vez e mantém a referência em cache.
     """
+
     cliente = obter_cliente_google()
-    return cliente.open_by_key(SPREADSHEET_ID)
+
+    return cliente.open_by_key(
+        SPREADSHEET_ID
+    )
 
 
 @st.cache_resource(show_spinner=False)
 def obter_aba(nome_aba):
     """
-    Mantém a referência da worksheet em cache.
-
-    A chamada worksheet() deixa de acontecer a cada rerun.
+    Obtém uma worksheet uma única vez por sessão/processo.
     """
+
     planilha = obter_planilha()
 
     try:
         return planilha.worksheet(nome_aba)
 
     except gspread.WorksheetNotFound:
+
         if nome_aba == NOME_ABA_POCOS:
             aba = planilha.add_worksheet(
                 title=nome_aba,
                 rows=1000,
                 cols=len(CABECALHO_POCOS),
             )
+
             aba.update(
                 "A1",
                 [CABECALHO_POCOS],
             )
+
             return aba
 
         if nome_aba == NOME_ABA_LEITURAS:
@@ -117,10 +137,12 @@ def obter_aba(nome_aba):
                 rows=2000,
                 cols=len(CABECALHO_LEITURAS),
             )
+
             aba.update(
                 "A1",
                 [CABECALHO_LEITURAS],
             )
+
             return aba
 
         raise
@@ -128,14 +150,11 @@ def obter_aba(nome_aba):
 
 @st.cache_resource(show_spinner=False)
 def obter_abas():
-    """
-    Obtém as duas abas uma única vez.
-    """
+
     return (
         obter_aba(NOME_ABA_POCOS),
         obter_aba(NOME_ABA_LEITURAS),
     )
-
 
 # ============================================================
 # CACHE DOS DADOS
