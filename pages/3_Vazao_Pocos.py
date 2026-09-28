@@ -46,9 +46,12 @@ CABECALHO_POCOS = [
 CABECALHO_LEITURAS = [
     "ID_LEITURA",
     "ID_POCO",
+    "IDENTIFICACAO_ATIVO",
     "DATA_LEITURA",
     "VAZAO",
     "UNIDADE",
+    "PRESSAO",
+    "OBS",
 ]
 
 UNIDADES_VAZAO = [
@@ -284,6 +287,24 @@ def normalizar_texto(valor):
     )
 
     return texto.strip().upper()
+
+
+def normalizar_cabecalho(valor):
+
+    texto = normalizar_texto(valor)
+
+    texto = (
+        texto
+        .replace(" ", "")
+        .replace(".", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("/", "")
+    )
+
+    return texto
 
 
 def parse_float(valor, default=None):
@@ -537,8 +558,11 @@ def preparar_leituras(df):
     for coluna in [
         "ID_LEITURA",
         "ID_POCO",
+        "IDENTIFICACAO_ATIVO",
         "VAZAO",
         "UNIDADE",
+        "PRESSAO",
+        "OBS",
     ]:
 
         if coluna in df.columns:
@@ -657,9 +681,12 @@ def excluir_poco(linha_planilha):
 
 def adicionar_leitura(
     id_poco,
+    identificacao_ativo,
     data_leitura,
     vazao,
     unidade,
+    pressao="",
+    obs="",
 ):
 
     _, aba_leituras = obter_abas()
@@ -687,9 +714,12 @@ def adicionar_leitura(
         [
             id_leitura,
             id_poco,
+            identificacao_ativo,
             data_formatada,
             vazao,
             unidade,
+            pressao,
+            obs,
         ],
         value_input_option="USER_ENTERED",
     )
@@ -703,9 +733,12 @@ def atualizar_leitura(
     linha_planilha,
     id_leitura,
     id_poco,
+    identificacao_ativo,
     data_leitura,
     vazao,
     unidade,
+    pressao="",
+    obs="",
 ):
 
     _, aba_leituras = obter_abas()
@@ -717,13 +750,16 @@ def atualizar_leitura(
     )
 
     aba_leituras.update(
-        f"A{linha_planilha}:E{linha_planilha}",
+        f"A{linha_planilha}:H{linha_planilha}",
         [[
             id_leitura,
             id_poco,
+            identificacao_ativo,
             data_formatada,
             vazao,
             unidade,
+            pressao,
+            obs,
         ]],
         value_input_option="USER_ENTERED",
     )
@@ -740,6 +776,463 @@ def excluir_leitura(linha_planilha):
     )
 
     invalidar_cache_dados()
+
+
+# ============================================================
+# DUPLICIDADE DE LEITURA
+# ============================================================
+
+def chave_leitura(
+    identificacao_ativo,
+    data_leitura,
+):
+
+    ativo = normalizar_texto(
+        identificacao_ativo
+    )
+
+    data_convertida = converter_data(
+        data_leitura
+    )
+
+    if not ativo or pd.isna(data_convertida):
+
+        return None
+
+    return (
+        ativo,
+        data_convertida.strftime(
+            "%Y-%m-%d"
+        ),
+    )
+
+
+def obter_chaves_leituras_existentes(
+    df_leituras,
+):
+
+    chaves = set()
+
+    if df_leituras.empty:
+
+        return chaves
+
+    for _, linha in df_leituras.iterrows():
+
+        chave = chave_leitura(
+            linha.get(
+                "IDENTIFICACAO_ATIVO",
+                "",
+            ),
+            linha.get(
+                "DATA_LEITURA",
+                "",
+            ),
+        )
+
+        if chave:
+
+            chaves.add(chave)
+
+    return chaves
+
+
+# ============================================================
+# PROCESSAMENTO DO UPLOAD DE LEITURAS
+# ============================================================
+
+def processar_upload_leituras(
+    arquivo,
+    df_pocos_atual,
+    df_leituras_atual,
+):
+
+    try:
+
+        conteudo = arquivo.getvalue()
+
+        df_upload = pd.read_excel(
+            io.BytesIO(conteudo)
+        )
+
+    except Exception as erro:
+
+        return {
+            "sucesso": False,
+            "erro": (
+                f"Não foi possível ler o arquivo: {erro}"
+            ),
+        }
+
+    if df_upload.empty:
+
+        return {
+            "sucesso": False,
+            "erro": "A planilha enviada está vazia.",
+        }
+
+    mapa_cabecalhos = {}
+
+    for coluna in df_upload.columns:
+
+        mapa_cabecalhos[
+            normalizar_cabecalho(coluna)
+        ] = coluna
+
+    cabecalhos_obrigatorios = {
+        "MUNICIPIOS": "Municípios",
+        "CODINFRA": "Cod.Infra",
+        "DATA": "Data",
+        "VAZAOM3H": "Vazão (m³/h)",
+    }
+
+    faltantes = []
+
+    for chave, nome in cabecalhos_obrigatorios.items():
+
+        if chave not in mapa_cabecalhos:
+
+            faltantes.append(nome)
+
+    if faltantes:
+
+        return {
+            "sucesso": False,
+            "erro": (
+                "A planilha não possui os cabeçalhos obrigatórios: "
+                + ", ".join(faltantes)
+            ),
+        }
+
+    coluna_municipio = mapa_cabecalhos[
+        "MUNICIPIOS"
+    ]
+
+    coluna_cod_infra = mapa_cabecalhos[
+        "CODINFRA"
+    ]
+
+    coluna_data = mapa_cabecalhos[
+        "DATA"
+    ]
+
+    coluna_vazao = mapa_cabecalhos[
+        "VAZAOM3H"
+    ]
+
+    coluna_pressao = mapa_cabecalhos.get(
+        "PRESSAO"
+    )
+
+    coluna_obs = mapa_cabecalhos.get(
+        "OBS"
+    )
+
+    # --------------------------------------------------------
+    # Mapa Cod.Infra -> ID_POCO
+    # --------------------------------------------------------
+
+    mapa_ativos = {}
+
+    if not df_pocos_atual.empty:
+
+        for _, poco in df_pocos_atual.iterrows():
+
+            ativo = normalizar_texto(
+                poco.get(
+                    "IDENTIFICACAO_ATIVO",
+                    "",
+                )
+            )
+
+            if ativo:
+
+                mapa_ativos[
+                    ativo
+                ] = str(
+                    poco[
+                        "ID_POCO"
+                    ]
+                )
+
+    chaves_existentes = (
+        obter_chaves_leituras_existentes(
+            df_leituras_atual
+        )
+    )
+
+    chaves_arquivo = set()
+
+    registros = []
+
+    duplicadas = []
+
+    invalidas = []
+
+    ativos_nao_cadastrados = []
+
+    for numero_linha, (_, linha) in enumerate(
+        df_upload.iterrows(),
+        start=2,
+    ):
+
+        identificacao_ativo = str(
+            linha.get(
+                coluna_cod_infra,
+                ""
+            )
+        ).strip()
+
+        data_leitura = converter_data(
+            linha.get(
+                coluna_data
+            )
+        )
+
+        vazao = parse_float(
+            linha.get(
+                coluna_vazao
+            ),
+            default=None,
+        )
+
+        pressao = ""
+
+        if coluna_pressao:
+
+            valor_pressao = linha.get(
+                coluna_pressao
+            )
+
+            if pd.notna(valor_pressao):
+
+                pressao = str(
+                    valor_pressao
+                ).strip()
+
+        obs = ""
+
+        if coluna_obs:
+
+            valor_obs = linha.get(
+                coluna_obs
+            )
+
+            if pd.notna(valor_obs):
+
+                obs = str(
+                    valor_obs
+                ).strip()
+
+        ativo_normalizado = normalizar_texto(
+            identificacao_ativo
+        )
+
+        # ----------------------------------------------------
+        # Validações
+        # ----------------------------------------------------
+
+        if not ativo_normalizado:
+
+            invalidas.append(
+                {
+                    "Linha": numero_linha,
+                    "Motivo": (
+                        "Cod.Infra não informado."
+                    ),
+                    "Cod.Infra": "",
+                }
+            )
+
+            continue
+
+        if pd.isna(data_leitura):
+
+            invalidas.append(
+                {
+                    "Linha": numero_linha,
+                    "Motivo": (
+                        "Data inválida ou não informada."
+                    ),
+                    "Cod.Infra": identificacao_ativo,
+                }
+            )
+
+            continue
+
+        if ativo_normalizado not in mapa_ativos:
+
+            ativos_nao_cadastrados.append(
+                {
+                    "Linha": numero_linha,
+                    "Cod.Infra": identificacao_ativo,
+                }
+            )
+
+            continue
+
+        chave = chave_leitura(
+            identificacao_ativo,
+            data_leitura,
+        )
+
+        if chave in chaves_existentes:
+
+            duplicadas.append(
+                {
+                    "Linha": numero_linha,
+                    "Cod.Infra": identificacao_ativo,
+                    "Data": data_leitura.strftime(
+                        "%d/%m/%Y"
+                    ),
+                    "Motivo": (
+                        "Leitura já existente no Sheets."
+                    ),
+                }
+            )
+
+            continue
+
+        if chave in chaves_arquivo:
+
+            duplicadas.append(
+                {
+                    "Linha": numero_linha,
+                    "Cod.Infra": identificacao_ativo,
+                    "Data": data_leitura.strftime(
+                        "%d/%m/%Y"
+                    ),
+                    "Motivo": (
+                        "Leitura duplicada no arquivo."
+                    ),
+                }
+            )
+
+            continue
+
+        chaves_arquivo.add(chave)
+
+        id_poco = mapa_ativos[
+            ativo_normalizado
+        ]
+
+        registros.append(
+            {
+                "ID_POCO": id_poco,
+                "IDENTIFICACAO_ATIVO": identificacao_ativo,
+                "DATA_LEITURA": data_leitura.strftime(
+                    "%d/%m/%Y"
+                ),
+                "VAZAO": (
+                    str(vazao).replace(".", ",")
+                    if vazao is not None
+                    else ""
+                ),
+                "UNIDADE": (
+                    "m³/h"
+                    if vazao is not None
+                    else ""
+                ),
+                "PRESSAO": pressao,
+                "OBS": obs,
+            }
+        )
+
+    return {
+        "sucesso": True,
+        "registros": registros,
+        "duplicadas": duplicadas,
+        "invalidas": invalidas,
+        "ativos_nao_cadastrados": ativos_nao_cadastrados,
+    }
+
+
+def gravar_leituras_upload(
+    registros,
+):
+
+    if not registros:
+
+        return 0
+
+    _, aba_leituras = obter_abas()
+
+    df_atual = carregar_leituras()
+
+    ids = (
+        df_atual["ID_LEITURA"].tolist()
+        if not df_atual.empty
+        else []
+    )
+
+    proximo_numero = 0
+
+    for valor in ids:
+
+        texto = str(
+            valor
+        ).strip()
+
+        if texto.startswith("LEIT"):
+
+            try:
+
+                numero = int(
+                    texto[4:]
+                )
+
+                proximo_numero = max(
+                    proximo_numero,
+                    numero,
+                )
+
+            except ValueError:
+
+                pass
+
+    linhas = []
+
+    for registro in registros:
+
+        proximo_numero += 1
+
+        id_leitura = (
+            f"LEIT{proximo_numero:05d}"
+        )
+
+        linhas.append(
+            [
+                id_leitura,
+                registro["ID_POCO"],
+                registro[
+                    "IDENTIFICACAO_ATIVO"
+                ],
+                registro[
+                    "DATA_LEITURA"
+                ],
+                registro[
+                    "VAZAO"
+                ],
+                registro[
+                    "UNIDADE"
+                ],
+                registro[
+                    "PRESSAO"
+                ],
+                registro[
+                    "OBS"
+                ],
+            ]
+        )
+
+    aba_leituras.append_rows(
+        linhas,
+        value_input_option="USER_ENTERED",
+    )
+
+    invalidar_cache_dados()
+
+    return len(linhas)
 
 
 # ============================================================
@@ -1219,9 +1712,7 @@ def modal_nova_leitura():
         return
 
     opcoes_leitura = {
-        identificacao_exibicao(row): row[
-            "ID_POCO"
-        ]
+        identificacao_exibicao(row): row
         for _, row in df_atual.iterrows()
     }
 
@@ -1236,6 +1727,10 @@ def modal_nova_leitura():
                 opcoes_leitura.keys()
             ),
         )
+
+        poco_selecionado = opcoes_leitura[
+            poco_leitura
+        ]
 
         data_leitura = st.date_input(
             "Data da leitura",
@@ -1254,6 +1749,16 @@ def modal_nova_leitura():
             UNIDADES_VAZAO,
         )
 
+        pressao = st.text_input(
+            "Pressão",
+            placeholder="Opcional",
+        )
+
+        obs = st.text_area(
+            "Observação",
+            placeholder="Opcional",
+        )
+
         salvar_leitura = st.form_submit_button(
             "Registrar leitura",
             type="primary",
@@ -1262,28 +1767,58 @@ def modal_nova_leitura():
 
         if salvar_leitura:
 
-            try:
+            chave_nova = chave_leitura(
+                poco_selecionado[
+                    "IDENTIFICACAO_ATIVO"
+                ],
+                data_leitura,
+            )
 
-                id_leitura = adicionar_leitura(
-                    id_poco=opcoes_leitura[
-                        poco_leitura
-                    ],
-                    data_leitura=data_leitura,
-                    vazao=vazao,
-                    unidade=unidade,
+            chaves_existentes = (
+                obter_chaves_leituras_existentes(
+                    df_leituras
                 )
+            )
 
-                st.success(
-                    f"Leitura registrada com ID {id_leitura}."
-                )
-
-                st.rerun()
-
-            except Exception as erro:
+            if chave_nova in chaves_existentes:
 
                 st.error(
-                    f"Erro ao registrar leitura: {erro}"
+                    "Já existe uma leitura para este ativo nesta data."
                 )
+
+            else:
+
+                try:
+
+                    id_leitura = adicionar_leitura(
+                        id_poco=str(
+                            poco_selecionado[
+                                "ID_POCO"
+                            ]
+                        ),
+                        identificacao_ativo=str(
+                            poco_selecionado[
+                                "IDENTIFICACAO_ATIVO"
+                            ]
+                        ).strip(),
+                        data_leitura=data_leitura,
+                        vazao=vazao,
+                        unidade=unidade,
+                        pressao=pressao.strip(),
+                        obs=obs.strip(),
+                    )
+
+                    st.success(
+                        f"Leitura registrada com ID {id_leitura}."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+
+                    st.error(
+                        f"Erro ao registrar leitura: {erro}"
+                    )
 
 
 # ============================================================
@@ -1437,6 +1972,13 @@ def modal_editar_leitura():
 
         data_atual = data_atual.date()
 
+    identificacao_atual = str(
+        leitura_atual.get(
+            "IDENTIFICACAO_ATIVO",
+            "",
+        )
+    )
+
     with st.form(
         "form_edicao_leitura_modal"
     ):
@@ -1504,6 +2046,26 @@ def modal_editar_leitura():
                 ),
             )
 
+        pressao_editada = st.text_input(
+            "Pressão",
+            value=str(
+                leitura_atual.get(
+                    "PRESSAO",
+                    "",
+                )
+            ),
+        )
+
+        obs_editada = st.text_area(
+            "Observação",
+            value=str(
+                leitura_atual.get(
+                    "OBS",
+                    "",
+                )
+            ),
+        )
+
         salvar_leitura_editada = st.form_submit_button(
             "💾 Salvar alterações",
             type="primary",
@@ -1512,7 +2074,24 @@ def modal_editar_leitura():
 
         if salvar_leitura_editada:
 
-            if linha_leitura_planilha is None:
+            poco_novo = df_pocos_atual[
+                df_pocos_atual[
+                    "ID_POCO"
+                ].astype(str)
+                == str(
+                    opcoes_pocos_edicao[
+                        poco_editado
+                    ]
+                )
+            ]
+
+            if poco_novo.empty:
+
+                st.error(
+                    "Poço selecionado não encontrado."
+                )
+
+            elif linha_leitura_planilha is None:
 
                 st.error(
                     "Não foi possível localizar a leitura."
@@ -1520,34 +2099,79 @@ def modal_editar_leitura():
 
             else:
 
-                try:
+                identificacao_nova = str(
+                    poco_novo.iloc[0][
+                        "IDENTIFICACAO_ATIVO"
+                    ]
+                ).strip()
 
-                    atualizar_leitura(
-                        linha_planilha=linha_leitura_planilha,
-                        id_leitura=str(
-                            leitura_atual[
-                                "ID_LEITURA"
-                            ]
-                        ),
-                        id_poco=opcoes_pocos_edicao[
-                            poco_editado
-                        ],
-                        data_leitura=data_editada,
-                        vazao=vazao_editada,
-                        unidade=unidade_editada,
+                chave_nova = chave_leitura(
+                    identificacao_nova,
+                    data_editada,
+                )
+
+                chaves_existentes = (
+                    obter_chaves_leituras_existentes(
+                        df_leituras_atual
                     )
+                )
 
-                    st.success(
-                        "Leitura atualizada com sucesso."
-                    )
+                chave_atual = chave_leitura(
+                    identificacao_atual,
+                    leitura_atual[
+                        "DATA_LEITURA"
+                    ],
+                )
 
-                    st.rerun()
+                chaves_outros_registros = (
+                    chaves_existentes
+                    - {chave_atual}
+                )
 
-                except Exception as erro:
+                if (
+                    chave_nova
+                    in chaves_outros_registros
+                ):
 
                     st.error(
-                        f"Erro ao atualizar leitura: {erro}"
+                        "Já existe outra leitura para este ativo nesta data."
                     )
+
+                else:
+
+                    try:
+
+                        atualizar_leitura(
+                            linha_planilha=linha_leitura_planilha,
+                            id_leitura=str(
+                                leitura_atual[
+                                    "ID_LEITURA"
+                                ]
+                            ),
+                            id_poco=str(
+                                poco_novo.iloc[0][
+                                    "ID_POCO"
+                                ]
+                            ),
+                            identificacao_ativo=identificacao_nova,
+                            data_leitura=data_editada,
+                            vazao=vazao_editada,
+                            unidade=unidade_editada,
+                            pressao=pressao_editada.strip(),
+                            obs=obs_editada.strip(),
+                        )
+
+                        st.success(
+                            "Leitura atualizada com sucesso."
+                        )
+
+                        st.rerun()
+
+                    except Exception as erro:
+
+                        st.error(
+                            f"Erro ao atualizar leitura: {erro}"
+                        )
 
     st.divider()
 
@@ -1594,6 +2218,183 @@ def modal_editar_leitura():
                 st.error(
                     f"Erro ao excluir leitura: {erro}"
                 )
+
+
+# ============================================================
+# DIALOG — IMPORTAR LEITURAS
+# ============================================================
+
+@st.dialog("📥 Importar leituras")
+def modal_importar_leituras():
+
+    st.write(
+        "Envie uma planilha Excel contendo as colunas de medição."
+    )
+
+    st.caption(
+        "Colunas esperadas: Municípios, Descrição do ativo, "
+        "Cod.Infra, Data, Vazão (m³/h), Pressão e Obs."
+    )
+
+    arquivo = st.file_uploader(
+        "Planilha de leituras",
+        type=[
+            "xlsx",
+            "xlsm",
+        ],
+        key="upload_leituras",
+    )
+
+    if arquivo is None:
+
+        return
+
+    resultado = processar_upload_leituras(
+        arquivo=arquivo,
+        df_pocos_atual=df_pocos,
+        df_leituras_atual=df_leituras,
+    )
+
+    if not resultado["sucesso"]:
+
+        st.error(
+            resultado["erro"]
+        )
+
+        return
+
+    registros = resultado[
+        "registros"
+    ]
+
+    duplicadas = resultado[
+        "duplicadas"
+    ]
+
+    invalidas = resultado[
+        "invalidas"
+    ]
+
+    ativos_nao_cadastrados = resultado[
+        "ativos_nao_cadastrados"
+    ]
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Novas leituras",
+        len(registros),
+    )
+
+    col2.metric(
+        "Duplicadas",
+        len(duplicadas),
+    )
+
+    col3.metric(
+        "Inválidas",
+        len(invalidas),
+    )
+
+    col4.metric(
+        "Ativos não cadastrados",
+        len(ativos_nao_cadastrados),
+    )
+
+    if ativos_nao_cadastrados:
+
+        st.warning(
+            "Existem registros cujo Cod.Infra não "
+            "foi encontrado no cadastro de poços."
+        )
+
+        st.dataframe(
+            pd.DataFrame(
+                ativos_nao_cadastrados
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if invalidas:
+
+        st.warning(
+            "Existem registros com dados inválidos."
+        )
+
+        st.dataframe(
+            pd.DataFrame(
+                invalidas
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if duplicadas:
+
+        st.info(
+            "As duplicidades não serão importadas."
+        )
+
+        st.dataframe(
+            pd.DataFrame(
+                duplicadas
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if registros:
+
+        st.success(
+            f"{len(registros)} nova(s) leitura(s) pronta(s) para importação."
+        )
+
+        confirmar = st.checkbox(
+            "Confirmo a importação das novas leituras.",
+            key="confirmar_importacao_leituras",
+        )
+
+        if st.button(
+            "💾 Importar leituras",
+            type="primary",
+            width="stretch",
+            key="btn_confirmar_importacao_leituras",
+        ):
+
+            if not confirmar:
+
+                st.warning(
+                    "Marque a confirmação antes de importar."
+                )
+
+            else:
+
+                try:
+
+                    quantidade = (
+                        gravar_leituras_upload(
+                            registros
+                        )
+                    )
+
+                    st.success(
+                        f"{quantidade} leitura(s) importada(s) com sucesso."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+
+                    st.error(
+                        f"Erro ao importar leituras: {erro}"
+                    )
+
+    else:
+
+        st.info(
+            "Nenhuma nova leitura para importar."
+        )
 
 
 # ============================================================
@@ -1722,6 +2523,14 @@ if st.sidebar.button(
 
 
 if st.sidebar.button(
+    "📥 Importar leituras",
+    width="stretch",
+):
+
+    modal_importar_leituras()
+
+
+if st.sidebar.button(
     "📝 Editar ou excluir leitura",
     width="stretch",
 ):
@@ -1773,12 +2582,12 @@ if not leituras_periodo.empty:
 # FILTRO DE POÇOS
 # ============================================================
 
-pocos_mapa = df_pocos.copy()
+pocos_filtro = df_pocos.copy()
 
 if municipio_filtro != "Todos":
 
-    pocos_mapa = pocos_mapa[
-        pocos_mapa[
+    pocos_filtro = pocos_filtro[
+        pocos_filtro[
             "MUNICIPIO"
         ].astype(str).str.strip()
         == municipio_filtro
@@ -1786,13 +2595,28 @@ if municipio_filtro != "Todos":
 
 if poco_filtro != "Todos":
 
-    pocos_mapa = pocos_mapa[
-        pocos_mapa.apply(
+    pocos_filtro = pocos_filtro[
+        pocos_filtro.apply(
             identificacao_exibicao,
             axis=1,
         )
         == poco_filtro
     ]
+
+
+# ============================================================
+# POÇOS EXIBIDOS NO MAPA
+# ============================================================
+
+if municipio_filtro != "Todos":
+
+    pocos_mapa = pocos_filtro.copy()
+
+else:
+
+    pocos_mapa = pd.DataFrame(
+        columns=df_pocos.columns
+    )
 
 
 # ============================================================
@@ -1829,7 +2653,7 @@ col1.metric(
 
 col2.metric(
     "Poços no filtro",
-    len(pocos_mapa),
+    len(pocos_filtro),
 )
 
 col3.metric(
@@ -2131,6 +2955,7 @@ else:
         ],
         on="ID_POCO",
         how="left",
+        suffixes=("", "_POCO"),
     )
 
     historico["POÇO"] = historico.apply(
@@ -2159,6 +2984,14 @@ else:
         "DATA",
         "VAZAO",
         "UNIDADE",
+        "PRESSAO",
+        "OBS",
+    ]
+
+    colunas_historico = [
+        coluna
+        for coluna in colunas_historico
+        if coluna in historico.columns
     ]
 
     st.dataframe(
