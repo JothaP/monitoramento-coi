@@ -2004,9 +2004,9 @@ if municipio_filtro != "Todos":
 
     for _, poco in coordenadas.iterrows():
 
-    id_poco = str(
-        poco["ID_POCO"]
-    )
+        id_poco = str(
+            poco["ID_POCO"]
+        )
 
     leitura = ultimas_leituras.get(
         id_poco
@@ -2094,12 +2094,17 @@ if municipio_filtro != "Todos":
 # AJUSTE AUTOMÁTICO DO ENQUADRAMENTO
 # ============================================================
 
-if (
-    municipio_filtro != "Todos"
-    and not coordenadas.empty
-):
+if municipio_filtro != "Todos":
 
-    mapa.fit_bounds(
+    for _, poco in coordenadas.iterrows():
+
+        id_poco = str(
+            poco["ID_POCO"]
+        )
+
+        leitura = ultimas_leituras.get(
+            id_poco
+        )
         [
             [
                 coordenadas[
