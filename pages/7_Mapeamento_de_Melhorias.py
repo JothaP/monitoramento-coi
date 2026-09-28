@@ -604,6 +604,49 @@ def adicionar_os(
     )
 
 
+def adicionar_registro_com_os(
+    dados_registro,
+    dados_os,
+):
+    """
+    Salva o registro principal e sua O.S. inicial juntos.
+
+    Se a gravação da O.S. falhar depois de o registro principal
+    ter sido salvo, tenta remover o registro principal para evitar
+    que a base fique com uma melhoria sem a O.S. inicial.
+    """
+
+    registro_ws, _ = obter_planilhas()
+
+    adicionar_registro(
+        dados_registro
+    )
+
+    try:
+        adicionar_os(
+            dados_os
+        )
+    except Exception:
+        try:
+            linha = localizar_linha(
+                registro_ws,
+                dados_registro["ID"],
+            )
+
+            if linha is not None:
+                registro_ws.delete_rows(
+                    linha
+                )
+        except Exception as rollback_exc:
+            raise RuntimeError(
+                "A O.S. inicial não foi gravada e "
+                "também não foi possível desfazer o "
+                "cadastro principal. Verifique a planilha."
+            ) from rollback_exc
+
+        raise
+
+
 def atualizar_os(
     os_id,
     dados,
@@ -888,11 +931,36 @@ def aplicar_filtros(
                     )
                 ]
 
-                matriculas = set(
+                # Mantém no mapa/lista as melhorias que ainda não
+                # possuem histórico. Elas podem ser registros novos
+                # e já possuem latitude/longitude válidas.
+                matriculas_periodo = set(
                     historico["Matrícula"]
                     .astype(str)
                     .str.strip()
                     .str.upper()
+                )
+
+                matriculas_com_historico = set(
+                    df_historico["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                )
+
+                matriculas_sem_historico = (
+                    set(
+                        registro["Matrícula"]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                    )
+                    - matriculas_com_historico
+                )
+
+                matriculas_permitidas = (
+                    matriculas_periodo
+                    | matriculas_sem_historico
                 )
 
                 registro = registro[
@@ -900,7 +968,7 @@ def aplicar_filtros(
                     .astype(str)
                     .str.strip()
                     .str.upper()
-                    .isin(matriculas)
+                    .isin(matriculas_permitidas)
                 ]
 
     # --------------------------------------------------------
@@ -1175,6 +1243,7 @@ def limpar_filtros():
         "filtro_resolvido",
         "filtro_executado",
         "filtro_busca",
+        "Data de Abertura",
     ]
 
     for chave in chaves:
@@ -2065,12 +2134,8 @@ def dialogo_novo_registro(
 
     try:
 
-        adicionar_registro(
-            dados
-        )
-
         # ----------------------------------------------------
-        # ADICIONA A O.S.
+        # NOVO REGISTRO + O.S. INICIAL
         # ----------------------------------------------------
 
         if (
@@ -2093,9 +2158,18 @@ def dialogo_novo_registro(
                 "Pontual": pontual,
             }
 
-            # Aqui "adicionar_os" é novamente a função CRUD.
-            adicionar_os(
-                dados_os
+            # O cadastro inicial e sua O.S. são gravados juntos.
+            # Se a O.S. falhar, o registro principal é desfeito.
+            adicionar_registro_com_os(
+                dados,
+                dados_os,
+            )
+
+        else:
+            # Este caminho não é esperado para um novo cadastro,
+            # mas preserva a lógica caso a rotina seja reutilizada.
+            adicionar_registro(
+                dados
             )
 
         fechar_dialogo()
