@@ -1665,6 +1665,13 @@ if st.sidebar.button(
 
     modal_nova_leitura()
 
+st.sidebar.divider()
+
+if st.sidebar.button(
+    "🏠 Voltar ao Menu Principal",
+    use_container_width=True,
+):
+    st.switch_page("app.py")
 
 if st.sidebar.button(
     "📝 Editar ou excluir leitura",
