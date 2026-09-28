@@ -52,9 +52,11 @@ with st.form("form_login"):
                 usuario="admin",
                 perfil="admin",
             )
+
             st.success(
                 "Login de Administrador realizado com sucesso!"
             )
+
             st.rerun()
 
         elif senha_digitada == SENHA_USUARIO:
@@ -62,9 +64,11 @@ with st.form("form_login"):
                 usuario="operador",
                 perfil="usuario",
             )
+
             st.success(
                 "Login de Usuário realizado com sucesso!"
             )
+
             st.rerun()
 
         else:
@@ -212,7 +216,6 @@ st.markdown("**Vazão de Poços**")
 
 ```
 if st.session_state.perfil == "admin":
-
     st.caption("Status: Em desenvolvimento (Admin)")
 
     if st.button(
@@ -223,7 +226,6 @@ if st.session_state.perfil == "admin":
         st.switch_page("pages/3_Vazao_Pocos.py")
 
 else:
-
     st.caption("Status: Em desenvolvimento")
 
     st.button(
