@@ -1835,23 +1835,25 @@ def dialogo_novo_registro(
         key="novo_responsavel",
     )
 
-    col5, col6 = st.columns(2)
+    grau_impacto = st.text_input(
+        "Grau de Impacto",
+        key="novo_grau_impacto",
+    )
 
-    with col5:
+    # --------------------------------------------------------
+    # RESOLVIDO É O ÚLTIMO CAMPO DA MELHORIA
+    # --------------------------------------------------------
 
-        grau_impacto = st.text_input(
-            "Grau de Impacto",
-            key="novo_grau_impacto",
-        )
-
-    with col6:
-
-        resolvido = st.text_input(
-            "Resolvido",
-            key="novo_resolvido",
-        )
+    resolvido = st.text_input(
+        "Resolvido",
+        key="novo_resolvido",
+    )
 
     st.divider()
+
+    # --------------------------------------------------------
+    # O.S. INICIAL
+    # --------------------------------------------------------
 
     st.subheader(
         "O.S. inicial"
@@ -1887,7 +1889,10 @@ def dialogo_novo_registro(
 
         return
 
-    adicionar_os = True
+    # IMPORTANTE:
+    # Não usar o nome "adicionar_os" aqui.
+    # "adicionar_os" é a função responsável pelo CRUD da O.S.
+    deve_adicionar_os = True
 
     if not historico_existente.empty:
 
@@ -1895,7 +1900,7 @@ def dialogo_novo_registro(
             "Esta matrícula já possui histórico de O.S."
         )
 
-        adicionar_os = st.checkbox(
+        deve_adicionar_os = st.checkbox(
             "Adicionar uma nova O.S.",
             value=False,
             key="novo_adicionar_os",
@@ -1908,7 +1913,7 @@ def dialogo_novo_registro(
 
     if (
         historico_existente.empty
-        or adicionar_os
+        or deve_adicionar_os
     ):
 
         col7, col8 = st.columns(2)
@@ -1961,6 +1966,10 @@ def dialogo_novo_registro(
     if not salvar:
         return
 
+    # --------------------------------------------------------
+    # VALIDAÇÕES DO CADASTRO
+    # --------------------------------------------------------
+
     if not matricula:
         st.error(
             "Informe a matrícula."
@@ -1989,15 +1998,26 @@ def dialogo_novo_registro(
         )
         return
 
+    # --------------------------------------------------------
+    # VALIDAÇÃO DA O.S.
+    # N. O.S. É TEXTO LIVRE
+    # --------------------------------------------------------
+
     if (
         historico_existente.empty
-        or adicionar_os
+        or deve_adicionar_os
     ):
 
-        if not texto(numero_os):
+        numero_os = texto(
+            numero_os
+        )
+
+        if not numero_os:
+
             st.error(
                 "Informe a N. O.S."
             )
+
             return
 
         if os_duplicada(
@@ -2005,10 +2025,16 @@ def dialogo_novo_registro(
             matricula,
             numero_os,
         ):
+
             st.error(
                 "Esta O.S. já está cadastrada."
             )
+
             return
+
+    # --------------------------------------------------------
+    # DADOS DO REGISTRO
+    # --------------------------------------------------------
 
     registro_id = gerar_id()
 
@@ -2043,9 +2069,13 @@ def dialogo_novo_registro(
             dados
         )
 
+        # ----------------------------------------------------
+        # ADICIONA A O.S.
+        # ----------------------------------------------------
+
         if (
             historico_existente.empty
-            or adicionar_os
+            or deve_adicionar_os
         ):
 
             dados_os = {
@@ -2063,6 +2093,7 @@ def dialogo_novo_registro(
                 "Pontual": pontual,
             }
 
+            # Aqui "adicionar_os" é novamente a função CRUD.
             adicionar_os(
                 dados_os
             )
@@ -2208,27 +2239,25 @@ def dialogo_editar_registro(
         key=f"edit_responsavel_{registro_id}",
     )
 
-    col5, col6 = st.columns(2)
+    grau_impacto = st.text_input(
+        "Grau de Impacto",
+        value=texto(
+            registro["Grau de Impacto"]
+        ),
+        key=f"edit_impacto_{registro_id}",
+    )
 
-    with col5:
+    # --------------------------------------------------------
+    # RESOLVIDO — ÚLTIMO CAMPO DA MELHORIA
+    # --------------------------------------------------------
 
-        grau_impacto = st.text_input(
-            "Grau de Impacto",
-            value=texto(
-                registro["Grau de Impacto"]
-            ),
-            key=f"edit_impacto_{registro_id}",
-        )
-
-    with col6:
-
-        resolvido = st.text_input(
-            "Resolvido",
-            value=texto(
-                registro["Resolvido"]
-            ),
-            key=f"edit_resolvido_{registro_id}",
-        )
+    resolvido = st.text_input(
+        "Resolvido",
+        value=texto(
+            registro["Resolvido"]
+        ),
+        key=f"edit_resolvido_{registro_id}",
+    )
 
     st.divider()
 
@@ -2734,7 +2763,11 @@ def dialogo_nova_os(
     if not salvar:
         return
 
-    if not texto(numero_os):
+    numero_os = texto(
+        numero_os
+    )
+
+    if not numero_os:
 
         st.error(
             "Informe a N. O.S."
@@ -2757,7 +2790,7 @@ def dialogo_nova_os(
     dados = {
         "ID": gerar_id(),
         "Matrícula": matricula,
-        "N. O.S": texto(numero_os),
+        "N. O.S": numero_os,
         "Data de Abertura": (
             data_abertura.strftime(
                 "%Y-%m-%d %H:%M:%S"
@@ -2886,7 +2919,11 @@ def dialogo_editar_os(
     if not salvar:
         return
 
-    if not texto(numero_os):
+    numero_os = texto(
+        numero_os
+    )
+
+    if not numero_os:
 
         st.error(
             "Informe a N. O.S."
@@ -2910,7 +2947,7 @@ def dialogo_editar_os(
     dados = {
         "ID": os_id,
         "Matrícula": matricula,
-        "N. O.S": texto(numero_os),
+        "N. O.S": numero_os,
         "Data de Abertura": (
             data_abertura.strftime(
                 "%Y-%m-%d %H:%M:%S"
