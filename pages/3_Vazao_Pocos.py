@@ -67,6 +67,7 @@ UNIDADES_VAZAO = [
 
 @st.cache_resource(show_spinner=False)
 def obter_cliente_google():
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -86,6 +87,7 @@ def obter_cliente_google():
 
 @st.cache_resource(show_spinner=False)
 def obter_planilha():
+
     cliente = obter_cliente_google()
 
     return cliente.open_by_key(
@@ -95,9 +97,11 @@ def obter_planilha():
 
 @st.cache_resource(show_spinner=False)
 def obter_aba(nome_aba):
+
     planilha = obter_planilha()
 
     try:
+
         return planilha.worksheet(
             nome_aba
         )
@@ -139,6 +143,7 @@ def obter_aba(nome_aba):
 
 @st.cache_resource(show_spinner=False)
 def obter_abas():
+
     return (
         obter_aba(NOME_ABA_POCOS),
         obter_aba(NOME_ABA_LEITURAS),
@@ -160,6 +165,7 @@ def carregar_pocos():
     registros = aba_pocos.get_all_records()
 
     if not registros:
+
         return pd.DataFrame(
             columns=CABECALHO_POCOS
         )
@@ -167,7 +173,9 @@ def carregar_pocos():
     df = pd.DataFrame(registros)
 
     for coluna in CABECALHO_POCOS:
+
         if coluna not in df.columns:
+
             df[coluna] = ""
 
     return df[
@@ -186,6 +194,7 @@ def carregar_leituras():
     registros = aba_leituras.get_all_records()
 
     if not registros:
+
         return pd.DataFrame(
             columns=CABECALHO_LEITURAS
         )
@@ -193,7 +202,9 @@ def carregar_leituras():
     df = pd.DataFrame(registros)
 
     for coluna in CABECALHO_LEITURAS:
+
         if coluna not in df.columns:
+
             df[coluna] = ""
 
     return df[
@@ -218,6 +229,7 @@ def garantir_cabecalhos():
     cab_pocos = aba_pocos.row_values(1)
 
     if cab_pocos != CABECALHO_POCOS:
+
         aba_pocos.update(
             "A1",
             [CABECALHO_POCOS],
@@ -226,6 +238,7 @@ def garantir_cabecalhos():
     cab_leituras = aba_leituras.row_values(1)
 
     if cab_leituras != CABECALHO_LEITURAS:
+
         aba_leituras.update(
             "A1",
             [CABECALHO_LEITURAS],
@@ -259,13 +272,17 @@ def parse_float(valor, default=None):
         isinstance(valor, float)
         and pd.isna(valor)
     ):
+
         return default
 
     if isinstance(valor, (int, float)):
 
         try:
+
             return float(valor)
+
         except (ValueError, TypeError):
+
             return default
 
     try:
@@ -278,6 +295,7 @@ def parse_float(valor, default=None):
             "nat",
             "",
         ):
+
             return default
 
         texto = (
@@ -304,19 +322,23 @@ def normalizar_coordenada(
     )
 
     if num is None:
+
         return None
 
     if tipo == "lat" and not (
         -90.0 <= num <= 90.0
     ):
+
         return None
 
     if tipo == "lon" and not (
         -180.0 <= num <= 180.0
     ):
+
         return None
 
     if num == 0.0:
+
         return None
 
     return round(
@@ -351,6 +373,7 @@ def novo_id(prefixo, valores):
                     )
 
                 except ValueError:
+
                     pass
 
     return f"{prefixo}{maior + 1:05d}"
@@ -373,12 +396,15 @@ def identificacao_exibicao(row):
     ).strip()
 
     if nome and identificacao:
+
         return f"{nome} — {identificacao}"
 
     if nome:
+
         return nome
 
     if identificacao:
+
         return identificacao
 
     return str(
@@ -392,6 +418,7 @@ def identificacao_exibicao(row):
 def converter_data(valor):
 
     if valor is None or str(valor).strip() == "":
+
         return pd.NaT
 
     return pd.to_datetime(
@@ -406,6 +433,7 @@ def formatar_data(valor):
     data_convertida = converter_data(valor)
 
     if pd.isna(data_convertida):
+
         return ""
 
     return data_convertida.strftime(
@@ -420,6 +448,7 @@ def dias_desde_leitura(data_leitura):
     )
 
     if pd.isna(data_convertida):
+
         return None
 
     return (
@@ -437,6 +466,7 @@ def preparar_pocos(df):
     df = df.copy()
 
     if df.empty:
+
         return df
 
     for coluna in [
@@ -455,7 +485,6 @@ def preparar_pocos(df):
                 .str.strip()
             )
 
-    # Mesmo tratamento utilizado no Módulo 1
     df["LATITUDE"] = df[
         "LATITUDE"
     ].apply(
@@ -482,6 +511,7 @@ def preparar_leituras(df):
     df = df.copy()
 
     if df.empty:
+
         return df
 
     for coluna in [
@@ -518,20 +548,7 @@ def preparar_leituras(df):
     )
 
     return df
-st.write("DEBUG POCOS")
-st.dataframe(
-    df_pocos[
-        [
-            "ID_POCO",
-            "IDENTIFICACAO_ATIVO",
-            "NOME_POCO",
-            "MUNICIPIO",
-            "LATITUDE",
-            "LONGITUDE",
-        ]
-    ],
-    use_container_width=True,
-)
+
 
 # ============================================================
 # OPERAÇÕES DE ESCRITA
@@ -746,6 +763,27 @@ except Exception as erro:
 
 
 # ============================================================
+# DEBUG TEMPORÁRIO DOS PONTOS FIXOS
+# ============================================================
+
+st.write("DEBUG POCOS")
+
+st.dataframe(
+    df_pocos[
+        [
+            "ID_POCO",
+            "IDENTIFICACAO_ATIVO",
+            "NOME_POCO",
+            "MUNICIPIO",
+            "LATITUDE",
+            "LONGITUDE",
+        ]
+    ],
+    use_container_width=True,
+)
+
+
+# ============================================================
 # GARANTIR CABEÇALHOS
 # ============================================================
 
@@ -755,8 +793,11 @@ if (
 ):
 
     try:
+
         garantir_cabecalhos()
+
     except Exception:
+
         pass
 
 
@@ -778,6 +819,7 @@ st.caption(
 hoje = date.today()
 
 if "poco_modal_aberto" not in st.session_state:
+
     st.session_state.poco_modal_aberto = False
 
 
@@ -938,6 +980,7 @@ def modal_editar_poco():
     if len(linha_df) > 0:
 
         indice_df = linha_df[0]
+
         linha_planilha = indice_df + 2
 
     else:
@@ -1678,13 +1721,6 @@ if st.sidebar.button(
 
     modal_nova_leitura()
 
-st.sidebar.divider()
-
-if st.sidebar.button(
-    "🏠 Voltar ao Menu Principal",
-    use_container_width=True,
-):
-    st.switch_page("app.py")
 
 if st.sidebar.button(
     "📝 Editar ou excluir leitura",
@@ -1692,6 +1728,16 @@ if st.sidebar.button(
 ):
 
     modal_editar_leitura()
+
+
+st.sidebar.divider()
+
+if st.sidebar.button(
+    "🏠 Voltar ao Menu Principal",
+    use_container_width=True,
+):
+
+    st.switch_page("app.py")
 
 
 # ============================================================
@@ -1831,7 +1877,6 @@ tipo_mapa = st.selectbox(
 
 # ============================================================
 # COORDENADAS DOS POÇOS
-# Mesmo padrão do Módulo 1
 # ============================================================
 
 coordenadas = pocos_mapa.copy()
@@ -1861,6 +1906,10 @@ coordenadas = coordenadas.dropna(
     ]
 ).copy()
 
+
+# ============================================================
+# CENTRO DO MAPA
+# ============================================================
 
 if not coordenadas.empty:
 
@@ -2043,6 +2092,10 @@ for _, poco in coordenadas.iterrows():
     ).add_to(mapa)
 
 
+# ============================================================
+# AJUSTE AUTOMÁTICO DO ENQUADRAMENTO
+# ============================================================
+
 if not coordenadas.empty:
 
     mapa.fit_bounds(
@@ -2067,6 +2120,10 @@ if not coordenadas.empty:
         padding=(30, 30),
     )
 
+
+# ============================================================
+# EXIBIÇÃO DO MAPA
+# ============================================================
 
 st_folium(
     mapa,
