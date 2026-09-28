@@ -162,60 +162,32 @@ def carregar_pocos():
 
     aba_pocos, _ = obter_abas()
 
-    registros = aba_pocos.get_all_records()
+    valores = aba_pocos.get_all_values()
 
-    if not registros:
-
+    if not valores:
         return pd.DataFrame(
             columns=CABECALHO_POCOS
         )
 
-    df = pd.DataFrame(registros)
+    cabecalho = [
+        str(coluna).strip()
+        for coluna in valores[0]
+    ]
+
+    registros = valores[1:]
+
+    df = pd.DataFrame(
+        registros,
+        columns=cabecalho,
+    )
 
     for coluna in CABECALHO_POCOS:
-
         if coluna not in df.columns:
-
             df[coluna] = ""
 
     return df[
         CABECALHO_POCOS
     ].copy()
-
-
-@st.cache_data(
-    ttl=30,
-    show_spinner=False,
-)
-def carregar_leituras():
-
-    _, aba_leituras = obter_abas()
-
-    registros = aba_leituras.get_all_records()
-
-    if not registros:
-
-        return pd.DataFrame(
-            columns=CABECALHO_LEITURAS
-        )
-
-    df = pd.DataFrame(registros)
-
-    for coluna in CABECALHO_LEITURAS:
-
-        if coluna not in df.columns:
-
-            df[coluna] = ""
-
-    return df[
-        CABECALHO_LEITURAS
-    ].copy()
-
-
-def invalidar_cache_dados():
-
-    carregar_pocos.clear()
-    carregar_leituras.clear()
 
 
 # ============================================================
