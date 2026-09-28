@@ -244,6 +244,33 @@ with col3:
 st.markdown("")
 col4, col5, col6 = st.columns(3)
 
+# ============================================================
+# TERCEIRA LINHA
+# ============================================================
+
+st.markdown("")
+
+col7_esq, col7, col7_dir = st.columns(3)
+
+
+# ============================================================
+# MÓDULO 7
+# ============================================================
+
+with col7:
+    st.markdown("#### 🗺️ Módulo 7")
+    st.markdown("**Mapeamento de Melhorias**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Mapeamento de Melhorias",
+        type="primary",
+        use_container_width=True,
+        key="acessar_mapeamento_melhorias",
+    ):
+        st.switch_page(
+            "pages/7_Mapeamento_de_Melhorias.py"
+        )
 
 # ============================================================
 # MÓDULO 4
