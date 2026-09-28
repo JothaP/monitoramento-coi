@@ -518,7 +518,20 @@ def preparar_leituras(df):
     )
 
     return df
-
+st.write("DEBUG POCOS")
+st.dataframe(
+    df_pocos[
+        [
+            "ID_POCO",
+            "IDENTIFICACAO_ATIVO",
+            "NOME_POCO",
+            "MUNICIPIO",
+            "LATITUDE",
+            "LONGITUDE",
+        ]
+    ],
+    use_container_width=True,
+)
 
 # ============================================================
 # OPERAÇÕES DE ESCRITA
