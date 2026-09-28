@@ -1,18 +1,17 @@
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
+import io
 import json
-import pandas as pd
-import folium
-from streamlit_folium import st_folium
-import simplekml
-from datetime import datetime, date, time
-from uuid import uuid4
-from typing import Optional
+import math
 import re
 import html
-import io
-import math
+from datetime import date, datetime, time
+from uuid import uuid4
+
+import folium
+import gspread
+import pandas as pd
+import streamlit as st
+from google.oauth2.service_account import Credentials
+from streamlit_folium import st_folium
 
 
 # ============================================================
@@ -21,87 +20,9 @@ import math
 
 st.set_page_config(
     page_title="Mapeamento de Melhorias - COI",
-    page_icon="🛠️",
+    page_icon="🗺️",
     layout="wide",
     initial_sidebar_state="expanded",
-)
-
-
-# ============================================================
-# CSS
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-        [data-testid="stSidebarNav"] {
-            display: none;
-        }
-
-        section[data-testid="stSidebar"] > div {
-            padding-top: 1rem;
-        }
-
-        .bloco-titulo {
-            font-size: 1.05rem;
-            font-weight: 700;
-            margin-bottom: 0.2rem;
-        }
-
-        .linha-cabecalho {
-            background: rgba(128, 128, 128, 0.10);
-            border-radius: 8px;
-            padding: 8px 12px;
-            margin-bottom: 5px;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .campo-lista {
-            font-size: 13px;
-            line-height: 1.25;
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            border: 1px solid rgba(128,128,128,0.30);
-        }
-
-        .badge-neutro {
-            background: rgba(128,128,128,0.10);
-        }
-
-        .badge-sim {
-            background: rgba(0, 180, 80, 0.12);
-        }
-
-        .badge-nao {
-            background: rgba(220, 60, 60, 0.12);
-        }
-
-        .resumo-popup {
-            padding: 8px 0;
-        }
-
-        .resumo-popup strong {
-            font-weight: 700;
-        }
-
-        .os-box {
-            border: 1px solid rgba(128,128,128,0.25);
-            border-radius: 8px;
-            padding: 10px;
-            margin-bottom: 8px;
-        }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
 )
 
 
@@ -114,34 +35,33 @@ from auth import verificar_autenticacao
 
 verificar_autenticacao()
 
-
 if not st.session_state.get("autenticado"):
-    st.warning("⚠️ Usuário não autenticado.")
+    st.warning("Você precisa estar autenticado para acessar este módulo.")
 
-    if st.button("Voltar para o menu principal"):
+    if st.button("🏠 Voltar ao Menu Principal"):
         st.switch_page("app.py")
 
     st.stop()
 
 
 # ============================================================
-# CONSTANTES
+# CONFIGURAÇÃO DO GOOGLE SHEETS
 # ============================================================
 
-LAT_BASE = -5.0892
-LON_BASE = -42.8019
-
-
 # IMPORTANTE:
-# Esta é uma planilha DIFERENTE da utilizada pelos demais módulos.
-# O ID deve ser cadastrado nos secrets.
+# Esta é a planilha EXCLUSIVA do Módulo 7.
+# NÃO utilizar o ID da planilha do Módulo 1.
 SPREADSHEET_ID = st.secrets.get(
     "MAPEAMENTO_MELHORIAS_SPREADSHEET_ID",
     "",
 )
 
 
-REGISTRO_CABEÇALHO = [
+REGISTRO_SHEET = "Registro"
+HISTORICO_SHEET = "Historico"
+
+
+REGISTRO_HEADERS = [
     "ID",
     "Matrícula",
     "Endereço",
@@ -159,7 +79,7 @@ REGISTRO_CABEÇALHO = [
 ]
 
 
-HISTORICO_COLUNAS = [
+HISTORICO_HEADERS = [
     "ID",
     "Matrícula",
     "N. O.S",
@@ -170,37 +90,77 @@ HISTORICO_COLUNAS = [
 
 
 # ============================================================
-# ESTADO DA INTERFACE
+# CONSTANTES
 # ============================================================
 
-ESTADOS_PADRAO = {
-    "pagina_melhorias": 1,
-    "dialogo_melhorias": None,
-    "dialogo_matricula": None,
-    "dialogo_id": None,
-    "dialogo_os_id": None,
-    "dialogo_os_matricula": None,
-    "tipo_exclusao": None,
-    "id_exclusao": None,
-    "matricula_exclusao": None,
-    "modo_escuro_melhorias": False,
-}
+REGISTROS_POR_PAGINA = 10
+
+OS_PATTERN = re.compile(
+    r"^\d{5}/\d{4}-\d+$"
+)
 
 
-for chave, valor in ESTADOS_PADRAO.items():
-    if chave not in st.session_state:
-        st.session_state[chave] = valor
+# ============================================================
+# ESTILO
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+        .kpi-card {
+            border: 1px solid rgba(128,128,128,0.25);
+            border-radius: 12px;
+            padding: 16px;
+            min-height: 115px;
+        }
+
+        .kpi-title {
+            font-size: 0.85rem;
+            opacity: 0.75;
+            margin-bottom: 8px;
+        }
+
+        .kpi-value {
+            font-size: 1.55rem;
+            font-weight: 700;
+        }
+
+        .registro-card {
+            border: 1px solid rgba(128,128,128,0.25);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+
+        .registro-titulo {
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+
+        .registro-subtitulo {
+            opacity: 0.75;
+            font-size: 0.88rem;
+        }
+
+        .campo-label {
+            font-size: 0.78rem;
+            opacity: 0.70;
+        }
+
+        .campo-valor {
+            font-weight: 600;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
 # FUNÇÕES UTILITÁRIAS
 # ============================================================
 
-def gerar_id():
-    return uuid4().hex[:12].upper()
-
-
-def texto(valor) -> str:
+def normalizar_texto(valor):
     if valor is None:
         return ""
 
@@ -210,25 +170,19 @@ def texto(valor) -> str:
     return str(valor).strip()
 
 
-def normalizar_texto(valor) -> str:
-    import unicodedata
+def normalizar_sim_nao(valor):
+    texto = normalizar_texto(valor).upper()
 
-    valor = texto(valor).upper()
+    if texto in ("SIM", "S", "YES", "TRUE", "1"):
+        return "SIM"
 
-    valor = unicodedata.normalize(
-        "NFKD",
-        valor,
-    ).encode(
-        "ASCII",
-        "ignore",
-    ).decode(
-        "ASCII"
-    )
+    if texto in ("NÃO", "NAO", "N", "NO", "FALSE", "0"):
+        return "NAO"
 
-    return valor
+    return texto
 
 
-def valor_float(valor) -> Optional[float]:
+def converter_float(valor):
     if valor is None:
         return None
 
@@ -237,156 +191,111 @@ def valor_float(valor) -> Optional[float]:
             return None
         return float(valor)
 
-    valor = texto(valor)
+    texto = normalizar_texto(valor)
 
-    if not valor:
+    if not texto:
         return None
 
-    valor = valor.replace(",", ".")
+    texto = texto.replace(",", ".")
 
     try:
-        return float(valor)
-    except Exception:
+        return float(texto)
+    except ValueError:
         return None
 
 
-def coordenada_valida(lat, lon):
-    lat = valor_float(lat)
-    lon = valor_float(lon)
+def formatar_data(valor):
+    if valor is None or normalizar_texto(valor) == "":
+        return "—"
+
+    try:
+        data = pd.to_datetime(valor, errors="coerce")
+
+        if pd.isna(data):
+            return normalizar_texto(valor)
+
+        return data.strftime("%d/%m/%Y")
+
+    except Exception:
+        return normalizar_texto(valor)
+
+
+def formatar_data_hora(valor):
+    if valor is None or normalizar_texto(valor) == "":
+        return "—"
+
+    try:
+        data = pd.to_datetime(valor, errors="coerce")
+
+        if pd.isna(data):
+            return normalizar_texto(valor)
+
+        return data.strftime("%d/%m/%Y %H:%M")
+
+    except Exception:
+        return normalizar_texto(valor)
+
+
+def escapar(valor):
+    return html.escape(normalizar_texto(valor))
+
+
+def gerar_id():
+    return uuid4().hex[:12]
+
+
+def coordenada_valida(latitude, longitude):
+    lat = converter_float(latitude)
+    lon = converter_float(longitude)
 
     if lat is None or lon is None:
         return False
 
-    if lat < -90 or lat > 90:
-        return False
-
-    if lon < -180 or lon > 180:
-        return False
-
-    return True
-
-
-def formatar_float(valor, casas=2):
-    valor = valor_float(valor)
-
-    if valor is None:
-        return ""
-
-    return f"{valor:.{casas}f}".replace(".", ",")
-
-
-def formatar_data_hora(valor):
-    if valor is None or texto(valor) == "":
-        return ""
-
-    if isinstance(valor, pd.Timestamp):
-        return valor.strftime("%d/%m/%Y %H:%M")
-
-    if isinstance(valor, datetime):
-        return valor.strftime("%d/%m/%Y %H:%M")
-
-    if isinstance(valor, date):
-        return valor.strftime("%d/%m/%Y")
-
-    valor = texto(valor)
-
-    formatos = [
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%d/%m/%Y",
-        "%Y-%m-%d",
-    ]
-
-    for formato in formatos:
-        try:
-            dt = datetime.strptime(
-                valor,
-                formato,
-            )
-
-            return dt.strftime(
-                "%d/%m/%Y %H:%M"
-            )
-
-        except Exception:
-            continue
-
-    try:
-        dt = pd.to_datetime(
-            valor,
-            dayfirst=True,
-            errors="coerce",
-        )
-
-        if not pd.isna(dt):
-            return dt.strftime(
-                "%d/%m/%Y %H:%M"
-            )
-
-    except Exception:
-        pass
-
-    return valor
-
-
-def converter_data_hora(valor):
-    if valor is None:
-        return pd.NaT
-
-    if isinstance(valor, datetime):
-        return valor
-
-    try:
-        return pd.to_datetime(
-            valor,
-            dayfirst=True,
-            errors="coerce",
-        )
-
-    except Exception:
-        return pd.NaT
-
-
-def validar_os(numero_os):
-    """
-    Formato esperado:
-    12345/2026-1
-
-    Mantém o ano com 4 dígitos e permite um ou mais
-    dígitos no último bloco.
-    """
-
-    numero_os = texto(numero_os)
-
-    if not numero_os:
-        return False
-
-    padrao = r"^\d{5}/\d{4}-\d+$"
-
-    return bool(
-        re.fullmatch(
-            padrao,
-            numero_os,
-        )
+    return (
+        -90 <= lat <= 90
+        and -180 <= lon <= 180
     )
 
 
-def valor_badge(valor):
-    valor_normalizado = normalizar_texto(valor)
+def valor_data_para_widget(valor, padrao=None):
+    if padrao is None:
+        padrao = date.today()
 
-    if valor_normalizado == "SIM":
-        return "badge badge-sim"
+    if valor is None or normalizar_texto(valor) == "":
+        return padrao
 
-    if valor_normalizado == "NAO":
-        return "badge badge-nao"
+    try:
+        resultado = pd.to_datetime(
+            valor,
+            errors="coerce",
+        )
 
-    return "badge badge-neutro"
+        if pd.isna(resultado):
+            return padrao
+
+        return resultado.date()
+
+    except Exception:
+        return padrao
 
 
-def limpar_filtros_paginacao():
-    st.session_state.pagina_melhorias = 1
+def valor_datetime_para_widget(valor):
+    if valor is None or normalizar_texto(valor) == "":
+        return datetime.now()
+
+    try:
+        resultado = pd.to_datetime(
+            valor,
+            errors="coerce",
+        )
+
+        if pd.isna(resultado):
+            return datetime.now()
+
+        return resultado.to_pydatetime()
+
+    except Exception:
+        return datetime.now()
 
 
 # ============================================================
@@ -395,6 +304,12 @@ def limpar_filtros_paginacao():
 
 @st.cache_resource
 def conectar_google_sheets(spreadsheet_id):
+    if not spreadsheet_id:
+        raise ValueError(
+            "A configuração MAPEAMENTO_MELHORIAS_SPREADSHEET_ID "
+            "não foi encontrada nos secrets."
+        )
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
@@ -411,247 +326,290 @@ def conectar_google_sheets(spreadsheet_id):
 
     gc = gspread.authorize(credentials)
 
-    return gc.open_by_key(
-        spreadsheet_id
-    )
+    return gc.open_by_key(spreadsheet_id)
 
 
-def obter_worksheet(spreadsheet, nome, colunas):
-    try:
-        worksheet = spreadsheet.worksheet(nome)
-
-    except gspread.WorksheetNotFound:
-
-        worksheet = spreadsheet.add_worksheet(
-            title=nome,
-            rows=1000,
-            cols=max(len(colunas), 20),
-        )
-
-        worksheet.append_row(
-            colunas,
-            value_input_option="USER_ENTERED",
-        )
-
-        return worksheet
-
+def garantir_headers(worksheet, headers):
     valores = worksheet.get_all_values()
 
     if not valores:
         worksheet.append_row(
-            colunas,
+            headers,
             value_input_option="USER_ENTERED",
         )
+        return
 
-        return worksheet
-
-    cabecalho = [
-        texto(x)
+    primeira_linha = [
+        normalizar_texto(x)
         for x in valores[0]
     ]
 
-    if cabecalho != colunas:
-        st.error(
-            f"A aba **{nome}** possui cabeçalho diferente do esperado."
+    if primeira_linha != headers:
+        worksheet.clear()
+        worksheet.append_row(
+            headers,
+            value_input_option="USER_ENTERED",
         )
 
-        st.code(
-            " | ".join(colunas)
-        )
 
-        st.stop()
-
-    return worksheet
-
-
+@st.cache_resource
 def obter_planilhas():
-    if not SPREADSHEET_ID:
-        st.error(
-            "❌ O ID da planilha do Mapeamento de Melhorias não foi configurado."
-        )
-
-        st.info(
-            "Adicione `MAPEAMENTO_MELHORIAS_SPREADSHEET_ID` "
-            "aos secrets da aplicação."
-        )
-
-        st.stop()
-
     try:
         spreadsheet = conectar_google_sheets(
             SPREADSHEET_ID
         )
 
-        ws_registro = obter_worksheet(
-            spreadsheet,
-            "Registro",
-            REGISTRO_COLUNAS,
+        try:
+            registro_ws = spreadsheet.worksheet(
+                REGISTRO_SHEET
+            )
+        except gspread.WorksheetNotFound:
+            registro_ws = spreadsheet.add_worksheet(
+                title=REGISTRO_SHEET,
+                rows=1000,
+                cols=len(REGISTRO_HEADERS),
+            )
+
+        try:
+            historico_ws = spreadsheet.worksheet(
+                HISTORICO_SHEET
+            )
+        except gspread.WorksheetNotFound:
+            historico_ws = spreadsheet.add_worksheet(
+                title=HISTORICO_SHEET,
+                rows=2000,
+                cols=len(HISTORICO_HEADERS),
+            )
+
+        garantir_headers(
+            registro_ws,
+            REGISTRO_HEADERS,
         )
 
-        ws_historico = obter_worksheet(
-            spreadsheet,
-            "Historico",
-            HISTORICO_COLUNAS,
+        garantir_headers(
+            historico_ws,
+            HISTORICO_HEADERS,
         )
 
-        return (
-            spreadsheet,
-            ws_registro,
-            ws_historico,
-        )
+        return registro_ws, historico_ws
 
-    except Exception as erro:
+    except Exception as exc:
         st.error(
-            "❌ Não foi possível acessar a planilha "
+            "Não foi possível acessar a planilha "
             "**Mapeamento de Melhorias**."
         )
 
-        st.exception(erro)
+        st.exception(exc)
+
+        st.info(
+            "Verifique se a planilha foi compartilhada "
+            "com o e-mail da conta de serviço configurada "
+            "em `gcp_json` e se "
+            "`MAPEAMENTO_MELHORIAS_SPREADSHEET_ID` "
+            "aponta para a planilha correta."
+        )
 
         st.stop()
 
 
-# ============================================================
-# LEITURA DOS DADOS
-# ============================================================
-
-def carregar_worksheet(worksheet, colunas):
-    valores = worksheet.get_all_values()
+def carregar_worksheet(worksheet, headers):
+    valores = worksheet.get_all_records(
+        default_blank=""
+    )
 
     if not valores:
         return pd.DataFrame(
-            columns=colunas
+            columns=headers
         )
 
-    cabecalho = valores[0]
-    dados = valores[1:]
+    df = pd.DataFrame(valores)
 
-    if not dados:
-        return pd.DataFrame(
-            columns=colunas
-        )
-
-    quantidade = len(cabecalho)
-
-    linhas = []
-
-    for linha in dados:
-        linha = list(linha)
-
-        if len(linha) < quantidade:
-            linha.extend(
-                [""] * (
-                    quantidade - len(linha)
-                )
-            )
-
-        linhas.append(
-            linha[:quantidade]
-        )
-
-    df = pd.DataFrame(
-        linhas,
-        columns=cabecalho,
-    )
-
-    for coluna in colunas:
+    for coluna in headers:
         if coluna not in df.columns:
             df[coluna] = ""
 
-    return df[colunas]
+    return df[headers].copy()
 
 
-def carregar_dados(ws_registro, ws_historico):
+def carregar_dados():
+    registro_ws, historico_ws = obter_planilhas()
+
     df_registro = carregar_worksheet(
-        ws_registro,
-        REGISTRO_COLUNAS,
+        registro_ws,
+        REGISTRO_HEADERS,
     )
 
     df_historico = carregar_worksheet(
-        ws_historico,
-        HISTORICO_COLUNAS,
+        historico_ws,
+        HISTORICO_HEADERS,
     )
 
-    if not df_registro.empty:
-        df_registro["Latitude"] = (
-            df_registro["Latitude"]
-            .apply(valor_float)
-        )
-
-        df_registro["Longitude"] = (
-            df_registro["Longitude"]
-            .apply(valor_float)
-        )
-
-    if not df_historico.empty:
-        df_historico["Pressão"] = (
-            df_historico["Pressão"]
-            .apply(valor_float)
-        )
-
-        df_historico["_DataObj"] = (
-            df_historico["Data de Abertura"]
-            .apply(converter_data_hora)
-        )
-
     return (
+        registro_ws,
+        historico_ws,
         df_registro,
         df_historico,
     )
 
 
 # ============================================================
-# OPERAÇÕES DE GOOGLE SHEETS
+# LOCALIZAÇÃO DE LINHAS
 # ============================================================
 
-def encontrar_linha_por_id(worksheet, registro_id):
+def localizar_linha_por_id(
+    worksheet,
+    registro_id,
+):
     try:
         celula = worksheet.find(
             str(registro_id)
         )
 
-        return celula.row
+        if celula:
+            return celula.row
 
     except Exception:
-        return None
+        pass
+
+    return None
 
 
-def adicionar_linha(worksheet, dados):
-    worksheet.append_row(
-        dados,
-        value_input_option="USER_ENTERED",
-    )
-
-
-def atualizar_linha(
+def localizar_linha_os(
     worksheet,
-    numero_linha,
-    dados,
+    os_id,
 ):
-    ultima_coluna = (
-        chr(
-            ord("A") + len(dados) - 1
-        )
-    )
-
-    worksheet.update(
-        f"A{numero_linha}:{ultima_coluna}{numero_linha}",
-        [dados],
-        value_input_option="USER_ENTERED",
-    )
-
-
-def excluir_linha(
-    worksheet,
-    numero_linha,
-):
-    worksheet.delete_rows(
-        numero_linha
+    return localizar_linha_por_id(
+        worksheet,
+        os_id,
     )
 
 
 # ============================================================
-# HISTÓRICO / RELACIONAMENTOS
+# CRUD — REGISTRO
+# ============================================================
+
+def registro_para_lista(dados):
+    return [
+        dados.get(coluna, "")
+        for coluna in REGISTRO_HEADERS
+    ]
+
+
+def adicionar_registro(dados):
+    registro_ws, _ = obter_planilhas()
+
+    registro_ws.append_row(
+        registro_para_lista(dados),
+        value_input_option="USER_ENTERED",
+    )
+
+
+def atualizar_registro(
+    registro_id,
+    dados,
+):
+    registro_ws, _ = obter_planilhas()
+
+    linha = localizar_linha_por_id(
+        registro_ws,
+        registro_id,
+    )
+
+    if linha is None:
+        raise ValueError(
+            "Registro não encontrado."
+        )
+
+    registro_ws.update(
+        f"A{linha}:N{linha}",
+        [
+            registro_para_lista(dados)
+        ],
+        value_input_option="USER_ENTERED",
+    )
+
+
+def excluir_registro(
+    registro_id,
+):
+    registro_ws, _ = obter_planilhas()
+
+    linha = localizar_linha_por_id(
+        registro_ws,
+        registro_id,
+    )
+
+    if linha is None:
+        raise ValueError(
+            "Registro não encontrado."
+        )
+
+    registro_ws.delete_rows(linha)
+
+
+# ============================================================
+# CRUD — O.S.
+# ============================================================
+
+def os_para_lista(dados):
+    return [
+        dados.get(coluna, "")
+        for coluna in HISTORICO_HEADERS
+    ]
+
+
+def adicionar_os(dados):
+    _, historico_ws = obter_planilhas()
+
+    historico_ws.append_row(
+        os_para_lista(dados),
+        value_input_option="USER_ENTERED",
+    )
+
+
+def atualizar_os(
+    os_id,
+    dados,
+):
+    _, historico_ws = obter_planilhas()
+
+    linha = localizar_linha_os(
+        historico_ws,
+        os_id,
+    )
+
+    if linha is None:
+        raise ValueError(
+            "O.S. não encontrada."
+        )
+
+    historico_ws.update(
+        f"A{linha}:F{linha}",
+        [
+            os_para_lista(dados)
+        ],
+        value_input_option="USER_ENTERED",
+    )
+
+
+def excluir_os(os_id):
+    _, historico_ws = obter_planilhas()
+
+    linha = localizar_linha_os(
+        historico_ws,
+        os_id,
+    )
+
+    if linha is None:
+        raise ValueError(
+            "O.S. não encontrada."
+        )
+
+    historico_ws.delete_rows(linha)
+
+
+# ============================================================
+# CONSULTAS
 # ============================================================
 
 def historico_da_matricula(
@@ -665,392 +623,105 @@ def historico_da_matricula(
         df_historico["Matrícula"]
         .astype(str)
         .str.strip()
-        == texto(matricula)
+        .str.upper()
+        ==
+        normalizar_texto(matricula)
+        .upper()
     ].copy()
 
 
-def quantidade_os(
-    df_historico,
-    matricula,
-):
-    return len(
-        historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-    )
-
-
-def ultima_os(
-    df_historico,
-    matricula,
-):
-    df = historico_da_matricula(
-        df_historico,
-        matricula,
-    )
-
-    if df.empty:
-        return pd.NaT
-
-    df = df.sort_values(
-        "_DataObj",
-        ascending=False,
-        na_position="last",
-    )
-
-    return df.iloc[0]["_DataObj"]
-
-
-def tempo_medio_reclamacao(
-    df_historico,
-    matricula,
-):
-    df = historico_da_matricula(
-        df_historico,
-        matricula,
-    )
-
-    if len(df) < 2:
-        return None
-
-    datas = (
-        pd.to_datetime(
-            df["_DataObj"],
-            errors="coerce",
-        )
-        .dropna()
-        .dt.normalize()
-        .sort_values()
-    )
-
-    if len(datas) < 2:
-        return None
-
-    diferencas = (
-        datas.diff()
-        .dropna()
-        .dt.days
-    )
-
-    if diferencas.empty:
-        return 0.0
-
-    return float(
-        diferencas.mean()
-    )
-
-
-def media_pressao(
-    df_historico,
-    matricula,
-):
-    df = historico_da_matricula(
-        df_historico,
-        matricula,
-    )
-
-    if df.empty:
-        return None
-
-    valores = pd.to_numeric(
-        df["Pressão"],
-        errors="coerce",
-    ).dropna()
-
-    if valores.empty:
-        return None
-
-    return float(
-        valores.mean()
-    )
-
-
-# ============================================================
-# FILTROS
-# ============================================================
-
-def obter_periodo_padrao(df_historico):
-    if df_historico.empty:
-        hoje = date.today()
-        return hoje, hoje
-
-    datas = pd.to_datetime(
-        df_historico["_DataObj"],
-        errors="coerce",
-    ).dropna()
-
-    if datas.empty:
-        hoje = date.today()
-        return hoje, hoje
-
-    return (
-        datas.min().date(),
-        datas.max().date(),
-    )
-
-
-def aplicar_filtros(
+def registro_da_matricula(
     df_registro,
-    df_historico,
-    data_inicial,
-    data_final,
-    bairro,
     matricula,
-    grau_impacto,
-    resolvido,
-    executado,
-    busca,
-):
-    hist = df_historico.copy()
-    reg = df_registro.copy()
-
-    # --------------------------------------------------------
-    # FILTRO DE DATA
-    # --------------------------------------------------------
-
-    if not hist.empty:
-        datas = pd.to_datetime(
-            hist["_DataObj"],
-            errors="coerce",
-        )
-
-        hist = hist[
-            datas.dt.date.between(
-                data_inicial,
-                data_final,
-            )
-        ]
-
-    # Matrículas que possuem O.S. dentro do período.
-    matriculas_periodo = set(
-        hist["Matrícula"]
-        .astype(str)
-        .str.strip()
-    ) if not hist.empty else set()
-
-    reg = reg[
-        reg["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .isin(matriculas_periodo)
-    ].copy()
-
-    # --------------------------------------------------------
-    # BAIRRO
-    # --------------------------------------------------------
-
-    if bairro != "Todos":
-        reg = reg[
-            reg["Bairro"]
-            .astype(str)
-            .str.strip()
-            == bairro
-        ]
-
-    # --------------------------------------------------------
-    # MATRÍCULA
-    # --------------------------------------------------------
-
-    if matricula != "Todas":
-        reg = reg[
-            reg["Matrícula"]
-            .astype(str)
-            .str.strip()
-            == matricula
-        ]
-
-    # --------------------------------------------------------
-    # GRAU DE IMPACTO
-    # --------------------------------------------------------
-
-    if grau_impacto != "Todos":
-        reg = reg[
-            reg["Grau de Impacto"]
-            .astype(str)
-            .str.strip()
-            == grau_impacto
-        ]
-
-    # --------------------------------------------------------
-    # RESOLVIDO
-    # --------------------------------------------------------
-
-    if resolvido != "Todos":
-        reg = reg[
-            reg["Resolvido"]
-            .astype(str)
-            .str.strip()
-            == resolvido
-        ]
-
-    # --------------------------------------------------------
-    # EXECUTADO
-    #
-    # O filtro considera os dois campos:
-    # Executado? e Executado?2
-    # --------------------------------------------------------
-
-    if executado != "Todos":
-        mask_exec = (
-            reg["Executado?"]
-            .astype(str)
-            .str.strip()
-            == executado
-        ) | (
-            reg["Executado?2"]
-            .astype(str)
-            .str.strip()
-            == executado
-        )
-
-        reg = reg[
-            mask_exec
-        ]
-
-    # --------------------------------------------------------
-    # BUSCA RÁPIDA
-    #
-    # Matrícula, endereço, bairro e O.S.
-    # --------------------------------------------------------
-
-    busca = texto(busca)
-
-    if busca:
-        termo = normalizar_texto(
-            busca
-        )
-
-        matriculas_busca_os = set()
-
-        if not hist.empty:
-            for _, linha in hist.iterrows():
-                if termo in normalizar_texto(
-                    linha["N. O.S"]
-                ):
-                    matriculas_busca_os.add(
-                        texto(linha["Matrícula"])
-                    )
-
-        def corresponde(linha):
-            campos = [
-                linha["Matrícula"],
-                linha["Endereço"],
-                linha["Bairro"],
-            ]
-
-            if any(
-                termo in normalizar_texto(campo)
-                for campo in campos
-            ):
-                return True
-
-            if texto(
-                linha["Matrícula"]
-            ) in matriculas_busca_os:
-                return True
-
-            return False
-
-        reg = reg[
-            reg.apply(
-                corresponde,
-                axis=1,
-            )
-        ]
-
-    matriculas_finais = set(
-        reg["Matrícula"]
-        .astype(str)
-        .str.strip()
-    )
-
-    hist = hist[
-        hist["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .isin(matriculas_finais)
-    ].copy()
-
-    return (
-        reg,
-        hist,
-    )
-
-
-# ============================================================
-# RESUMO PARA LISTA
-# ============================================================
-
-def criar_resumo_lista(
-    df_registro,
-    df_historico,
 ):
     if df_registro.empty:
-        return pd.DataFrame()
+        return df_registro.copy()
 
-    linhas = []
+    return df_registro[
+        df_registro["Matrícula"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        ==
+        normalizar_texto(matricula)
+        .upper()
+    ].copy()
 
-    for _, registro in df_registro.iterrows():
 
-        matricula = texto(
-            registro["Matrícula"]
-        )
+def matricula_possui_registro(
+    df_registro,
+    matricula,
+    ignorar_id=None,
+):
+    if df_registro.empty:
+        return False
 
-        hist = historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-
-        ultima_data = (
-            hist["_DataObj"].max()
-            if not hist.empty
-            else pd.NaT
-        )
-
-        linhas.append(
-            {
-                "ID": texto(
-                    registro["ID"]
-                ),
-                "Matrícula": matricula,
-                "Endereço": texto(
-                    registro["Endereço"]
-                ),
-                "Bairro": texto(
-                    registro["Bairro"]
-                ),
-                "Grau de Impacto": texto(
-                    registro["Grau de Impacto"]
-                ),
-                "Resolvido": texto(
-                    registro["Resolvido"]
-                ),
-                "Qtd. O.S.": len(hist),
-                "Última O.S.": ultima_data,
-            }
-        )
-
-    df = pd.DataFrame(linhas)
-
-    if df.empty:
-        return df
-
-    df = df.sort_values(
-        by=[
-            "Qtd. O.S.",
-            "Última O.S.",
-            "Matrícula",
-        ],
-        ascending=[
-            False,
-            False,
-            True,
-        ],
-        na_position="last",
+    mascara = (
+        df_registro["Matrícula"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        ==
+        normalizar_texto(matricula).upper()
     )
 
-    return df
+    if ignorar_id is not None:
+        mascara &= (
+            df_registro["ID"].astype(str)
+            != str(ignorar_id)
+        )
+
+    return mascara.any()
+
+
+# ============================================================
+# VALIDAÇÃO DE O.S.
+# ============================================================
+
+def validar_os(numero_os):
+    numero_os = normalizar_texto(
+        numero_os
+    )
+
+    if not numero_os:
+        return False
+
+    return bool(
+        OS_PATTERN.fullmatch(numero_os)
+    )
+
+
+def os_duplicada(
+    df_historico,
+    matricula,
+    numero_os,
+    ignorar_id=None,
+):
+    if df_historico.empty:
+        return False
+
+    mascara = (
+        df_historico["Matrícula"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        ==
+        normalizar_texto(matricula).upper()
+    ) & (
+        df_historico["N. O.S"]
+        .astype(str)
+        .str.strip()
+        ==
+        normalizar_texto(numero_os)
+    )
+
+    if ignorar_id is not None:
+        mascara &= (
+            df_historico["ID"].astype(str)
+            != str(ignorar_id)
+        )
+
+    return mascara.any()
 
 
 # ============================================================
@@ -1060,7 +731,7 @@ def criar_resumo_lista(
 def gerar_excel(
     df_registro,
     df_historico,
-    nome_resumo="Registro",
+    incluir_registro=True,
 ):
     buffer = io.BytesIO()
 
@@ -1069,34 +740,27 @@ def gerar_excel(
         engine="openpyxl",
     ) as writer:
 
-        registro = df_registro.copy()
-        historico = df_historico.copy()
-
-        if "_DataObj" in historico.columns:
-            historico = historico.drop(
-                columns=["_DataObj"]
+        if incluir_registro:
+            df_registro.to_excel(
+                writer,
+                sheet_name="Registro",
+                index=False,
             )
 
-        registro.to_excel(
+        df_historico.to_excel(
             writer,
-            index=False,
-            sheet_name=nome_resumo,
-        )
-
-        historico.to_excel(
-            writer,
-            index=False,
             sheet_name="Historico",
+            index=False,
         )
 
     buffer.seek(0)
 
-    return buffer.getvalue()
+    return buffer
 
 
 def gerar_excel_cliente(
-    registro,
-    historico,
+    registro_cliente,
+    historico_cliente,
 ):
     buffer = io.BytesIO()
 
@@ -1105,2612 +769,421 @@ def gerar_excel_cliente(
         engine="openpyxl",
     ) as writer:
 
-        resumo = pd.DataFrame(
-            [
-                {
-                    "ID": texto(
-                        registro["ID"]
-                    ),
-                    "Matrícula": texto(
-                        registro["Matrícula"]
-                    ),
-                    "Endereço": texto(
-                        registro["Endereço"]
-                    ),
-                    "Bairro": texto(
-                        registro["Bairro"]
-                    ),
-                    "Latitude": registro["Latitude"],
-                    "Longitude": registro["Longitude"],
-                    "Parecer": texto(
-                        registro["Parecer"]
-                    ),
-                    "Mapeamento executado? (link)": texto(
-                        registro[
-                            "Mapeamento executado? (link)"
-                        ]
-                    ),
-                    "Tratativa 1": texto(
-                        registro["Tratativa 1"]
-                    ),
-                    "Executado?": texto(
-                        registro["Executado?"]
-                    ),
-                    "Retorno": texto(
-                        registro["Retorno"]
-                    ),
-                    "Tratativa 02": texto(
-                        registro["Tratativa 02"]
-                    ),
-                    "Executado?2": texto(
-                        registro["Executado?2"]
-                    ),
-                    "Retorno 02": texto(
-                        registro["Retorno 02"]
-                    ),
-                    "Grau de Impacto": texto(
-                        registro["Grau de Impacto"]
-                    ),
-                    "Resolvido": texto(
-                        registro["Resolvido"]
-                    ),
-                }
-            ]
-        )
-
-        hist_export = historico.copy()
-
-        if "_DataObj" in hist_export.columns:
-            hist_export = hist_export.drop(
-                columns=["_DataObj"]
-            )
-
-        resumo.to_excel(
+        registro_cliente.to_excel(
             writer,
-            index=False,
             sheet_name="Resumo",
+            index=False,
         )
 
-        hist_export.to_excel(
+        historico_cliente.to_excel(
             writer,
-            index=False,
             sheet_name="Histórico",
+            index=False,
         )
 
     buffer.seek(0)
 
-    return buffer.getvalue()
+    return buffer
 
 
 # ============================================================
-# MAPA
+# FILTROS
 # ============================================================
 
-def criar_mapa(
+def aplicar_filtros(
     df_registro,
     df_historico,
-    tipo_mapa,
 ):
-    mapa = folium.Map(
-        location=[
-            LAT_BASE,
-            LON_BASE,
-        ],
-        zoom_start=12,
-        control_scale=True,
-    )
+    registro = df_registro.copy()
+    historico = df_historico.copy()
 
-    if tipo_mapa == "🛰️ Satélite":
-        folium.TileLayer(
-            tiles=(
-                "https://server.arcgisonline.com/"
-                "ArcGIS/rest/services/"
-                "World_Imagery/"
-                "MapServer/tile/{z}/{y}/{x}"
-            ),
-            attr="Esri",
-            name="Satélite",
-        ).add_to(mapa)
-
-    elif tipo_mapa == "⛰️ Terreno":
-        folium.TileLayer(
-            tiles=(
-                "https://{s}.tile.opentopomap.org/"
-                "{z}/{x}/{y}.png"
-            ),
-            attr="OpenTopoMap",
-            name="Terreno",
-        ).add_to(mapa)
-
-    else:
-        folium.TileLayer(
-            tiles=(
-                "https://{s}.tile.openstreetmap.org/"
-                "{z}/{x}/{y}.png"
-            ),
-            attr="OpenStreetMap",
-            name="Mapa",
-        ).add_to(mapa)
-
-    if df_registro.empty:
-        folium.LayerControl().add_to(
-            mapa
-        )
-
-        return mapa
-
-    pontos = []
-
-    for _, registro in df_registro.iterrows():
-
-        lat = valor_float(
-            registro["Latitude"]
-        )
-
-        lon = valor_float(
-            registro["Longitude"]
-        )
-
-        if not coordenada_valida(
-            lat,
-            lon,
-        ):
-            continue
-
-        matricula = texto(
-            registro["Matrícula"]
-        )
-
-        hist = historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-
-        qtd = len(hist)
-
-        ultima = (
-            hist["_DataObj"].max()
-            if not hist.empty
-            else pd.NaT
-        )
-
-        ultima_formatada = (
-            ultima.strftime(
-                "%d/%m/%Y %H:%M"
-            )
-            if not pd.isna(ultima)
-            else "Sem registro"
-        )
-
-        resolvido = texto(
-            registro["Resolvido"]
-        )
-
-        resolvido_normalizado = normalizar_texto(
-            resolvido
-        )
-
-        if resolvido_normalizado == "SIM":
-            cor = "green"
-        elif resolvido_normalizado == "NAO":
-            cor = "red"
-        else:
-            cor = "blue"
-
-        link_mapeamento = texto(
-            registro[
-                "Mapeamento executado? (link)"
-            ]
-        )
-
-        link_html = ""
-
-        if link_mapeamento:
-            link_seguro = html.escape(
-                link_mapeamento,
-                quote=True,
-            )
-
-            link_html = (
-                f'<br><a href="{link_seguro}" '
-                'target="_blank">Abrir mapeamento</a>'
-            )
-
-        popup_html = f"""
-        <div style="font-family:Arial; font-size:13px; width:280px;">
-            <h4 style="margin-bottom:8px;">
-                🛠️ {html.escape(matricula)}
-            </h4>
-
-            <b>Endereço:</b>
-            {html.escape(texto(registro["Endereço"]))}<br>
-
-            <b>Bairro:</b>
-            {html.escape(texto(registro["Bairro"]))}<br>
-
-            <b>Grau de Impacto:</b>
-            {html.escape(texto(registro["Grau de Impacto"]))}<br>
-
-            <b>Resolvido:</b>
-            {html.escape(resolvido)}<br>
-
-            <b>Quantidade de O.S.:</b>
-            {qtd}<br>
-
-            <b>O.S. mais recente:</b>
-            {ultima_formatada}<br>
-
-            <hr>
-
-            <b>Parecer:</b><br>
-            {html.escape(texto(registro["Parecer"]))}
-
-            {link_html}
-
-            <br><br>
-
-            <b>Tratativa 1:</b><br>
-            {html.escape(texto(registro["Tratativa 1"]))}
-
-            <br><br>
-
-            <b>Tratativa 02:</b><br>
-            {html.escape(texto(registro["Tratativa 02"]))}
-        </div>
-        """
-
-        popup = folium.Popup(
-            popup_html,
-            max_width=350,
-        )
-
-        tooltip = (
-            f"{matricula} | "
-            f"{texto(registro['Bairro'])}"
-        )
-
-        folium.Marker(
-            location=[
-                lat,
-                lon,
-            ],
-            tooltip=tooltip,
-            popup=popup,
-            icon=folium.Icon(
-                color=cor,
-                icon="wrench",
-                prefix="fa",
-            ),
-        ).add_to(mapa)
-
-        pontos.append(
-            (
-                lat,
-                lon,
-            )
-        )
-
-    if pontos:
-        lat_media = sum(
-            ponto[0]
-            for ponto in pontos
-        ) / len(pontos)
-
-        lon_media = sum(
-            ponto[1]
-            for ponto in pontos
-        ) / len(pontos)
-
-        mapa.location = [
-            lat_media,
-            lon_media,
-        ]
-
-        if len(pontos) == 1:
-            mapa.zoom_start = 14
-        elif len(pontos) > 1:
-            mapa.fit_bounds(
-                pontos,
-                padding=(
-                    20,
-                    20,
-                ),
-            )
-
-    folium.LayerControl().add_to(
-        mapa
-    )
-
-    return mapa
-
-
-# ============================================================
-# SALVAR NOVO REGISTRO
-# ============================================================
-
-def salvar_novo_registro(
-    ws_registro,
-    ws_historico,
-    dados_registro,
-    dados_os=None,
-):
-    matricula = texto(
-        dados_registro["Matrícula"]
-    )
-
-    if not matricula:
-        return False, "Informe a matrícula."
-
-    if not coordenada_valida(
-        dados_registro["Latitude"],
-        dados_registro["Longitude"],
-    ):
-        return (
-            False,
-            "Latitude e Longitude são obrigatórias e devem ser válidas.",
-        )
-
-    # Verifica matrícula já cadastrada.
-    try:
-        valores = ws_registro.get_all_values()
-
-        if valores:
-            cabecalho = valores[0]
-
-            if "Matrícula" in cabecalho:
-                indice = cabecalho.index(
-                    "Matrícula"
-                )
-
-                for linha in valores[1:]:
-                    if len(linha) > indice:
-                        if texto(
-                            linha[indice]
-                        ) == matricula:
-                            return (
-                                False,
-                                "Esta matrícula já possui cadastro.",
-                            )
-
-    except Exception as erro:
-        return (
-            False,
-            f"Erro ao verificar matrícula: {erro}",
-        )
-
-    # Se não existe histórico para a matrícula,
-    # uma O.S. inicial é obrigatória.
-    if dados_os is None:
-        return (
-            False,
-            "A matrícula precisa possuir pelo menos uma O.S.",
-        )
-
-    numero_os = texto(
-        dados_os["N. O.S"]
-    )
-
-    if not validar_os(
-        numero_os
-    ):
-        return (
-            False,
-            "N. O.S inválida. Use o padrão 12345/2026-1.",
-        )
-
-    data_abertura = (
-        dados_os["Data de Abertura"]
-    )
-
-    if not data_abertura:
-        return (
-            False,
-            "Informe a Data de Abertura da O.S.",
-        )
-
-    # Evita O.S. duplicada.
-    try:
-        valores_hist = ws_historico.get_all_values()
-
-        if valores_hist:
-            cab_hist = valores_hist[0]
-
-            idx_mat = cab_hist.index(
-                "Matrícula"
-            )
-
-            idx_os = cab_hist.index(
-                "N. O.S"
-            )
-
-            for linha in valores_hist[1:]:
-                if (
-                    len(linha) > idx_os
-                    and texto(linha[idx_mat])
-                    == matricula
-                    and texto(linha[idx_os])
-                    == numero_os
-                ):
-                    return (
-                        False,
-                        "Esta O.S. já está cadastrada para esta matrícula.",
-                    )
-
-    except Exception:
-        pass
-
-    id_registro = gerar_id()
-
-    linha_registro = [
-        id_registro,
-        matricula,
-        texto(dados_registro["Endereço"]),
-        texto(dados_registro["Bairro"]),
-        valor_float(dados_registro["Latitude"]),
-        valor_float(dados_registro["Longitude"]),
-        texto(dados_registro["Parecer"]),
-        texto(
-            dados_registro[
-                "Mapeamento executado? (link)"
-            ]
-        ),
-        texto(dados_registro["Tratativa 1"]),
-        texto(dados_registro["Executado?"]),
-        texto(dados_registro["Retorno"]),
-        texto(dados_registro["Tratativa 02"]),
-        texto(dados_registro["Executado?2"]),
-        texto(dados_registro["Retorno 02"]),
-        texto(dados_registro["Grau de Impacto"]),
-        texto(dados_registro["Resolvido"]),
-    ]
-
-    adicionar_linha(
-        ws_registro,
-        linha_registro,
-    )
-
-    linha_os = [
-        gerar_id(),
-        matricula,
-        numero_os,
-        formatar_data_hora(
-            data_abertura
-        ),
-        valor_float(
-            dados_os["Pressão"]
-        ),
-        texto(
-            dados_os["Pontual"]
-        ),
-    ]
-
-    adicionar_linha(
-        ws_historico,
-        linha_os,
-    )
-
-    return (
-        True,
-        "Registro cadastrado com sucesso.",
-    )
-
-
-# ============================================================
-# ATUALIZAR REGISTRO
-# ============================================================
-
-def atualizar_registro(
-    ws_registro,
-    ws_historico,
-    registro_id,
-    dados,
-):
-    linha = encontrar_linha_por_id(
-        ws_registro,
-        registro_id,
-    )
-
-    if linha is None:
-        return (
-            False,
-            "Registro não encontrado.",
-        )
-
-    nova_matricula = texto(
-        dados["Matrícula"]
-    )
-
-    if not nova_matricula:
-        return (
-            False,
-            "Informe a matrícula.",
-        )
-
-    if not coordenada_valida(
-        dados["Latitude"],
-        dados["Longitude"],
-    ):
-        return (
-            False,
-            "Latitude e Longitude são obrigatórias e válidas.",
-        )
-
-    # Matrícula atual
-    valores = ws_registro.get_all_values()
-
-    cabecalho = valores[0]
-
-    indice_id = cabecalho.index("ID")
-    indice_matricula = cabecalho.index(
-        "Matrícula"
-    )
-
-    matricula_antiga = ""
-
-    for registro in valores[1:]:
-        if len(registro) > indice_id:
-            if texto(
-                registro[indice_id]
-            ) == texto(registro_id):
-
-                if len(registro) > indice_matricula:
-                    matricula_antiga = texto(
-                        registro[indice_matricula]
-                    )
-
-                break
-
-    # Impede colisão com outra matrícula.
-    if nova_matricula != matricula_antiga:
-        for registro in valores[1:]:
-            if len(registro) > indice_id:
-                if (
-                    texto(registro[indice_matricula])
-                    == nova_matricula
-                    and texto(registro[indice_id])
-                    != texto(registro_id)
-                ):
-                    return (
-                        False,
-                        "A nova matrícula já possui outro cadastro.",
-                    )
-
-    linha_registro = [
-        texto(registro_id),
-        nova_matricula,
-        texto(dados["Endereço"]),
-        texto(dados["Bairro"]),
-        valor_float(dados["Latitude"]),
-        valor_float(dados["Longitude"]),
-        texto(dados["Parecer"]),
-        texto(
-            dados[
-                "Mapeamento executado? (link)"
-            ]
-        ),
-        texto(dados["Tratativa 1"]),
-        texto(dados["Executado?"]),
-        texto(dados["Retorno"]),
-        texto(dados["Tratativa 02"]),
-        texto(dados["Executado?2"]),
-        texto(dados["Retorno 02"]),
-        texto(dados["Grau de Impacto"]),
-        texto(dados["Resolvido"]),
-    ]
-
-    atualizar_linha(
-        ws_registro,
-        linha,
-        linha_registro,
-    )
-
-    # Se a matrícula foi alterada, mantém o histórico vinculado.
-    if (
-        matricula_antiga
-        and nova_matricula != matricula_antiga
-    ):
-        valores_hist = ws_historico.get_all_values()
-
-        if valores_hist:
-            cab_hist = valores_hist[0]
-
-            idx_mat = cab_hist.index(
-                "Matrícula"
-            )
-
-            for numero_linha, registro_hist in enumerate(
-                valores_hist[1:],
-                start=2,
-            ):
-                if len(registro_hist) > idx_mat:
-                    if texto(
-                        registro_hist[idx_mat]
-                    ) == matricula_antiga:
-
-                        ws_historico.update(
-                            f"B{numero_linha}",
-                            [[nova_matricula]],
-                            value_input_option="USER_ENTERED",
-                        )
-
-    return (
-        True,
-        "Registro atualizado com sucesso.",
-    )
-
-
-# ============================================================
-# EXCLUIR REGISTRO
-# ============================================================
-
-def excluir_registro(
-    ws_registro,
-    registro_id,
-):
-    linha = encontrar_linha_por_id(
-        ws_registro,
-        registro_id,
-    )
-
-    if linha is None:
-        return (
-            False,
-            "Registro não encontrado.",
-        )
-
-    excluir_linha(
-        ws_registro,
-        linha,
-    )
-
-    # IMPORTANTE:
-    # O histórico NÃO é excluído.
-    return (
-        True,
-        "Cadastro excluído. O histórico foi preservado.",
-    )
-
-
-# ============================================================
-# O.S. — ADICIONAR
-# ============================================================
-
-def adicionar_os(
-    ws_historico,
-    matricula,
-    numero_os,
-    data_abertura,
-    pressao,
-    pontual,
-):
-    matricula = texto(
-        matricula
-    )
-
-    numero_os = texto(
-        numero_os
-    )
-
-    if not matricula:
-        return (
-            False,
-            "Matrícula não informada.",
-        )
-
-    if not validar_os(
-        numero_os
-    ):
-        return (
-            False,
-            "N. O.S inválida. Use o padrão 12345/2026-1.",
-        )
-
-    if not data_abertura:
-        return (
-            False,
-            "Informe a Data de Abertura.",
-        )
-
-    if texto(pontual) not in [
-        "SIM",
-        "NÃO",
-    ]:
-        return (
-            False,
-            "Informe se a O.S. é pontual.",
-        )
-
-    # Verifica duplicidade por matrícula + O.S.
-    valores = ws_historico.get_all_values()
-
-    if valores:
-        cabecalho = valores[0]
-
-        idx_mat = cabecalho.index(
-            "Matrícula"
-        )
-
-        idx_os = cabecalho.index(
-            "N. O.S"
-        )
-
-        for registro in valores[1:]:
-            if (
-                len(registro) > idx_os
-                and texto(registro[idx_mat])
-                == matricula
-                and texto(registro[idx_os])
-                == numero_os
-            ):
-                return (
-                    False,
-                    "Esta O.S. já existe para esta matrícula.",
-                )
-
-    linha = [
-        gerar_id(),
-        matricula,
-        numero_os,
-        formatar_data_hora(
-            data_abertura
-        ),
-        valor_float(pressao),
-        texto(pontual),
-    ]
-
-    adicionar_linha(
-        ws_historico,
-        linha,
-    )
-
-    return (
-        True,
-        "O.S. adicionada com sucesso.",
-    )
-
-
-# ============================================================
-# O.S. — ATUALIZAR
-# ============================================================
-
-def atualizar_os(
-    ws_historico,
-    os_id,
-    matricula,
-    numero_os,
-    data_abertura,
-    pressao,
-    pontual,
-):
-    linha = encontrar_linha_por_id(
-        ws_historico,
-        os_id,
-    )
-
-    if linha is None:
-        return (
-            False,
-            "O.S. não encontrada.",
-        )
-
-    if not validar_os(
-        numero_os
-    ):
-        return (
-            False,
-            "N. O.S inválida. Use o padrão 12345/2026-1.",
-        )
-
-    if not data_abertura:
-        return (
-            False,
-            "Informe a Data de Abertura.",
-        )
-
-    if pontual not in [
-        "SIM",
-        "NÃO",
-    ]:
-        return (
-            False,
-            "Informe se a O.S. é pontual.",
-        )
-
-    valores = ws_historico.get_all_values()
-
-    cabecalho = valores[0]
-
-    idx_id = cabecalho.index("ID")
-    idx_mat = cabecalho.index(
-        "Matrícula"
-    )
-    idx_os = cabecalho.index(
-        "N. O.S"
-    )
-
-    # Não permite duplicar outra O.S.
-    for registro in valores[1:]:
-        if len(registro) <= idx_os:
-            continue
-
-        if (
-            texto(registro[idx_mat])
-            == texto(matricula)
-            and texto(registro[idx_os])
-            == texto(numero_os)
-            and texto(registro[idx_id])
-            != texto(os_id)
-        ):
-            return (
-                False,
-                "Já existe outra O.S. com esse número para esta matrícula.",
-            )
-
-    dados = [
-        texto(os_id),
-        texto(matricula),
-        texto(numero_os),
-        formatar_data_hora(
-            data_abertura
-        ),
-        valor_float(pressao),
-        texto(pontual),
-    ]
-
-    atualizar_linha(
-        ws_historico,
-        linha,
-        dados,
-    )
-
-    return (
-        True,
-        "O.S. atualizada com sucesso.",
-    )
-
-
-# ============================================================
-# O.S. — EXCLUIR
-# ============================================================
-
-def excluir_os(
-    ws_historico,
-    os_id,
-    matricula,
-):
-    valores = ws_historico.get_all_values()
-
-    if not valores:
-        return (
-            False,
-            "Histórico não encontrado.",
-        )
-
-    cabecalho = valores[0]
-
-    idx_id = cabecalho.index(
-        "ID"
-    )
-
-    idx_mat = cabecalho.index(
-        "Matrícula"
-    )
-
-    indices_matricula = []
-
-    linha_encontrada = None
-
-    for numero_linha, registro in enumerate(
-        valores[1:],
-        start=2,
-    ):
-        if len(registro) <= idx_mat:
-            continue
-
-        if texto(
-            registro[idx_mat]
-        ) == texto(matricula):
-
-            indices_matricula.append(
-                numero_linha
-            )
-
-        if len(registro) > idx_id:
-            if texto(
-                registro[idx_id]
-            ) == texto(os_id):
-
-                linha_encontrada = (
-                    numero_linha
-                )
-
-    if linha_encontrada is None:
-        return (
-            False,
-            "O.S. não encontrada.",
-        )
-
-    # Não deixa a matrícula ficar sem O.S.
-    if len(indices_matricula) <= 1:
-        return (
-            False,
-            "Não é possível excluir a única O.S. da matrícula. "
-            "Exclua o cadastro da matrícula se necessário.",
-        )
-
-    excluir_linha(
-        ws_historico,
-        linha_encontrada,
-    )
-
-    return (
-        True,
-        "O.S. excluída com sucesso.",
-    )
-
-
-# ============================================================
-# DIÁLOGO — NOVO REGISTRO
-# ============================================================
-
-@st.dialog(
-    "＋ Adicionar Registro",
-    width="large",
-)
-def dialogo_novo_registro(
-    ws_registro,
-    ws_historico,
-    df_historico,
-):
-
-    st.markdown(
-        "### Identificação da matrícula"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        matricula = st.text_input(
-            "Matrícula *",
-            key="novo_matricula",
-        )
-
-    with col2:
-        bairro = st.text_input(
-            "Bairro",
-            key="novo_bairro",
-        )
-
-    endereco = st.text_input(
-        "Endereço",
-        key="novo_endereco",
-    )
-
-    st.markdown(
-        "### 📍 Localização"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        latitude = st.text_input(
-            "Latitude *",
-            placeholder="-5.089200",
-            key="novo_latitude",
-        )
-
-    with col2:
-        longitude = st.text_input(
-            "Longitude *",
-            placeholder="-42.801900",
-            key="novo_longitude",
-        )
-
-    st.markdown(
-        "### 🛠️ Mapeamento da melhoria"
-    )
-
-    parecer = st.text_area(
-        "Parecer",
-        key="novo_parecer",
-        height=90,
-    )
-
-    link_mapeamento = st.text_input(
-        "Mapeamento executado? (link)",
-        placeholder="https://...",
-        key="novo_link_mapeamento",
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        grau_impacto = st.text_input(
-            "Grau de Impacto",
-            key="novo_grau_impacto",
-        )
-
-    with col2:
-        resolvido = st.text_input(
-            "Resolvido",
-            key="novo_resolvido",
-        )
-
-    st.markdown(
-        "### 🔧 Tratativa 1"
-    )
-
-    tratativa1 = st.text_area(
-        "Tratativa 1",
-        key="novo_tratativa1",
-        height=80,
-    )
-
-    executado1 = st.text_input(
-        "Executado?",
-        key="novo_executado1",
-    )
-
-    retorno1 = st.text_area(
-        "Retorno",
-        key="novo_retorno1",
-        height=80,
-    )
-
-    st.markdown(
-        "### 🔧 Tratativa 2"
-    )
-
-    tratativa2 = st.text_area(
-        "Tratativa 02",
-        key="novo_tratativa2",
-        height=80,
-    )
-
-    executado2 = st.text_input(
-        "Executado?2",
-        key="novo_executado2",
-    )
-
-    retorno2 = st.text_area(
-        "Retorno 02",
-        key="novo_retorno2",
-        height=80,
-    )
-
-    st.divider()
-
-    st.markdown(
-        "### 📋 O.S. inicial"
-    )
-
-    historico_existente = historico_da_matricula(
-        df_historico,
-        matricula,
-    )
-
-    if historico_existente.empty:
-
-        st.info(
-            "A matrícula precisa possuir pelo menos uma O.S. "
-            "para ser cadastrada."
-        )
-
-        os_numero = st.text_input(
-            "N. O.S *",
-            placeholder="12345/2026-1",
-            key="novo_os",
-        )
-
-        data_os = st.datetime_input(
-            "Data de Abertura *",
-            value=datetime.now(),
-            key="novo_data_os",
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            pressao_os = st.number_input(
-                "Pressão (MCA)",
-                min_value=0.0,
-                step=0.1,
-                format="%.2f",
-                key="novo_pressao_os",
-            )
-
-        with col2:
-            pontual_os = st.selectbox(
-                "Pontual",
-                ["SIM", "NÃO"],
-                key="novo_pontual_os",
-            )
-
-        dados_os = {
-            "N. O.S": os_numero,
-            "Data de Abertura": data_os,
-            "Pressão": pressao_os,
-            "Pontual": pontual_os,
-        }
-
-    else:
-        st.success(
-            "Esta matrícula já possui O.S. no histórico."
-        )
-
-        adicionar_nova_os = st.checkbox(
-            "Adicionar uma nova O.S. neste cadastro",
-            key="novo_adicionar_os_existente",
-        )
-
-        dados_os = None
-
-        if adicionar_nova_os:
-
-            os_numero = st.text_input(
-                "N. O.S",
-                placeholder="12345/2026-1",
-                key="novo_os_existente",
-            )
-
-            data_os = st.datetime_input(
-                "Data de Abertura",
-                value=datetime.now(),
-                key="novo_data_os_existente",
-            )
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                pressao_os = st.number_input(
-                    "Pressão (MCA)",
-                    min_value=0.0,
-                    step=0.1,
-                    format="%.2f",
-                    key="novo_pressao_os_existente",
-                )
-
-            with col2:
-                pontual_os = st.selectbox(
-                    "Pontual",
-                    ["SIM", "NÃO"],
-                    key="novo_pontual_os_existente",
-                )
-
-            dados_os = {
-                "N. O.S": os_numero,
-                "Data de Abertura": data_os,
-                "Pressão": pressao_os,
-                "Pontual": pontual_os,
-            }
-
-    st.divider()
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        cancelar = st.button(
-            "Cancelar",
-            use_container_width=True,
-        )
-
-    with col2:
-        salvar = st.button(
-            "Salvar Registro",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if cancelar:
-        st.session_state.dialogo_melhorias = None
-        st.rerun()
-
-    if salvar:
-
-        dados = {
-            "Matrícula": matricula,
-            "Endereço": endereco,
-            "Bairro": bairro,
-            "Latitude": latitude,
-            "Longitude": longitude,
-            "Parecer": parecer,
-            "Mapeamento executado? (link)": link_mapeamento,
-            "Tratativa 1": tratativa1,
-            "Executado?": executado1,
-            "Retorno": retorno1,
-            "Tratativa 02": tratativa2,
-            "Executado?2": executado2,
-            "Retorno 02": retorno2,
-            "Grau de Impacto": grau_impacto,
-            "Resolvido": resolvido,
-        }
-
-        # Se já existe histórico, não é obrigatório adicionar
-        # outra O.S.
-        if not historico_existente.empty:
-            if dados_os is None:
-                # cria apenas o cadastro
-                id_registro = gerar_id()
-
-                linha = [
-                    id_registro,
-                    matricula,
-                    endereco,
-                    bairro,
-                    valor_float(latitude),
-                    valor_float(longitude),
-                    parecer,
-                    link_mapeamento,
-                    tratativa1,
-                    executado1,
-                    retorno1,
-                    tratativa2,
-                    executado2,
-                    retorno2,
-                    grau_impacto,
-                    resolvido,
-                ]
-
-                # Verifica matrícula duplicada
-                df_atual = carregar_worksheet(
-                    ws_registro,
-                    REGISTRO_COLUNAS,
-                )
-
-                if (
-                    not df_atual.empty
-                    and matricula in
-                    df_atual["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .tolist()
-                ):
-                    st.error(
-                        "Esta matrícula já possui cadastro."
-                    )
-                    return
-
-                if not coordenada_valida(
-                    latitude,
-                    longitude,
-                ):
-                    st.error(
-                        "Latitude e Longitude são obrigatórias e válidas."
-                    )
-                    return
-
-                adicionar_linha(
-                    ws_registro,
-                    linha,
-                )
-
-                st.success(
-                    "Registro cadastrado com sucesso."
-                )
-
-                st.session_state.dialogo_melhorias = None
-                st.rerun()
-
-            else:
-                sucesso, mensagem = adicionar_os(
-                    ws_historico,
-                    matricula,
-                    dados_os["N. O.S"],
-                    dados_os["Data de Abertura"],
-                    dados_os["Pressão"],
-                    dados_os["Pontual"],
-                )
-
-                if not sucesso:
-                    st.error(mensagem)
-                    return
-
-                sucesso, mensagem = salvar_novo_registro(
-                    ws_registro,
-                    ws_historico,
-                    dados,
-                    None,
-                )
-
-                if not sucesso:
-                    st.error(mensagem)
-                    return
-
-        else:
-            sucesso, mensagem = salvar_novo_registro(
-                ws_registro,
-                ws_historico,
-                dados,
-                dados_os,
-            )
-
-            if not sucesso:
-                st.error(mensagem)
-                return
-
-        st.success(
-            "Registro cadastrado com sucesso."
-        )
-
-        st.session_state.dialogo_melhorias = None
-        st.rerun()
-
-
-# ============================================================
-# DIÁLOGO — EDITAR REGISTRO
-# ============================================================
-
-@st.dialog(
-    "✏️ Editar Registro",
-    width="large",
-)
-def dialogo_editar_registro(
-    ws_registro,
-    ws_historico,
-    df_registro,
-    registro_id,
-):
-
-    encontrados = df_registro[
-        df_registro["ID"]
-        .astype(str)
-        .str.strip()
-        == texto(registro_id)
-    ]
-
-    if encontrados.empty:
-        st.error(
-            "Registro não encontrado."
-        )
-        return
-
-    registro = encontrados.iloc[0]
-
-    with st.form(
-        f"form_editar_{registro_id}"
-    ):
-
-        st.markdown(
-            "### Identificação"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            matricula = st.text_input(
-                "Matrícula *",
-                value=texto(
-                    registro["Matrícula"]
-                ),
-            )
-
-        with col2:
-            bairro = st.text_input(
-                "Bairro",
-                value=texto(
-                    registro["Bairro"]
-                ),
-            )
-
-        endereco = st.text_input(
-            "Endereço",
-            value=texto(
-                registro["Endereço"]
-            ),
-        )
-
-        st.markdown(
-            "### 📍 Localização"
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            latitude = st.text_input(
-                "Latitude *",
-                value=texto(
-                    registro["Latitude"]
-                ),
-            )
-
-        with col2:
-            longitude = st.text_input(
-                "Longitude *",
-                value=texto(
-                    registro["Longitude"]
-                ),
-            )
-
-        st.markdown(
-            "### 🛠️ Mapeamento"
-        )
-
-        parecer = st.text_area(
-            "Parecer",
-            value=texto(
-                registro["Parecer"]
-            ),
-            height=90,
-        )
-
-        link_mapeamento = st.text_input(
-            "Mapeamento executado? (link)",
-            value=texto(
-                registro[
-                    "Mapeamento executado? (link)"
-                ]
-            ),
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            grau_impacto = st.text_input(
-                "Grau de Impacto",
-                value=texto(
-                    registro["Grau de Impacto"]
-                ),
-            )
-
-        with col2:
-            resolvido = st.text_input(
-                "Resolvido",
-                value=texto(
-                    registro["Resolvido"]
-                ),
-            )
-
-        st.markdown(
-            "### 🔧 Tratativa 1"
-        )
-
-        tratativa1 = st.text_area(
-            "Tratativa 1",
-            value=texto(
-                registro["Tratativa 1"]
-            ),
-            height=80,
-        )
-
-        executado1 = st.text_input(
-            "Executado?",
-            value=texto(
-                registro["Executado?"]
-            ),
-        )
-
-        retorno1 = st.text_area(
-            "Retorno",
-            value=texto(
-                registro["Retorno"]
-            ),
-            height=80,
-        )
-
-        st.markdown(
-            "### 🔧 Tratativa 2"
-        )
-
-        tratativa2 = st.text_area(
-            "Tratativa 02",
-            value=texto(
-                registro["Tratativa 02"]
-            ),
-            height=80,
-        )
-
-        executado2 = st.text_input(
-            "Executado?2",
-            value=texto(
-                registro["Executado?2"]
-            ),
-        )
-
-        retorno2 = st.text_area(
-            "Retorno 02",
-            value=texto(
-                registro["Retorno 02"]
-            ),
-            height=80,
-        )
-
-        st.divider()
-
-        salvar = st.form_submit_button(
-            "Salvar alterações",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if salvar:
-
-        dados = {
-            "Matrícula": matricula,
-            "Endereço": endereco,
-            "Bairro": bairro,
-            "Latitude": latitude,
-            "Longitude": longitude,
-            "Parecer": parecer,
-            "Mapeamento executado? (link)": link_mapeamento,
-            "Tratativa 1": tratativa1,
-            "Executado?": executado1,
-            "Retorno": retorno1,
-            "Tratativa 02": tratativa2,
-            "Executado?2": executado2,
-            "Retorno 02": retorno2,
-            "Grau de Impacto": grau_impacto,
-            "Resolvido": resolvido,
-        }
-
-        sucesso, mensagem = atualizar_registro(
-            ws_registro,
-            ws_historico,
-            registro_id,
-            dados,
-        )
-
-        if sucesso:
-            st.success(mensagem)
-            st.session_state.dialogo_melhorias = None
-            st.rerun()
-
-        else:
-            st.error(mensagem)
-
-
-# ============================================================
-# DIÁLOGO — MATRÍCULA
-# ============================================================
-
-@st.dialog(
-    "📋 Registro da Matrícula",
-    width="large",
-)
-def dialogo_matricula(
-    df_registro,
-    df_historico,
-    matricula,
-):
-
-    registros = df_registro[
-        df_registro["Matrícula"]
-        .astype(str)
-        .str.strip()
-        == texto(matricula)
-    ]
-
-    historico = historico_da_matricula(
-        df_historico,
-        matricula,
-    )
-
-    if registros.empty:
-        st.warning(
-            "O cadastro principal desta matrícula não existe mais."
-        )
-
-        if not historico.empty:
-            st.info(
-                "O histórico permanece armazenado."
-            )
-
-            st.dataframe(
-                historico[
-                    [
-                        "N. O.S",
-                        "Data de Abertura",
-                        "Pressão",
-                        "Pontual",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        return
-
-    registro = registros.iloc[0]
-
-    # --------------------------------------------------------
-    # RESUMO
-    # --------------------------------------------------------
-
-    st.markdown(
-        f"## Matrícula {texto(registro['Matrícula'])}"
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        st.metric(
-            "Quantidade de O.S.",
-            len(historico),
-        )
-
-    with col2:
-        ultima = ultima_os(
-            df_historico,
-            matricula,
-        )
-
-        st.metric(
-            "O.S. mais recente",
-            (
-                ultima.strftime(
-                    "%d/%m/%Y"
-                )
-                if not pd.isna(ultima)
-                else "—"
-            ),
-        )
-
-    with col3:
-        pressao = media_pressao(
-            df_historico,
-            matricula,
-        )
-
-        st.metric(
-            "Média de Pressão",
-            (
-                f"{pressao:.2f} MCA"
-                if pressao is not None
-                else "—"
-            ),
-        )
-
-    with col4:
-        tempo_medio = tempo_medio_reclamacao(
-            df_historico,
-            matricula,
-        )
-
-        st.metric(
-            "Tempo Médio",
-            (
-                f"{tempo_medio:.1f} dias"
-                if tempo_medio is not None
-                else "—"
-            ),
-        )
-
-    # --------------------------------------------------------
-    # DADOS DO REGISTRO
-    # --------------------------------------------------------
-
-    st.divider()
-
-    st.markdown(
-        "### 🛠️ Dados do registro"
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown(
-            f"**Endereço:** {texto(registro['Endereço'])}"
-        )
-
-        st.markdown(
-            f"**Bairro:** {texto(registro['Bairro'])}"
-        )
-
-        st.markdown(
-            f"**Latitude:** {texto(registro['Latitude'])}"
-        )
-
-        st.markdown(
-            f"**Longitude:** {texto(registro['Longitude'])}"
-        )
-
-        st.markdown(
-            f"**Grau de Impacto:** {texto(registro['Grau de Impacto'])}"
-        )
-
-        st.markdown(
-            f"**Resolvido:** {texto(registro['Resolvido'])}"
-        )
-
-    with col2:
-        st.markdown(
-            f"**Parecer:** {texto(registro['Parecer'])}"
-        )
-
-        link = texto(
-            registro[
-                "Mapeamento executado? (link)"
-            ]
-        )
-
-        if link:
-            st.markdown(
-                f"[🔗 Abrir mapeamento]({link})"
-            )
-
-    st.markdown(
-        f"**Tratativa 1:** {texto(registro['Tratativa 1'])}"
-    )
-
-    st.markdown(
-        f"**Executado?:** {texto(registro['Executado?'])}"
-    )
-
-    st.markdown(
-        f"**Retorno:** {texto(registro['Retorno'])}"
-    )
-
-    st.markdown(
-        f"**Tratativa 02:** {texto(registro['Tratativa 02'])}"
-    )
-
-    st.markdown(
-        f"**Executado?2:** {texto(registro['Executado?2'])}"
-    )
-
-    st.markdown(
-        f"**Retorno 02:** {texto(registro['Retorno 02'])}"
-    )
-
-    # --------------------------------------------------------
-    # BOTÕES
-    # --------------------------------------------------------
-
-    st.divider()
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button(
-            "＋ Adicionar Registro",
-            type="primary",
-            use_container_width=True,
-        ):
-            st.session_state.dialogo_melhorias = "nova_os"
-            st.session_state.dialogo_os_matricula = matricula
-            st.rerun()
-
-    with col2:
-        if st.button(
-            "✏️ Editar Registro",
-            use_container_width=True,
-        ):
-            st.session_state.dialogo_melhorias = "editar"
-            st.session_state.dialogo_id = texto(
-                registro["ID"]
-            )
-            st.rerun()
-
-    with col3:
-        if st.button(
-            "🗑️ Excluir Registro",
-            use_container_width=True,
-        ):
-            st.session_state.tipo_exclusao = "registro"
-            st.session_state.id_exclusao = texto(
-                registro["ID"]
-            )
-            st.session_state.matricula_exclusao = matricula
-            st.session_state.dialogo_melhorias = "confirmar_exclusao"
-            st.rerun()
-
-    # --------------------------------------------------------
-    # HISTÓRICO
-    # --------------------------------------------------------
-
-    st.divider()
-
-    st.markdown(
-        "### 📋 Histórico de O.S."
-    )
-
-    if historico.empty:
-        st.info(
-            "Nenhuma O.S. encontrada."
-        )
-
-    else:
-
-        historico = historico.sort_values(
-            "_DataObj",
-            ascending=False,
-        )
-
-        for _, os_registro in historico.iterrows():
-
-            os_id = texto(
-                os_registro["ID"]
-            )
-
-            with st.container(
-                border=True
-            ):
-
-                c1, c2, c3, c4, c5, c6 = st.columns(
-                    [
-                        1.5,
-                        1.8,
-                        1.2,
-                        1.2,
-                        0.7,
-                        0.7,
-                    ]
-                )
-
-                with c1:
-                    st.markdown(
-                        f"**O.S.**  \n"
-                        f"{texto(os_registro['N. O.S'])}"
-                    )
-
-                with c2:
-                    data_formatada = formatar_data_hora(
-                        os_registro[
-                            "Data de Abertura"
-                        ]
-                    )
-
-                    st.markdown(
-                        f"**Abertura**  \n"
-                        f"{data_formatada}"
-                    )
-
-                with c3:
-                    st.markdown(
-                        f"**Pressão**  \n"
-                        f"{formatar_float(os_registro['Pressão'])} MCA"
-                    )
-
-                with c4:
-                    st.markdown(
-                        f"**Pontual**  \n"
-                        f"{texto(os_registro['Pontual'])}"
-                    )
-
-                with c5:
-                    if st.button(
-                        "✏️",
-                        key=f"editar_os_{os_id}",
-                        help="Editar O.S.",
-                    ):
-                        st.session_state.dialogo_melhorias = "editar_os"
-                        st.session_state.dialogo_os_id = os_id
-                        st.session_state.dialogo_os_matricula = matricula
-                        st.rerun()
-
-                with c6:
-                    if st.button(
-                        "🗑️",
-                        key=f"excluir_os_{os_id}",
-                        help="Excluir O.S.",
-                    ):
-                        st.session_state.tipo_exclusao = "os"
-                        st.session_state.id_exclusao = os_id
-                        st.session_state.matricula_exclusao = matricula
-                        st.session_state.dialogo_melhorias = "confirmar_exclusao"
-                        st.rerun()
-
-    # --------------------------------------------------------
-    # DOWNLOAD
-    # --------------------------------------------------------
-
-    st.divider()
-
-    excel_cliente = gerar_excel_cliente(
-        registro,
-        historico,
-    )
-
-    st.download_button(
-        "⬇️ Baixar Registro do Cliente",
-        data=excel_cliente,
-        file_name=(
-            f"Mapeamento_Melhorias_"
-            f"{matricula}.xlsx"
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-    )
-
-
-# ============================================================
-# DIÁLOGO — NOVA O.S.
-# ============================================================
-
-@st.dialog(
-    "＋ Adicionar Registro",
-    width="medium",
-)
-def dialogo_nova_os(
-    ws_historico,
-    matricula,
-):
-
-    st.markdown(
-        f"### Matrícula: {texto(matricula)}"
-    )
-
-    st.caption(
-        "Cadastre uma nova O.S. no histórico desta matrícula."
-    )
-
-    with st.form(
-        "form_nova_os"
-    ):
-
-        numero_os = st.text_input(
-            "N. O.S *",
-            placeholder="12345/2026-1",
-        )
-
-        data_abertura = st.datetime_input(
-            "Data de Abertura *",
-            value=datetime.now(),
-        )
-
-        pressao = st.number_input(
-            "Pressão (MCA)",
-            min_value=0.0,
-            step=0.1,
-            format="%.2f",
-        )
-
-        pontual = st.selectbox(
-            "Pontual",
-            ["SIM", "NÃO"],
-        )
-
-        salvar = st.form_submit_button(
-            "Salvar O.S.",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if salvar:
-
-        sucesso, mensagem = adicionar_os(
-            ws_historico,
-            matricula,
-            numero_os,
-            data_abertura,
-            pressao,
-            pontual,
-        )
-
-        if sucesso:
-            st.success(mensagem)
-
-            st.session_state.dialogo_melhorias = "matricula"
-            st.session_state.dialogo_matricula = matricula
-
-            st.rerun()
-
-        else:
-            st.error(mensagem)
-
-
-# ============================================================
-# DIÁLOGO — EDITAR O.S.
-# ============================================================
-
-@st.dialog(
-    "✏️ Editar O.S.",
-    width="medium",
-)
-def dialogo_editar_os(
-    ws_historico,
-    df_historico,
-    os_id,
-    matricula,
-):
-
-    registros = df_historico[
-        df_historico["ID"]
-        .astype(str)
-        .str.strip()
-        == texto(os_id)
-    ]
-
-    if registros.empty:
-        st.error(
-            "O.S. não encontrada."
-        )
-        return
-
-    os_registro = registros.iloc[0]
-
-    data_inicial = converter_data_hora(
-        os_registro[
-            "Data de Abertura"
-        ]
-    )
-
-    if pd.isna(data_inicial):
-        data_inicial = datetime.now()
-
-    with st.form(
-        f"form_editar_os_{os_id}"
-    ):
-
-        numero_os = st.text_input(
-            "N. O.S *",
-            value=texto(
-                os_registro["N. O.S"]
-            ),
+    if not historico.empty:
+        historico["_data_abertura"] = pd.to_datetime(
+            historico["Data de Abertura"],
+            errors="coerce",
         )
-
-        data_abertura = st.datetime_input(
-            "Data de Abertura *",
-            value=data_inicial.to_pydatetime()
-            if hasattr(
-                data_inicial,
-                "to_pydatetime",
-            )
-            else data_inicial,
-        )
-
-        pressao = st.number_input(
-            "Pressão (MCA)",
-            min_value=0.0,
-            step=0.1,
-            format="%.2f",
-            value=(
-                valor_float(
-                    os_registro["Pressão"]
-                )
-                or 0.0
-            ),
-        )
-
-        pontual_atual = texto(
-            os_registro["Pontual"]
-        )
-
-        if pontual_atual not in [
-            "SIM",
-            "NÃO",
-        ]:
-            pontual_atual = "SIM"
-
-        pontual = st.selectbox(
-            "Pontual",
-            ["SIM", "NÃO"],
-            index=[
-                "SIM",
-                "NÃO",
-            ].index(
-                pontual_atual
-            ),
-        )
-
-        salvar = st.form_submit_button(
-            "Salvar alterações",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if salvar:
-
-        sucesso, mensagem = atualizar_os(
-            ws_historico,
-            os_id,
-            matricula,
-            numero_os,
-            data_abertura,
-            pressao,
-            pontual,
-        )
-
-        if sucesso:
-            st.success(mensagem)
-
-            st.session_state.dialogo_melhorias = "matricula"
-            st.session_state.dialogo_matricula = matricula
-
-            st.rerun()
-
-        else:
-            st.error(mensagem)
-
-
-# ============================================================
-# DIÁLOGO — CONFIRMAÇÃO DE EXCLUSÃO
-# ============================================================
-
-@st.dialog(
-    "⚠️ Confirmar exclusão",
-    width="small",
-)
-def dialogo_confirmar_exclusao(
-    ws_registro,
-    ws_historico,
-):
-
-    tipo = st.session_state.tipo_exclusao
-    identificador = st.session_state.id_exclusao
-    matricula = st.session_state.matricula_exclusao
-
-    if tipo == "registro":
-
-        st.warning(
-            "Você está prestes a excluir o cadastro principal "
-            f"da matrícula **{matricula}**."
-        )
-
-        st.info(
-            "O histórico de O.S. será preservado."
-        )
-
-    elif tipo == "os":
-
-        st.warning(
-            "Você está prestes a excluir a O.S. "
-            f"da matrícula **{matricula}**."
-        )
-
-        st.info(
-            "Esta ação não poderá ser desfeita."
-        )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        cancelar = st.button(
-            "Cancelar",
-            use_container_width=True,
-        )
-
-    with col2:
-        confirmar = st.button(
-            "Confirmar exclusão",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if cancelar:
-        st.session_state.dialogo_melhorias = (
-            "matricula"
-            if tipo == "os"
-            else None
-        )
-
-        if tipo == "os":
-            st.session_state.dialogo_matricula = matricula
-
-        st.rerun()
-
-    if confirmar:
-
-        if tipo == "registro":
-            sucesso, mensagem = excluir_registro(
-                ws_registro,
-                identificador,
-            )
-
-            if sucesso:
-                st.success(mensagem)
-
-                st.session_state.dialogo_melhorias = None
-                st.rerun()
-
-            else:
-                st.error(mensagem)
-
-        elif tipo == "os":
-
-            sucesso, mensagem = excluir_os(
-                ws_historico,
-                identificador,
-                matricula,
-            )
-
-            if sucesso:
-                st.success(mensagem)
-
-                st.session_state.dialogo_melhorias = "matricula"
-                st.session_state.dialogo_matricula = matricula
-
-                st.rerun()
-
-            else:
-                st.error(mensagem)
-
-
-# ============================================================
-# CONEXÃO E DADOS
-# ============================================================
-
-(
-    spreadsheet,
-    ws_registro,
-    ws_historico,
-) = obter_planilhas()
-
-
-(
-    df_registro,
-    df_historico,
-) = carregar_dados(
-    ws_registro,
-    ws_historico,
-)
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        "### 🛠️ COI - Mapeamento de Melhorias"
-    )
-
-    st.caption(
-        "Gestão de matrículas, O.S. e tratativas."
-    )
-
-    st.divider()
 
     # --------------------------------------------------------
     # DATA
     # --------------------------------------------------------
 
-    st.markdown(
-        "**📅 Período de O.S.**"
-    )
+    if not historico.empty:
 
-    data_minima, data_maxima = (
-        obter_periodo_padrao(
-            df_historico
-        )
-    )
-
-    data_inicial = st.date_input(
-        "Data Inicial",
-        value=data_minima,
-        key="filtro_data_inicial_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    data_final = st.date_input(
-        "Data Final",
-        value=data_maxima,
-        key="filtro_data_final_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    if data_inicial > data_final:
-        st.error(
-            "A Data Inicial não pode ser maior que a Data Final."
+        datas_validas = (
+            historico["_data_abertura"]
+            .dropna()
         )
 
-    st.divider()
+        if not datas_validas.empty:
+            data_min = datas_validas.min().date()
+            data_max = datas_validas.max().date()
+
+            filtro_data = st.sidebar.date_input(
+                "Data de Abertura",
+                value=(
+                    data_min,
+                    data_max,
+                ),
+                min_value=data_min,
+                max_value=data_max,
+            )
+
+            if (
+                isinstance(filtro_data, tuple)
+                and len(filtro_data) == 2
+            ):
+                data_inicio, data_fim = filtro_data
+
+                historico = historico[
+                    (
+                        historico["_data_abertura"]
+                        .dt.date
+                        >= data_inicio
+                    )
+                    &
+                    (
+                        historico["_data_abertura"]
+                        .dt.date
+                        <= data_fim
+                    )
+                ]
+
+                matriculas_data = set(
+                    historico["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                )
+
+                registro = registro[
+                    registro["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin(matriculas_data)
+                ]
 
     # --------------------------------------------------------
-    # FILTROS
+    # BAIRRO
     # --------------------------------------------------------
-
-    st.markdown(
-        "**🔎 Filtros**"
-    )
 
     bairros = sorted(
         [
-            texto(x)
-            for x in df_registro["Bairro"].dropna().unique()
-            if texto(x)
+            x
+            for x in registro["Bairro"]
+            .astype(str)
+            .str.strip()
+            .unique()
+            if x
         ]
-    ) if not df_registro.empty else []
+    )
+
+    bairros_selecionados = st.sidebar.multiselect(
+        "Bairro",
+        options=bairros,
+    )
+
+    if bairros_selecionados:
+        registro = registro[
+            registro["Bairro"]
+            .astype(str)
+            .str.strip()
+            .isin(bairros_selecionados)
+        ]
+
+    # --------------------------------------------------------
+    # MATRÍCULA
+    # --------------------------------------------------------
 
     matriculas = sorted(
         [
-            texto(x)
-            for x in df_registro["Matrícula"].dropna().unique()
-            if texto(x)
+            x
+            for x in registro["Matrícula"]
+            .astype(str)
+            .str.strip()
+            .unique()
+            if x
         ]
-    ) if not df_registro.empty else []
+    )
+
+    matriculas_selecionadas = st.sidebar.multiselect(
+        "Matrícula",
+        options=matriculas,
+    )
+
+    if matriculas_selecionadas:
+        registro = registro[
+            registro["Matrícula"]
+            .astype(str)
+            .str.strip()
+            .isin(matriculas_selecionadas)
+        ]
+
+    # --------------------------------------------------------
+    # GRAU DE IMPACTO
+    # --------------------------------------------------------
 
     impactos = sorted(
         [
-            texto(x)
-            for x in df_registro["Grau de Impacto"].dropna().unique()
-            if texto(x)
+            x
+            for x in registro["Grau de Impacto"]
+            .astype(str)
+            .str.strip()
+            .unique()
+            if x
         ]
-    ) if not df_registro.empty else []
+    )
+
+    impactos_selecionados = st.sidebar.multiselect(
+        "Grau de Impacto",
+        options=impactos,
+    )
+
+    if impactos_selecionados:
+        registro = registro[
+            registro["Grau de Impacto"]
+            .astype(str)
+            .str.strip()
+            .isin(impactos_selecionados)
+        ]
+
+    # --------------------------------------------------------
+    # RESOLVIDO
+    # --------------------------------------------------------
 
     resolvidos = sorted(
         [
-            texto(x)
-            for x in df_registro["Resolvido"].dropna().unique()
-            if texto(x)
+            x
+            for x in registro["Resolvido"]
+            .astype(str)
+            .str.strip()
+            .unique()
+            if x
         ]
-    ) if not df_registro.empty else []
+    )
+
+    resolvidos_selecionados = st.sidebar.multiselect(
+        "Resolvido",
+        options=resolvidos,
+    )
+
+    if resolvidos_selecionados:
+        registro = registro[
+            registro["Resolvido"]
+            .astype(str)
+            .str.strip()
+            .isin(resolvidos_selecionados)
+        ]
+
+    # --------------------------------------------------------
+    # EXECUTADO
+    # --------------------------------------------------------
+
+    executados_1 = set(
+        registro["Executado?"]
+        .astype(str)
+        .str.strip()
+        .unique()
+    )
 
     executados = sorted(
-        list(
-            {
-                texto(x)
-                for x in list(
-                    df_registro["Executado?"]
-                ) + list(
-                    df_registro["Executado?2"]
-                )
-                if texto(x)
-            }
-        )
-    ) if not df_registro.empty else []
-
-    bairro = st.selectbox(
-        "Bairro",
-        ["Todos"] + bairros,
-        key="filtro_bairro_mm",
-        on_change=limpar_filtros_paginacao,
+        [
+            x
+            for x in executados_1
+            if x
+        ]
     )
 
-    matricula = st.selectbox(
-        "Matrícula",
-        ["Todas"] + matriculas,
-        key="filtro_matricula_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    grau_impacto = st.selectbox(
-        "Grau de Impacto",
-        ["Todos"] + impactos,
-        key="filtro_impacto_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    resolvido = st.selectbox(
-        "Resolvido",
-        ["Todos"] + resolvidos,
-        key="filtro_resolvido_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    executado = st.selectbox(
+    executado_selecionado = st.sidebar.multiselect(
         "Executado",
-        ["Todos"] + executados,
-        key="filtro_executado_mm",
-        on_change=limpar_filtros_paginacao,
+        options=executados,
     )
 
-    busca = st.text_input(
-        "Busca rápida",
-        placeholder="Matrícula, endereço ou O.S.",
-        key="filtro_busca_mm",
-        on_change=limpar_filtros_paginacao,
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # AÇÕES
-    # --------------------------------------------------------
-
-    st.markdown(
-        "**⚙️ Ações**"
-    )
-
-    if st.button(
-        "＋ Adicionar Registro",
-        type="primary",
-        use_container_width=True,
-    ):
-        st.session_state.dialogo_melhorias = "novo"
-        st.rerun()
-
-    # --------------------------------------------------------
-    # EXPORTAÇÃO
-    # --------------------------------------------------------
-
-    st.markdown(
-        ""
-    )
-
-    # Os dados filtrados são calculados antes do botão,
-    # portanto o download respeita os filtros atuais.
-    (
-        df_registro_filtrado,
-        df_historico_filtrado,
-    ) = aplicar_filtros(
-        df_registro,
-        df_historico,
-        data_inicial,
-        data_final,
-        bairro,
-        matricula,
-        grau_impacto,
-        resolvido,
-        executado,
-        busca,
-    )
-
-    excel_filtrado = gerar_excel(
-        df_registro_filtrado,
-        df_historico_filtrado,
-        nome_resumo="Registro",
-    )
-
-    st.download_button(
-        "⬇️ Exportar filtrado",
-        data=excel_filtrado,
-        file_name=(
-            "Mapeamento_Melhorias_"
-            f"{date.today().strftime('%Y%m%d')}.xlsx"
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # NAVEGAÇÃO
-    # --------------------------------------------------------
-
-    if st.button(
-        "⬅️ Voltar ao Hub Central",
-        use_container_width=True,
-    ):
-        st.switch_page(
-            "app.py"
+    if executado_selecionado:
+        mascara_exec = (
+            registro["Executado?"]
+            .astype(str)
+            .str.strip()
+            .isin(executado_selecionado)
         )
 
-    st.divider()
+        registro = registro[
+            mascara_exec
+        ]
 
     # --------------------------------------------------------
-    # MODO ESCURO
+    # BUSCA RÁPIDA
     # --------------------------------------------------------
 
-    modo_escuro = st.toggle(
-        "🌙 Modo escuro",
-        value=st.session_state.modo_escuro_melhorias,
-        key="toggle_modo_escuro_melhorias",
+    busca = st.sidebar.text_input(
+        "🔎 Busca rápida",
+        placeholder="Matrícula, endereço ou O.S.",
     )
 
-    st.session_state.modo_escuro_melhorias = (
-        modo_escuro
-    )
+    if busca.strip():
+
+        termo = busca.strip().lower()
+
+        matriculas_busca = set(
+            registro[
+                registro["Matrícula"]
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    termo,
+                    na=False,
+                    regex=False,
+                )
+            ]["Matrícula"]
+            .astype(str)
+        )
+
+        enderecos_busca = set(
+            registro[
+                registro["Endereço"]
+                .astype(str)
+                .str.lower()
+                .str.contains(
+                    termo,
+                    na=False,
+                    regex=False,
+                )
+            ]["Matrícula"]
+            .astype(str)
+        )
+
+        os_busca = set()
+
+        if not historico.empty:
+            os_busca = set(
+                historico[
+                    historico["N. O.S"]
+                    .astype(str)
+                    .str.lower()
+                    .str.contains(
+                        termo,
+                        na=False,
+                        regex=False,
+                    )
+                ]["Matrícula"]
+                .astype(str)
+            )
+
+        matriculas_busca |= enderecos_busca
+        matriculas_busca |= os_busca
+
+        registro = registro[
+            registro["Matrícula"]
+            .astype(str)
+            .isin(matriculas_busca)
+        ]
+
+    # --------------------------------------------------------
+    # INTERSEÇÃO FINAL DO HISTÓRICO
+    # --------------------------------------------------------
+
+    if not registro.empty:
+        matriculas_finais = set(
+            registro["Matrícula"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
+
+        historico = historico[
+            historico["Matrícula"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .isin(matriculas_finais)
+        ]
+
+    if "_data_abertura" in historico.columns:
+        historico = historico.drop(
+            columns=["_data_abertura"]
+        )
+
+    return registro, historico
 
 
 # ============================================================
-# MODO ESCURO
+# ORDENAÇÃO DOS REGISTROS
 # ============================================================
 
-if st.session_state.modo_escuro_melhorias:
-
-    st.markdown(
-        """
-        <style>
-
-            .stApp {
-                background-color: #0e1117;
-                color: #fafafa;
-            }
-
-            .stApp p,
-            .stApp label,
-            .stApp h1,
-            .stApp h2,
-            .stApp h3,
-            .stApp h4,
-            .stApp h5,
-            .stApp h6 {
-                color: #f0f0f0 !important;
-            }
-
-            .stButton > button {
-                background-color: #000000 !important;
-                color: #ffffff !important;
-                border: 1px solid #444c56 !important;
-            }
-
-            .stButton > button:hover {
-                background-color: #000000 !important;
-                color: #ff0000 !important;
-                border-color: #ff0000 !important;
-            }
-
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ============================================================
-# VALIDAÇÃO DO PERÍODO
-# ============================================================
-
-if data_inicial > data_final:
-    st.stop()
-
-
-# ============================================================
-# FILTROS APLICADOS
-# ============================================================
-
-(
-    df_registro_filtrado,
-    df_historico_filtrado,
-) = aplicar_filtros(
+def ordenar_registros(
     df_registro,
     df_historico,
-    data_inicial,
-    data_final,
-    bairro,
-    matricula,
-    grau_impacto,
-    resolvido,
-    executado,
-    busca,
-)
-
-
-# ============================================================
-# TÍTULO
-# ============================================================
-
-st.title(
-    "🛠️ Mapeamento de Melhorias - COI"
-)
-
-st.caption(
-    "Gestão de matrículas, mapeamentos, tratativas e histórico de O.S."
-)
-
-st.caption(
-    f"Período considerado: "
-    f"{data_inicial.strftime('%d/%m/%Y')} "
-    f"a "
-    f"{data_final.strftime('%d/%m/%Y')}"
-)
-
-
-# ============================================================
-# KPIs
-# ============================================================
-
-resumo = criar_resumo_lista(
-    df_registro_filtrado,
-    df_historico_filtrado,
-)
-
-
-matricula_destaque = None
-qtd_destaque = 0
-
-if not df_historico_filtrado.empty:
+):
+    if df_registro.empty:
+        return df_registro.copy()
 
     contagem = (
-        df_historico_filtrado
+        df_historico
         .groupby("Matrícula")
         .size()
-        .reset_index(
-            name="QtdOS"
-        )
+        .rename("_qtd_os")
     )
 
-    contagem["UltimaOS"] = (
-        contagem["Matrícula"]
-        .apply(
-            lambda x: ultima_os(
-                df_historico_filtrado,
-                x,
+    ultima_os = (
+        df_historico.copy()
+    )
+
+    if not ultima_os.empty:
+        ultima_os["_data"] = pd.to_datetime(
+            ultima_os["Data de Abertura"],
+            errors="coerce",
+        )
+
+        ultima_os = (
+            ultima_os
+            .sort_values("_data")
+            .groupby("Matrícula")
+            .tail(1)
+            [
+                ["Matrícula", "N. O.S", "_data"]
+            ]
+            .rename(
+                columns={
+                    "N. O.S": "_ultima_os"
+                }
             )
         )
+
+    resultado = df_registro.copy()
+
+    resultado = resultado.merge(
+        contagem,
+        left_on="Matrícula",
+        right_index=True,
+        how="left",
     )
 
-    contagem = contagem.sort_values(
+    resultado["_qtd_os"] = (
+        resultado["_qtd_os"]
+        .fillna(0)
+        .astype(int)
+    )
+
+    if not ultima_os.empty:
+        resultado = resultado.merge(
+            ultima_os[
+                [
+                    "Matrícula",
+                    "_ultima_os",
+                    "_data",
+                ]
+            ],
+            on="Matrícula",
+            how="left",
+        )
+    else:
+        resultado["_ultima_os"] = ""
+        resultado["_data"] = pd.NaT
+
+    resultado = resultado.sort_values(
         by=[
-            "QtdOS",
-            "UltimaOS",
+            "_qtd_os",
+            "_data",
             "Matrícula",
         ],
         ascending=[
@@ -3721,466 +1194,2131 @@ if not df_historico_filtrado.empty:
         na_position="last",
     )
 
-    if not contagem.empty:
-        matricula_destaque = texto(
-            contagem.iloc[0]["Matrícula"]
+    return resultado
+
+
+# ============================================================
+# KPI
+# ============================================================
+
+def calcular_kpis(
+    df_registro,
+    df_historico,
+):
+    if df_historico.empty:
+        return None
+
+    agrupado = (
+        df_historico
+        .groupby("Matrícula")
+        .size()
+        .reset_index(
+            name="qtd_os"
+        )
+    )
+
+    if agrupado.empty:
+        return None
+
+    historico_aux = df_historico.copy()
+
+    historico_aux["_data"] = pd.to_datetime(
+        historico_aux["Data de Abertura"],
+        errors="coerce",
+    )
+
+    ultimas = (
+        historico_aux
+        .sort_values("_data")
+        .groupby("Matrícula")
+        .tail(1)
+        [["Matrícula", "_data"]]
+        .rename(
+            columns={
+                "_data": "ultima_data"
+            }
+        )
+    )
+
+    agrupado = agrupado.merge(
+        ultimas,
+        on="Matrícula",
+        how="left",
+    )
+
+    agrupado = agrupado.sort_values(
+        by=[
+            "qtd_os",
+            "ultima_data",
+            "Matrícula",
+        ],
+        ascending=[
+            False,
+            False,
+            True,
+        ],
+        na_position="last",
+    )
+
+    cliente = agrupado.iloc[0][
+        "Matrícula"
+    ]
+
+    qtd_os = int(
+        agrupado.iloc[0]["qtd_os"]
+    )
+
+    historico_cliente = historico_aux[
+        historico_aux["Matrícula"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        ==
+        normalizar_texto(cliente).upper()
+    ].copy()
+
+    historico_cliente = (
+        historico_cliente
+        .sort_values("_data")
+    )
+
+    datas = (
+        historico_cliente["_data"]
+        .dropna()
+        .dt.date
+        .tolist()
+    )
+
+    if len(datas) >= 2:
+        diferencas = []
+
+        for i in range(1, len(datas)):
+            diferencas.append(
+                (
+                    datas[i]
+                    - datas[i - 1]
+                ).days
+            )
+
+        tempo_medio = (
+            sum(diferencas)
+            / len(diferencas)
         )
 
-        qtd_destaque = int(
-            contagem.iloc[0]["QtdOS"]
+        tempo_medio_texto = (
+            f"{tempo_medio:.1f} dias"
+        )
+    else:
+        tempo_medio_texto = "—"
+
+    pressoes = pd.to_numeric(
+        historico_cliente["Pressão"],
+        errors="coerce",
+    ).dropna()
+
+    if not pressoes.empty:
+        media_pressao = (
+            pressoes.mean()
         )
 
+        media_pressao_texto = (
+            f"{media_pressao:.2f} MCA"
+        )
+    else:
+        media_pressao_texto = "—"
 
-if matricula_destaque:
-
-    tempo_kpi = tempo_medio_reclamacao(
-        df_historico_filtrado,
-        matricula_destaque,
-    )
-
-    pressao_kpi = media_pressao(
-        df_historico_filtrado,
-        matricula_destaque,
-    )
-
-else:
-    tempo_kpi = None
-    pressao_kpi = None
+    return {
+        "cliente": cliente,
+        "qtd_os": qtd_os,
+        "tempo_medio": tempo_medio_texto,
+        "media_pressao": media_pressao_texto,
+    }
 
 
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+def mostrar_kpis(kpis):
+    if not kpis:
+        st.info(
+            "Não há O.S. suficientes para calcular os indicadores "
+            "com os filtros atuais."
+        )
+        return
 
+    col1, col2, col3, col4 = st.columns(4)
 
-with kpi1:
-    st.metric(
-        "Cliente com mais registros",
-        matricula_destaque
-        if matricula_destaque
-        else "—",
-    )
+    with col1:
+        st.metric(
+            "Cliente com mais registros",
+            kpis["cliente"],
+        )
 
+    with col2:
+        st.metric(
+            "Quant. de O.S",
+            kpis["qtd_os"],
+        )
 
-with kpi2:
-    st.metric(
-        "Quant. de O.S",
-        qtd_destaque,
-    )
+    with col3:
+        st.metric(
+            "Tempo Médio de Reclamação",
+            kpis["tempo_medio"],
+        )
 
-
-with kpi3:
-    st.metric(
-        "Tempo Médio de Reclamação",
-        (
-            f"{tempo_kpi:.1f} dias"
-            if tempo_kpi is not None
-            else "—"
-        ),
-    )
-
-
-with kpi4:
-    st.metric(
-        "Média de Pressão",
-        (
-            f"{pressao_kpi:.2f} MCA"
-            if pressao_kpi is not None
-            else "—"
-        ),
-    )
+    with col4:
+        st.metric(
+            "Média de Pressão",
+            kpis["media_pressao"],
+        )
 
 
 # ============================================================
 # MAPA
 # ============================================================
 
-st.divider()
-
-st.subheader(
-    "🗺️ Mapa de Melhorias"
-)
-
-col1, col2 = st.columns(
-    [
-        1,
-        1,
-    ]
-)
-
-with col1:
-    tipo_mapa = st.selectbox(
-        "Tipo de mapa",
-        [
-            "🗺️ Mapa",
-            "🛰️ Satélite",
-            "⛰️ Terreno",
+def construir_mapa(
+    df_registro,
+    df_historico,
+):
+    mapa = folium.Map(
+        location=[
+            -5.0892,
+            -42.8019,
         ],
-        key="tipo_mapa_melhorias",
+        zoom_start=12,
+        tiles=None,
+        control_scale=True,
     )
 
-with col2:
-    st.caption(
-        "Sem filtros, todos os registros com coordenadas são exibidos. "
-        "Com filtros, o mapa acompanha o resultado filtrado."
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        name="Mapa",
+        control=True,
+    ).add_to(mapa)
+
+    folium.TileLayer(
+        tiles=(
+            "https://server.arcgisonline.com/"
+            "ArcGIS/rest/services/"
+            "World_Imagery/MapServer/"
+            "tile/{z}/{y}/{x}"
+        ),
+        attr="Esri",
+        name="Satélite",
+        control=True,
+    ).add_to(mapa)
+
+    folium.TileLayer(
+        tiles=(
+            "https://{s}.tile.opentopomap.org/"
+            "{z}/{x}/{y}.png"
+        ),
+        attr="OpenTopoMap",
+        name="Topográfico",
+        control=True,
+    ).add_to(mapa)
+
+    if df_registro.empty:
+        folium.LayerControl().add_to(mapa)
+        return mapa
+
+    bounds = []
+
+    for _, registro in df_registro.iterrows():
+
+        latitude = converter_float(
+            registro["Latitude"]
+        )
+
+        longitude = converter_float(
+            registro["Longitude"]
+        )
+
+        if not coordenada_valida(
+            latitude,
+            longitude,
+        ):
+            continue
+
+        matricula = normalizar_texto(
+            registro["Matrícula"]
+        )
+
+        historico_cliente = (
+            historico_da_matricula(
+                df_historico,
+                matricula,
+            )
+        )
+
+        qtd_os = len(
+            historico_cliente
+        )
+
+        ultima_os = "—"
+
+        if not historico_cliente.empty:
+            historico_cliente = (
+                historico_cliente.copy()
+            )
+
+            historico_cliente["_data"] = (
+                pd.to_datetime(
+                    historico_cliente[
+                        "Data de Abertura"
+                    ],
+                    errors="coerce",
+                )
+            )
+
+            historico_cliente = (
+                historico_cliente
+                .sort_values("_data")
+            )
+
+            ultimo = (
+                historico_cliente.iloc[-1]
+            )
+
+            ultima_os = normalizar_texto(
+                ultimo["N. O.S"]
+            )
+
+        resolvido = normalizar_sim_nao(
+            registro["Resolvido"]
+        )
+
+        if resolvido == "SIM":
+            cor = "green"
+        elif resolvido == "NAO":
+            cor = "red"
+        else:
+            cor = "blue"
+
+        popup_html = f"""
+        <div style="width: 320px;">
+            <h4 style="margin-bottom:8px;">
+                {escapar(matricula)}
+            </h4>
+
+            <b>Endereço:</b>
+            {escapar(registro["Endereço"])}<br>
+
+            <b>Bairro:</b>
+            {escapar(registro["Bairro"])}<br>
+
+            <b>Grau de Impacto:</b>
+            {escapar(registro["Grau de Impacto"])}<br>
+
+            <b>Resolvido:</b>
+            {escapar(registro["Resolvido"])}<br>
+
+            <b>Qtd. de O.S.:</b>
+            {qtd_os}<br>
+
+            <b>Última O.S.:</b>
+            {escapar(ultima_os)}<br>
+
+            <b>Data de Registro:</b>
+            {escapar(formatar_data(registro["Data de Registro"]))}<br>
+
+            <b>Responsável:</b>
+            {escapar(registro["Responsável"])}<br>
+
+            <b>Parecer:</b>
+            {escapar(registro["Parecer"])}<br>
+
+            <b>Tratativa 1:</b>
+            {escapar(registro["Tratativa 1"])}<br>
+
+            <b>Retorno:</b>
+            {escapar(registro["Retorno"])}
+        </div>
+        """
+
+        folium.Marker(
+            location=[
+                latitude,
+                longitude,
+            ],
+            tooltip=matricula,
+            popup=folium.Popup(
+                popup_html,
+                max_width=350,
+            ),
+            icon=folium.Icon(
+                color=cor,
+                icon="wrench",
+                prefix="fa",
+            ),
+        ).add_to(mapa)
+
+        bounds.append(
+            [
+                latitude,
+                longitude,
+            ]
+        )
+
+    if bounds:
+        if len(bounds) == 1:
+            mapa.location = bounds[0]
+            mapa.zoom_start = 15
+        else:
+            mapa.fit_bounds(bounds)
+
+    folium.LayerControl().add_to(mapa)
+
+    return mapa
+
+
+# ============================================================
+# DIÁLOGOS
+# ============================================================
+
+def abrir_dialogo(nome, **dados):
+    st.session_state.dialogo_melhorias = nome
+
+    for chave, valor in dados.items():
+        st.session_state[
+            f"dialogo_{chave}"
+        ] = valor
+
+
+def fechar_dialogo():
+    st.session_state.dialogo_melhorias = None
+
+    chaves = [
+        chave
+        for chave in st.session_state.keys()
+        if str(chave).startswith(
+            "dialogo_"
+        )
+    ]
+
+    for chave in chaves:
+        if chave != "dialogo_melhorias":
+            try:
+                del st.session_state[chave]
+            except Exception:
+                pass
+
+
+# ============================================================
+# DIÁLOGO — NOVO REGISTRO
+# ============================================================
+
+@st.dialog("Novo Registro", width="large")
+def dialogo_novo_registro(
+    df_registro,
+    df_historico,
+):
+
+    st.subheader(
+        "Cadastro da melhoria"
+    )
+
+    matricula = st.text_input(
+        "Matrícula *",
+        key="novo_matricula",
+    ).strip()
+
+    endereco = st.text_input(
+        "Endereço *",
+        key="novo_endereco",
+    ).strip()
+
+    bairro = st.text_input(
+        "Bairro *",
+        key="novo_bairro",
+    ).strip()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        latitude = st.text_input(
+            "Latitude *",
+            key="novo_latitude",
+        )
+
+    with col2:
+        longitude = st.text_input(
+            "Longitude *",
+            key="novo_longitude",
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Mapeamento"
+    )
+
+    parecer = st.text_area(
+        "Parecer",
+        key="novo_parecer",
+    )
+
+    data_registro = st.date_input(
+        "Data de Registro *",
+        value=date.today(),
+        key="novo_data_registro",
+    )
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        grau_impacto = st.text_input(
+            "Grau de Impacto",
+            key="novo_grau_impacto",
+        )
+
+    with col4:
+        resolvido = st.text_input(
+            "Resolvido",
+            key="novo_resolvido",
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Tratativa"
+    )
+
+    tratativa_1 = st.text_area(
+        "Tratativa 1",
+        key="novo_tratativa_1",
+    )
+
+    col5, col6 = st.columns(2)
+
+    with col5:
+        executado = st.text_input(
+            "Executado?",
+            key="novo_executado",
+        )
+
+    with col6:
+        responsavel = st.text_input(
+            "Responsável",
+            key="novo_responsavel",
+        )
+
+    retorno = st.text_area(
+        "Retorno",
+        key="novo_retorno",
+    )
+
+    st.divider()
+
+    historico_existente = (
+        historico_da_matricula(
+            df_historico,
+            matricula,
+        )
+        if matricula
+        else pd.DataFrame()
+    )
+
+    matricula_ja_tem_registro = (
+        matricula_possui_registro(
+            df_registro,
+            matricula,
+        )
+        if matricula
+        else False
+    )
+
+    if matricula_ja_tem_registro:
+        st.warning(
+            "Já existe um registro principal para esta matrícula."
+        )
+
+    st.subheader(
+        "O.S. inicial"
+    )
+
+    adicionar_nova_os = True
+
+    if not historico_existente.empty:
+        st.info(
+            "Esta matrícula já possui O.S. cadastrada. "
+            "Você pode cadastrar o registro principal "
+            "sem adicionar uma nova O.S., ou adicionar outra O.S."
+        )
+
+        adicionar_nova_os = st.checkbox(
+            "Adicionar uma nova O.S.",
+            value=False,
+            key="novo_adicionar_os_existente",
+        )
+
+    numero_os = ""
+    data_abertura = datetime.now()
+    pressao = ""
+    pontual = "SIM"
+
+    if (
+        historico_existente.empty
+        or adicionar_nova_os
+    ):
+        col7, col8 = st.columns(2)
+
+        with col7:
+            numero_os = st.text_input(
+                "N. O.S *",
+                placeholder="12345/2026-1",
+                key="novo_numero_os",
+            ).strip()
+
+        with col8:
+            data_abertura = st.datetime_input(
+                "Data de Abertura *",
+                value=datetime.now(),
+                key="novo_data_abertura",
+            )
+
+        col9, col10 = st.columns(2)
+
+        with col9:
+            pressao = st.number_input(
+                "Pressão (MCA) *",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="novo_pressao",
+            )
+
+        with col10:
+            pontual = st.selectbox(
+                "Pontual",
+                ["SIM", "NÃO"],
+                key="novo_pontual",
+            )
+
+    salvar = st.button(
+        "💾 Salvar Registro",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if not salvar:
+        return
+
+    # --------------------------------------------------------
+    # VALIDAÇÕES
+    # --------------------------------------------------------
+
+    if not matricula:
+        st.error(
+            "Informe a matrícula."
+        )
+        return
+
+    if matricula_ja_tem_registro:
+        st.error(
+            "Já existe um registro para esta matrícula."
+        )
+        return
+
+    if not endereco:
+        st.error(
+            "Informe o endereço."
+        )
+        return
+
+    if not bairro:
+        st.error(
+            "Informe o bairro."
+        )
+        return
+
+    if not coordenada_valida(
+        latitude,
+        longitude,
+    ):
+        st.error(
+            "Latitude e longitude são obrigatórias "
+            "e devem possuir valores válidos."
+        )
+        return
+
+    if not historico_existente.empty:
+        if adicionar_nova_os:
+            if not validar_os(numero_os):
+                st.error(
+                    "N. O.S. inválida. Use o formato "
+                    "12345/2026-1."
+                )
+                return
+
+            if os_duplicada(
+                df_historico,
+                matricula,
+                numero_os,
+            ):
+                st.error(
+                    "Essa O.S. já está cadastrada para a matrícula."
+                )
+                return
+    else:
+        if not validar_os(numero_os):
+            st.error(
+                "É obrigatório cadastrar uma O.S. "
+                "para uma matrícula sem histórico."
+            )
+            return
+
+        if os_duplicada(
+            df_historico,
+            matricula,
+            numero_os,
+        ):
+            st.error(
+                "Essa O.S. já está cadastrada para a matrícula."
+            )
+            return
+
+    # --------------------------------------------------------
+    # SALVA REGISTRO PRINCIPAL
+    # --------------------------------------------------------
+
+    registro_id = gerar_id()
+
+    dados_registro = {
+        "ID": registro_id,
+        "Matrícula": matricula,
+        "Endereço": endereco,
+        "Bairro": bairro,
+        "Latitude": converter_float(latitude),
+        "Longitude": converter_float(longitude),
+        "Parecer": parecer,
+        "Data de Registro": data_registro.strftime(
+            "%Y-%m-%d"
+        ),
+        "Tratativa 1": tratativa_1,
+        "Executado?": executado,
+        "Retorno": retorno,
+        "Responsável": responsavel,
+        "Grau de Impacto": grau_impacto,
+        "Resolvido": resolvido,
+    }
+
+    try:
+        adicionar_registro(
+            dados_registro
+        )
+
+        if (
+            historico_existente.empty
+            or adicionar_nova_os
+        ):
+            dados_os = {
+                "ID": gerar_id(),
+                "Matrícula": matricula,
+                "N. O.S": numero_os,
+                "Data de Abertura": (
+                    data_abertura.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                ),
+                "Pressão": pressao,
+                "Pontual": pontual,
+            }
+
+            adicionar_os(
+                dados_os
+            )
+
+        st.cache_data.clear()
+        st.success(
+            "Registro salvo com sucesso."
+        )
+
+        fechar_dialogo()
+        st.rerun()
+
+    except Exception as exc:
+        st.error(
+            "Não foi possível salvar o registro."
+        )
+        st.exception(exc)
+
+
+# ============================================================
+# DIÁLOGO — EDITAR REGISTRO
+# ============================================================
+
+@st.dialog("Editar Registro", width="large")
+def dialogo_editar_registro(
+    registro,
+    df_registro,
+    df_historico,
+):
+
+    registro_id = normalizar_texto(
+        registro["ID"]
+    )
+
+    matricula_original = normalizar_texto(
+        registro["Matrícula"]
+    )
+
+    st.subheader(
+        "Dados do registro"
+    )
+
+    matricula = st.text_input(
+        "Matrícula *",
+        value=matricula_original,
+        key=f"edit_matricula_{registro_id}",
+    ).strip()
+
+    endereco = st.text_input(
+        "Endereço *",
+        value=normalizar_texto(
+            registro["Endereço"]
+        ),
+        key=f"edit_endereco_{registro_id}",
+    ).strip()
+
+    bairro = st.text_input(
+        "Bairro *",
+        value=normalizar_texto(
+            registro["Bairro"]
+        ),
+        key=f"edit_bairro_{registro_id}",
+    ).strip()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        latitude = st.text_input(
+            "Latitude *",
+            value=normalizar_texto(
+                registro["Latitude"]
+            ),
+            key=f"edit_latitude_{registro_id}",
+        )
+
+    with col2:
+        longitude = st.text_input(
+            "Longitude *",
+            value=normalizar_texto(
+                registro["Longitude"]
+            ),
+            key=f"edit_longitude_{registro_id}",
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Mapeamento"
+    )
+
+    parecer = st.text_area(
+        "Parecer",
+        value=normalizar_texto(
+            registro["Parecer"]
+        ),
+        key=f"edit_parecer_{registro_id}",
+    )
+
+    data_registro = st.date_input(
+        "Data de Registro *",
+        value=valor_data_para_widget(
+            registro["Data de Registro"]
+        ),
+        key=f"edit_data_registro_{registro_id}",
+    )
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        grau_impacto = st.text_input(
+            "Grau de Impacto",
+            value=normalizar_texto(
+                registro["Grau de Impacto"]
+            ),
+            key=f"edit_grau_impacto_{registro_id}",
+        )
+
+    with col4:
+        resolvido = st.text_input(
+            "Resolvido",
+            value=normalizar_texto(
+                registro["Resolvido"]
+            ),
+            key=f"edit_resolvido_{registro_id}",
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Tratativa"
+    )
+
+    tratativa_1 = st.text_area(
+        "Tratativa 1",
+        value=normalizar_texto(
+            registro["Tratativa 1"]
+        ),
+        key=f"edit_tratativa_1_{registro_id}",
+    )
+
+    col5, col6 = st.columns(2)
+
+    with col5:
+        executado = st.text_input(
+            "Executado?",
+            value=normalizar_texto(
+                registro["Executado?"]
+            ),
+            key=f"edit_executado_{registro_id}",
+        )
+
+    with col6:
+        responsavel = st.text_input(
+            "Responsável",
+            value=normalizar_texto(
+                registro["Responsável"]
+            ),
+            key=f"edit_responsavel_{registro_id}",
+        )
+
+    retorno = st.text_area(
+        "Retorno",
+        value=normalizar_texto(
+            registro["Retorno"]
+        ),
+        key=f"edit_retorno_{registro_id}",
+    )
+
+    st.divider()
+
+    salvar = st.button(
+        "💾 Salvar Alterações",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if not salvar:
+        return
+
+    # --------------------------------------------------------
+    # VALIDAÇÕES
+    # --------------------------------------------------------
+
+    if not matricula:
+        st.error(
+            "Informe a matrícula."
+        )
+        return
+
+    if matricula_possui_registro(
+        df_registro,
+        matricula,
+        ignorar_id=registro_id,
+    ):
+        st.error(
+            "Já existe outro registro principal "
+            "para esta matrícula."
+        )
+        return
+
+    if not endereco:
+        st.error(
+            "Informe o endereço."
+        )
+        return
+
+    if not bairro:
+        st.error(
+            "Informe o bairro."
+        )
+        return
+
+    if not coordenada_valida(
+        latitude,
+        longitude,
+    ):
+        st.error(
+            "Latitude e longitude são obrigatórias "
+            "e devem possuir valores válidos."
+        )
+        return
+
+    dados_registro = {
+        "ID": registro_id,
+        "Matrícula": matricula,
+        "Endereço": endereco,
+        "Bairro": bairro,
+        "Latitude": converter_float(latitude),
+        "Longitude": converter_float(longitude),
+        "Parecer": parecer,
+        "Data de Registro": data_registro.strftime(
+            "%Y-%m-%d"
+        ),
+        "Tratativa 1": tratativa_1,
+        "Executado?": executado,
+        "Retorno": retorno,
+        "Responsável": responsavel,
+        "Grau de Impacto": grau_impacto,
+        "Resolvido": resolvido,
+    }
+
+    try:
+        atualizar_registro(
+            registro_id,
+            dados_registro,
+        )
+
+        # ----------------------------------------------------
+        # MIGRA HISTÓRICO CASO A MATRÍCULA TENHA SIDO ALTERADA
+        # ----------------------------------------------------
+
+        if (
+            matricula_original.upper()
+            != matricula.upper()
+        ):
+            _, historico_ws = obter_planilhas()
+
+            historico_original = (
+                historico_da_matricula(
+                    df_historico,
+                    matricula_original,
+                )
+            )
+
+            for _, linha in historico_original.iterrows():
+
+                os_id = normalizar_texto(
+                    linha["ID"]
+                )
+
+                linha_atualizada = {
+                    "ID": os_id,
+                    "Matrícula": matricula,
+                    "N. O.S": normalizar_texto(
+                        linha["N. O.S"]
+                    ),
+                    "Data de Abertura": normalizar_texto(
+                        linha["Data de Abertura"]
+                    ),
+                    "Pressão": normalizar_texto(
+                        linha["Pressão"]
+                    ),
+                    "Pontual": normalizar_texto(
+                        linha["Pontual"]
+                    ),
+                }
+
+                atualizar_os(
+                    os_id,
+                    linha_atualizada,
+                )
+
+        st.success(
+            "Registro atualizado com sucesso."
+        )
+
+        fechar_dialogo()
+        st.rerun()
+
+    except Exception as exc:
+        st.error(
+            "Não foi possível atualizar o registro."
+        )
+        st.exception(exc)
+
+
+# ============================================================
+# DIÁLOGO — VISUALIZAR MATRÍCULA
+# ============================================================
+
+@st.dialog("Registro da Matrícula", width="large")
+def dialogo_matricula(
+    matricula,
+    df_registro,
+    df_historico,
+):
+
+    registro_df = registro_da_matricula(
+        df_registro,
+        matricula,
+    )
+
+    historico_df = historico_da_matricula(
+        df_historico,
+        matricula,
+    )
+
+    if registro_df.empty:
+        st.warning(
+            "O registro principal desta matrícula "
+            "não está cadastrado."
+        )
+    else:
+        registro = registro_df.iloc[0]
+
+        st.subheader(
+            f"Matrícula: {matricula}"
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown(
+                f"**Endereço:** "
+                f"{normalizar_texto(registro['Endereço'])}"
+            )
+
+            st.markdown(
+                f"**Bairro:** "
+                f"{normalizar_texto(registro['Bairro'])}"
+            )
+
+            st.markdown(
+                f"**Latitude:** "
+                f"{normalizar_texto(registro['Latitude'])}"
+            )
+
+            st.markdown(
+                f"**Longitude:** "
+                f"{normalizar_texto(registro['Longitude'])}"
+            )
+
+            st.markdown(
+                f"**Data de Registro:** "
+                f"{formatar_data(registro['Data de Registro'])}"
+            )
+
+            st.markdown(
+                f"**Responsável:** "
+                f"{normalizar_texto(registro['Responsável']) or '—'}"
+            )
+
+        with col2:
+            st.markdown(
+                f"**Grau de Impacto:** "
+                f"{normalizar_texto(registro['Grau de Impacto']) or '—'}"
+            )
+
+            st.markdown(
+                f"**Resolvido:** "
+                f"{normalizar_texto(registro['Resolvido']) or '—'}"
+            )
+
+            st.markdown(
+                f"**Executado?:** "
+                f"{normalizar_texto(registro['Executado?']) or '—'}"
+            )
+
+            st.markdown(
+                f"**Parecer:** "
+                f"{normalizar_texto(registro['Parecer']) or '—'}"
+            )
+
+        st.markdown(
+            f"**Tratativa 1:** "
+            f"{normalizar_texto(registro['Tratativa 1']) or '—'}"
+        )
+
+        st.markdown(
+            f"**Retorno:** "
+            f"{normalizar_texto(registro['Retorno']) or '—'}"
+        )
+
+        st.divider()
+
+        col_editar, col_excluir = st.columns(2)
+
+        with col_editar:
+            if st.button(
+                "✏️ Editar Registro",
+                use_container_width=True,
+                key=f"popup_editar_{matricula}",
+            ):
+                fechar_dialogo()
+                abrir_dialogo(
+                    "editar",
+                    registro=registro.to_dict(),
+                )
+                st.rerun()
+
+        with col_excluir:
+            if st.button(
+                "🗑️ Excluir Registro",
+                use_container_width=True,
+                key=f"popup_excluir_{matricula}",
+            ):
+                abrir_dialogo(
+                    "confirmar_exclusao_registro",
+                    registro=registro.to_dict(),
+                )
+                st.rerun()
+
+    st.divider()
+
+    st.subheader(
+        f"O.S. da Matrícula ({len(historico_df)})"
+    )
+
+    if historico_df.empty:
+        st.info(
+            "Nenhuma O.S. cadastrada."
+        )
+    else:
+        historico_exibicao = (
+            historico_df.copy()
+        )
+
+        historico_exibicao["_data"] = (
+            pd.to_datetime(
+                historico_exibicao[
+                    "Data de Abertura"
+                ],
+                errors="coerce",
+            )
+        )
+
+        historico_exibicao = (
+            historico_exibicao
+            .sort_values(
+                "_data",
+                ascending=False,
+            )
+        )
+
+        for _, os_row in historico_exibicao.iterrows():
+
+            os_id = normalizar_texto(
+                os_row["ID"]
+            )
+
+            with st.container(
+                border=True
+            ):
+                col_a, col_b, col_c = st.columns(
+                    [2, 2, 1]
+                )
+
+                with col_a:
+                    st.markdown(
+                        f"**N. O.S:** "
+                        f"{normalizar_texto(os_row['N. O.S'])}"
+                    )
+
+                    st.caption(
+                        formatar_data_hora(
+                            os_row[
+                                "Data de Abertura"
+                            ]
+                        )
+                    )
+
+                with col_b:
+                    st.markdown(
+                        f"**Pressão:** "
+                        f"{normalizar_texto(os_row['Pressão'])} MCA"
+                    )
+
+                    st.markdown(
+                        f"**Pontual:** "
+                        f"{normalizar_texto(os_row['Pontual'])}"
+                    )
+
+                with col_c:
+                    if st.button(
+                        "✏️",
+                        key=f"editar_os_{os_id}",
+                        help="Editar O.S.",
+                    ):
+                        fechar_dialogo()
+                        abrir_dialogo(
+                            "editar_os",
+                            os_id=os_id,
+                            matricula=matricula,
+                        )
+                        st.rerun()
+
+                    if st.button(
+                        "🗑️",
+                        key=f"excluir_os_{os_id}",
+                        help="Excluir O.S.",
+                    ):
+                        abrir_dialogo(
+                            "confirmar_exclusao_os",
+                            os_id=os_id,
+                            matricula=matricula,
+                        )
+                        st.rerun()
+
+    st.divider()
+
+    col_add, col_download = st.columns(2)
+
+    with col_add:
+        if st.button(
+            "＋ Adicionar Registro",
+            type="primary",
+            use_container_width=True,
+            key=f"adicionar_os_{matricula}",
+        ):
+            fechar_dialogo()
+            abrir_dialogo(
+                "nova_os",
+                matricula=matricula,
+            )
+            st.rerun()
+
+    with col_download:
+        registro_export = registro_df.copy()
+
+        historico_export = historico_df.copy()
+
+        arquivo = gerar_excel_cliente(
+            registro_export,
+            historico_export,
+        )
+
+        st.download_button(
+            "⬇️ Baixar Excel",
+            data=arquivo,
+            file_name=(
+                f"mapeamento_"
+                f"{matricula.replace('/', '_')}.xlsx"
+            ),
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+            key=f"download_cliente_{matricula}",
+        )
+
+
+# ============================================================
+# DIÁLOGO — NOVA O.S.
+# ============================================================
+
+@st.dialog("Adicionar O.S.", width="medium")
+def dialogo_nova_os(
+    matricula,
+    df_historico,
+):
+
+    st.write(
+        f"**Matrícula:** {matricula}"
+    )
+
+    numero_os = st.text_input(
+        "N. O.S *",
+        placeholder="12345/2026-1",
+        key=f"nova_os_numero_{matricula}",
+    ).strip()
+
+    data_abertura = st.datetime_input(
+        "Data de Abertura *",
+        value=datetime.now(),
+        key=f"nova_os_data_{matricula}",
+    )
+
+    pressao = st.number_input(
+        "Pressão (MCA) *",
+        min_value=0.0,
+        step=0.01,
+        format="%.2f",
+        key=f"nova_os_pressao_{matricula}",
+    )
+
+    pontual = st.selectbox(
+        "Pontual",
+        ["SIM", "NÃO"],
+        key=f"nova_os_pontual_{matricula}",
+    )
+
+    salvar = st.button(
+        "💾 Salvar O.S.",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if not salvar:
+        return
+
+    if not validar_os(numero_os):
+        st.error(
+            "N. O.S. inválida. Use o formato "
+            "12345/2026-1."
+        )
+        return
+
+    if os_duplicada(
+        df_historico,
+        matricula,
+        numero_os,
+    ):
+        st.error(
+            "Essa O.S. já está cadastrada para esta matrícula."
+        )
+        return
+
+    dados_os = {
+        "ID": gerar_id(),
+        "Matrícula": matricula,
+        "N. O.S": numero_os,
+        "Data de Abertura": (
+            data_abertura.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        ),
+        "Pressão": pressao,
+        "Pontual": pontual,
+    }
+
+    try:
+        adicionar_os(
+            dados_os
+        )
+
+        st.success(
+            "O.S. adicionada com sucesso."
+        )
+
+        fechar_dialogo()
+        st.rerun()
+
+    except Exception as exc:
+        st.error(
+            "Não foi possível adicionar a O.S."
+        )
+        st.exception(exc)
+
+
+# ============================================================
+# DIÁLOGO — EDITAR O.S.
+# ============================================================
+
+@st.dialog("Editar O.S.", width="medium")
+def dialogo_editar_os(
+    os_id,
+    matricula,
+    df_historico,
+):
+
+    historico_os = df_historico[
+        df_historico["ID"]
+        .astype(str)
+        ==
+        str(os_id)
+    ]
+
+    if historico_os.empty:
+        st.error(
+            "O.S. não encontrada."
+        )
+        return
+
+    os_atual = historico_os.iloc[0]
+
+    numero_os = st.text_input(
+        "N. O.S *",
+        value=normalizar_texto(
+            os_atual["N. O.S"]
+        ),
+        key=f"edit_os_numero_{os_id}",
+    ).strip()
+
+    data_abertura = st.datetime_input(
+        "Data de Abertura *",
+        value=valor_datetime_para_widget(
+            os_atual["Data de Abertura"]
+        ),
+        key=f"edit_os_data_{os_id}",
+    )
+
+    pressao_atual = converter_float(
+        os_atual["Pressão"]
+    )
+
+    if pressao_atual is None:
+        pressao_atual = 0.0
+
+    pressao = st.number_input(
+        "Pressão (MCA) *",
+        min_value=0.0,
+        value=float(pressao_atual),
+        step=0.01,
+        format="%.2f",
+        key=f"edit_os_pressao_{os_id}",
+    )
+
+    pontual_atual = normalizar_texto(
+        os_atual["Pontual"]
+    )
+
+    if pontual_atual not in ["SIM", "NÃO"]:
+        pontual_atual = "SIM"
+
+    pontual = st.selectbox(
+        "Pontual",
+        ["SIM", "NÃO"],
+        index=[
+            "SIM",
+            "NÃO",
+        ].index(pontual_atual),
+        key=f"edit_os_pontual_{os_id}",
+    )
+
+    salvar = st.button(
+        "💾 Salvar Alterações",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if not salvar:
+        return
+
+    if not validar_os(numero_os):
+        st.error(
+            "N. O.S. inválida. Use o formato "
+            "12345/2026-1."
+        )
+        return
+
+    if os_duplicada(
+        df_historico,
+        matricula,
+        numero_os,
+        ignorar_id=os_id,
+    ):
+        st.error(
+            "Essa O.S. já está cadastrada para esta matrícula."
+        )
+        return
+
+    dados_os = {
+        "ID": os_id,
+        "Matrícula": matricula,
+        "N. O.S": numero_os,
+        "Data de Abertura": (
+            data_abertura.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        ),
+        "Pressão": pressao,
+        "Pontual": pontual,
+    }
+
+    try:
+        atualizar_os(
+            os_id,
+            dados_os,
+        )
+
+        st.success(
+            "O.S. atualizada com sucesso."
+        )
+
+        fechar_dialogo()
+        st.rerun()
+
+    except Exception as exc:
+        st.error(
+            "Não foi possível atualizar a O.S."
+        )
+        st.exception(exc)
+
+
+# ============================================================
+# DIÁLOGO — CONFIRMAR EXCLUSÃO DO REGISTRO
+# ============================================================
+
+@st.dialog("Confirmar exclusão")
+def dialogo_confirmar_exclusao_registro(
+    registro,
+):
+
+    matricula = normalizar_texto(
+        registro["Matrícula"]
+    )
+
+    st.warning(
+        f"Tem certeza que deseja excluir o registro "
+        f"da matrícula **{matricula}**?"
+    )
+
+    st.info(
+        "As O.S. e o histórico dessa matrícula "
+        "serão mantidos."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        confirmar = st.button(
+            "🗑️ Excluir",
+            type="primary",
+            use_container_width=True,
+        )
+
+    with col2:
+        cancelar = st.button(
+            "Cancelar",
+            use_container_width=True,
+        )
+
+    if cancelar:
+        fechar_dialogo()
+        st.rerun()
+
+    if confirmar:
+        try:
+            excluir_registro(
+                registro["ID"]
+            )
+
+            st.success(
+                "Registro excluído. "
+                "O histórico foi preservado."
+            )
+
+            fechar_dialogo()
+            st.rerun()
+
+        except Exception as exc:
+            st.error(
+                "Não foi possível excluir o registro."
+            )
+            st.exception(exc)
+
+
+# ============================================================
+# DIÁLOGO — CONFIRMAR EXCLUSÃO DA O.S.
+# ============================================================
+
+@st.dialog("Confirmar exclusão da O.S.")
+def dialogo_confirmar_exclusao_os(
+    os_id,
+    matricula,
+    df_historico,
+):
+
+    historico_cliente = (
+        historico_da_matricula(
+            df_historico,
+            matricula,
+        )
+    )
+
+    os_atual = df_historico[
+        df_historico["ID"]
+        .astype(str)
+        ==
+        str(os_id)
+    ]
+
+    if os_atual.empty:
+        st.error(
+            "O.S. não encontrada."
+        )
+        return
+
+    numero_os = normalizar_texto(
+        os_atual.iloc[0]["N. O.S"]
+    )
+
+    if len(historico_cliente) <= 1:
+        st.warning(
+            "Esta matrícula possui apenas uma O.S."
+        )
+
+        st.info(
+            "A última O.S. não pode ser excluída, "
+            "pois toda matrícula ativa deve permanecer "
+            "com pelo menos uma O.S."
+        )
+
+        if st.button(
+            "Fechar",
+            use_container_width=True,
+        ):
+            fechar_dialogo()
+            st.rerun()
+
+        return
+
+    st.warning(
+        f"Tem certeza que deseja excluir a O.S. "
+        f"**{numero_os}**?"
+    )
+
+    st.write(
+        "Essa operação não poderá ser desfeita."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        confirmar = st.button(
+            "🗑️ Excluir O.S.",
+            type="primary",
+            use_container_width=True,
+        )
+
+    with col2:
+        cancelar = st.button(
+            "Cancelar",
+            use_container_width=True,
+        )
+
+    if cancelar:
+        fechar_dialogo()
+        st.rerun()
+
+    if confirmar:
+        try:
+            excluir_os(
+                os_id
+            )
+
+            st.success(
+                "O.S. excluída com sucesso."
+            )
+
+            fechar_dialogo()
+            st.rerun()
+
+        except Exception as exc:
+            st.error(
+                "Não foi possível excluir a O.S."
+            )
+            st.exception(exc)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.markdown(
+        "## 🗺️ Mapeamento de Melhorias"
+    )
+
+    st.divider()
+
+    if st.button(
+        "＋ Novo Registro",
+        type="primary",
+        use_container_width=True,
+    ):
+        fechar_dialogo()
+        abrir_dialogo("novo")
+        st.rerun()
+
+    if st.button(
+        "🏠 Voltar ao Menu Principal",
+        use_container_width=True,
+    ):
+        st.switch_page(
+            "app.py"
+        )
+
+    st.divider()
+
+    st.markdown(
+        "### Filtros"
     )
 
 
-mapa = criar_mapa(
+# ============================================================
+# CARREGAMENTO
+# ============================================================
+
+(
+    registro_ws,
+    historico_ws,
+    df_registro,
+    df_historico,
+) = carregar_dados()
+
+
+# ============================================================
+# SIDEBAR — FILTROS
+# ============================================================
+
+df_registro_filtrado, df_historico_filtrado = (
+    aplicar_filtros(
+        df_registro,
+        df_historico,
+    )
+)
+
+
+# ============================================================
+# TÍTULO
+# ============================================================
+
+st.title(
+    "🗺️ Mapeamento de Melhorias"
+)
+
+st.caption(
+    "Cadastro, acompanhamento e histórico das melhorias "
+    "relacionadas às matrículas."
+)
+
+
+# ============================================================
+# EXPORTAÇÃO GLOBAL
+# ============================================================
+
+arquivo_exportacao = gerar_excel(
     df_registro_filtrado,
     df_historico_filtrado,
-    tipo_mapa,
 )
 
+st.download_button(
+    "⬇️ Exportar filtrado",
+    data=arquivo_exportacao,
+    file_name=(
+        "mapeamento_de_melhorias_filtrado.xlsx"
+    ),
+    mime=(
+        "application/vnd.openxmlformats-officedocument."
+        "spreadsheetml.sheet"
+    ),
+    use_container_width=False,
+)
+
+
+# ============================================================
+# KPIs
+# ============================================================
+
+st.markdown("### Indicadores")
+
+kpis = calcular_kpis(
+    df_registro_filtrado,
+    df_historico_filtrado,
+)
+
+mostrar_kpis(kpis)
+
+
+# ============================================================
+# MAPA
+# ============================================================
+
+st.markdown("### Mapa")
+
+mapa = construir_mapa(
+    df_registro_filtrado,
+    df_historico_filtrado,
+)
 
 st_folium(
     mapa,
     width=None,
-    height=600,
+    height=520,
     returned_objects=[],
-    key="mapa_mapeamento_melhorias",
 )
 
 
 # ============================================================
-# LISTA DE REGISTROS
+# LISTA
 # ============================================================
 
-st.divider()
-
-st.subheader(
-    "📋 Registros de Melhorias"
+st.markdown(
+    "### Registros"
 )
 
-if resumo.empty:
+df_lista = ordenar_registros(
+    df_registro_filtrado,
+    df_historico_filtrado,
+)
+
+if df_lista.empty:
 
     st.info(
-        "Nenhum registro encontrado para os filtros selecionados."
+        "Nenhum registro encontrado com os filtros atuais."
     )
 
 else:
 
     total_registros = len(
-        resumo
+        df_lista
     )
-
-    registros_por_pagina = 10
 
     total_paginas = max(
         1,
         math.ceil(
             total_registros
-            / registros_por_pagina
+            / REGISTROS_POR_PAGINA
         ),
     )
 
-    if (
-        st.session_state.pagina_melhorias
-        > total_paginas
-    ):
-        st.session_state.pagina_melhorias = (
-            total_paginas
+    pagina_atual = st.session_state.get(
+        "pagina_mapeamento",
+        1,
+    )
+
+    if pagina_atual > total_paginas:
+        pagina_atual = total_paginas
+
+    col_prev, col_info, col_next = st.columns(
+        [1, 2, 1]
+    )
+
+    with col_prev:
+        if st.button(
+            "← Anterior",
+            disabled=pagina_atual <= 1,
+            use_container_width=True,
+        ):
+            st.session_state[
+                "pagina_mapeamento"
+            ] = max(
+                1,
+                pagina_atual - 1,
+            )
+            st.rerun()
+
+    with col_info:
+        st.markdown(
+            f"<div style='text-align:center; padding-top:8px;'>"
+            f"Página {pagina_atual} de {total_paginas}"
+            f"</div>",
+            unsafe_allow_html=True,
         )
 
-    pagina_atual = (
-        st.session_state.pagina_melhorias
-    )
+    with col_next:
+        if st.button(
+            "Próxima →",
+            disabled=pagina_atual >= total_paginas,
+            use_container_width=True,
+        ):
+            st.session_state[
+                "pagina_mapeamento"
+            ] = min(
+                total_paginas,
+                pagina_atual + 1,
+            )
+            st.rerun()
 
     inicio = (
         pagina_atual - 1
-    ) * registros_por_pagina
+    ) * REGISTROS_POR_PAGINA
 
     fim = (
         inicio
-        + registros_por_pagina
+        + REGISTROS_POR_PAGINA
     )
 
-    pagina = resumo.iloc[
+    pagina_df = df_lista.iloc[
         inicio:fim
     ]
 
-    # --------------------------------------------------------
-    # CABEÇALHO
-    # --------------------------------------------------------
+    for _, registro in pagina_df.iterrows():
 
-    h1, h2, h3, h4, h5, h6, h7, h8 = st.columns(
-        [
-            1.4,
-            2.2,
-            1.3,
-            1.2,
-            0.9,
-            1.3,
-            0.5,
-            0.5,
-        ]
-    )
-
-    with h1:
-        st.markdown(
-            "**Matrícula**"
+        matricula = normalizar_texto(
+            registro["Matrícula"]
         )
 
-    with h2:
-        st.markdown(
-            "**Endereço**"
+        historico_cliente = (
+            historico_da_matricula(
+                df_historico_filtrado,
+                matricula,
+            )
         )
 
-    with h3:
-        st.markdown(
-            "**Bairro**"
+        qtd_os = len(
+            historico_cliente
         )
 
-    with h4:
-        st.markdown(
-            "**Impacto**"
-        )
+        ultima_os = "—"
 
-    with h5:
-        st.markdown(
-            "**Resolvido**"
-        )
+        if not historico_cliente.empty:
 
-    with h6:
-        st.markdown(
-            "**O.S. / Última**"
-        )
+            aux = historico_cliente.copy()
 
-    with h7:
-        st.markdown(
-            "**✏️**"
-        )
+            aux["_data"] = pd.to_datetime(
+                aux["Data de Abertura"],
+                errors="coerce",
+            )
 
-    with h8:
-        st.markdown(
-            "**🗑️**"
-        )
+            aux = aux.sort_values(
+                "_data"
+            )
 
-    st.divider()
-
-    # --------------------------------------------------------
-    # LINHAS
-    # --------------------------------------------------------
-
-    for _, linha in pagina.iterrows():
-
-        registro_id = texto(
-            linha["ID"]
-        )
-
-        matricula_linha = texto(
-            linha["Matrícula"]
-        )
+            ultima_os = normalizar_texto(
+                aux.iloc[-1]["N. O.S"]
+            )
 
         with st.container(
             border=True
         ):
 
-            c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(
-                [
-                    1.4,
-                    2.2,
-                    1.3,
-                    1.2,
-                    0.9,
-                    1.3,
-                    0.5,
-                    0.5,
-                ]
+            col1, col2, col3, col4, col5 = st.columns(
+                [1.7, 2.5, 1.7, 1.1, 1.2]
             )
 
-            with c1:
+            with col1:
                 if st.button(
-                    matricula_linha,
-                    key=f"abrir_matricula_{registro_id}",
+                    matricula,
+                    key=f"abrir_matricula_{registro['ID']}",
+                    type="secondary",
                     use_container_width=True,
                 ):
-                    st.session_state.dialogo_melhorias = "matricula"
-                    st.session_state.dialogo_matricula = matricula_linha
-                    st.rerun()
-
-            with c2:
-                st.markdown(
-                    f"<div class='campo-lista'>"
-                    f"{html.escape(texto(linha['Endereço']))}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-            with c3:
-                st.markdown(
-                    f"<div class='campo-lista'>"
-                    f"{html.escape(texto(linha['Bairro']))}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-            with c4:
-                impacto = texto(
-                    linha["Grau de Impacto"]
-                )
-
-                st.markdown(
-                    f'<span class="{valor_badge(impacto)}">'
-                    f"{html.escape(impacto or '—')}"
-                    f"</span>",
-                    unsafe_allow_html=True,
-                )
-
-            with c5:
-                resolvido_linha = texto(
-                    linha["Resolvido"]
-                )
-
-                st.markdown(
-                    f'<span class="{valor_badge(resolvido_linha)}">'
-                    f"{html.escape(resolvido_linha or '—')}"
-                    f"</span>",
-                    unsafe_allow_html=True,
-                )
-
-            with c6:
-
-                qtd = int(
-                    linha["Qtd. O.S."]
-                )
-
-                ultima = linha[
-                    "Última O.S."
-                ]
-
-                ultima_txt = (
-                    ultima.strftime(
-                        "%d/%m/%Y"
+                    fechar_dialogo()
+                    abrir_dialogo(
+                        "matricula",
+                        matricula=matricula,
                     )
-                    if not pd.isna(ultima)
-                    else "—"
-                )
+                    st.rerun()
 
+            with col2:
                 st.markdown(
-                    f"**{qtd} O.S.**  \n"
-                    f"{ultima_txt}"
+                    f"**{normalizar_texto(registro['Endereço'])}**"
                 )
 
-            with c7:
-                if st.button(
-                    "✏️",
-                    key=f"editar_registro_{registro_id}",
-                    help="Editar registro",
-                ):
-                    st.session_state.dialogo_melhorias = "editar"
-                    st.session_state.dialogo_id = registro_id
-                    st.rerun()
+                st.caption(
+                    normalizar_texto(
+                        registro["Bairro"]
+                    )
+                )
 
-            with c8:
-                if st.button(
-                    "🗑️",
-                    key=f"excluir_registro_{registro_id}",
-                    help="Excluir registro",
-                ):
-                    st.session_state.tipo_exclusao = "registro"
-                    st.session_state.id_exclusao = registro_id
-                    st.session_state.matricula_exclusao = matricula_linha
-                    st.session_state.dialogo_melhorias = "confirmar_exclusao"
-                    st.rerun()
+            with col3:
+                st.caption(
+                    "Grau de Impacto"
+                )
 
-    # --------------------------------------------------------
-    # PAGINAÇÃO
-    # --------------------------------------------------------
+                st.write(
+                    normalizar_texto(
+                        registro["Grau de Impacto"]
+                    )
+                    or "—"
+                )
 
-    st.markdown("")
+            with col4:
+                st.caption(
+                    "O.S."
+                )
 
-    p1, p2, p3 = st.columns(
-        [
-            1,
-            2,
-            1,
-        ]
-    )
+                st.write(
+                    qtd_os
+                )
 
-    with p1:
-        if st.button(
-            "⬅️ Anterior",
-            disabled=(
-                pagina_atual <= 1
-            ),
-            use_container_width=True,
-        ):
-            st.session_state.pagina_melhorias -= 1
-            st.rerun()
+            with col5:
+                st.caption(
+                    "Última O.S."
+                )
 
-    with p2:
-        st.markdown(
-            f"<div style='text-align:center; padding-top:8px;'>"
-            f"Página <b>{pagina_atual}</b> de <b>{total_paginas}</b>"
-            f" &nbsp; • &nbsp; {total_registros} registros"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-    with p3:
-        if st.button(
-            "Próxima ➡️",
-            disabled=(
-                pagina_atual >= total_paginas
-            ),
-            use_container_width=True,
-        ):
-            st.session_state.pagina_melhorias += 1
-            st.rerun()
+                st.write(
+                    ultima_os
+                )
 
 
 # ============================================================
 # ROTEAMENTO DOS DIÁLOGOS
 # ============================================================
 
-dialogo_atual = (
-    st.session_state.dialogo_melhorias
+dialogo_atual = st.session_state.get(
+    "dialogo_melhorias"
 )
 
 
 if dialogo_atual == "novo":
 
     dialogo_novo_registro(
-        ws_registro,
-        ws_historico,
+        df_registro,
         df_historico,
     )
 
 elif dialogo_atual == "editar":
 
-    dialogo_editar_registro(
-        ws_registro,
-        ws_historico,
-        df_registro,
-        st.session_state.dialogo_id,
+    registro_dialogo = st.session_state.get(
+        "dialogo_registro"
     )
+
+    if registro_dialogo:
+        dialogo_editar_registro(
+            registro_dialogo,
+            df_registro,
+            df_historico,
+        )
 
 elif dialogo_atual == "matricula":
 
-    dialogo_matricula(
-        df_registro,
-        df_historico,
-        st.session_state.dialogo_matricula,
+    matricula_dialogo = st.session_state.get(
+        "dialogo_matricula"
     )
+
+    if matricula_dialogo:
+        dialogo_matricula(
+            matricula_dialogo,
+            df_registro,
+            df_historico,
+        )
 
 elif dialogo_atual == "nova_os":
 
-    dialogo_nova_os(
-        ws_historico,
-        st.session_state.dialogo_os_matricula,
+    matricula_dialogo = st.session_state.get(
+        "dialogo_matricula"
     )
+
+    if matricula_dialogo:
+        dialogo_nova_os(
+            matricula_dialogo,
+            df_historico,
+        )
 
 elif dialogo_atual == "editar_os":
 
-    dialogo_editar_os(
-        ws_historico,
-        df_historico,
-        st.session_state.dialogo_os_id,
-        st.session_state.dialogo_os_matricula,
+    os_id_dialogo = st.session_state.get(
+        "dialogo_os_id"
     )
 
-elif dialogo_atual == "confirmar_exclusao":
-
-    dialogo_confirmar_exclusao(
-        ws_registro,
-        ws_historico,
+    matricula_dialogo = st.session_state.get(
+        "dialogo_matricula"
     )
+
+    if os_id_dialogo and matricula_dialogo:
+        dialogo_editar_os(
+            os_id_dialogo,
+            matricula_dialogo,
+            df_historico,
+        )
+
+elif (
+    dialogo_atual
+    == "confirmar_exclusao_registro"
+):
+
+    registro_dialogo = st.session_state.get(
+        "dialogo_registro"
+    )
+
+    if registro_dialogo:
+        dialogo_confirmar_exclusao_registro(
+            registro_dialogo
+        )
+
+elif (
+    dialogo_atual
+    == "confirmar_exclusao_os"
+):
+
+    os_id_dialogo = st.session_state.get(
+        "dialogo_os_id"
+    )
+
+    matricula_dialogo = st.session_state.get(
+        "dialogo_matricula"
+    )
+
+    if os_id_dialogo and matricula_dialogo:
+        dialogo_confirmar_exclusao_os(
+            os_id_dialogo,
+            matricula_dialogo,
+            df_historico,
+        )
