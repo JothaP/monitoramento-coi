@@ -174,9 +174,12 @@ def gerar_id():
 
 
 def parse_float(valor, default=None):
-    """Converte números aceitando vírgula ou ponto decimal."""
+    """Converte números aceitando vírgula/ponto e sinais Unicode."""
     try:
         if valor is None:
+            return default
+
+        if isinstance(valor, bool):
             return default
 
         if isinstance(valor, (int, float)):
@@ -185,11 +188,43 @@ def parse_float(valor, default=None):
             return float(valor)
 
         valor = texto(valor)
-        if not valor or valor.lower() in ("nan", "none", "nat"):
+        if not valor:
             return default
 
-        valor = valor.replace(" ", "").replace(",", ".")
+        # Google Sheets pode devolver o sinal de menos como caractere
+        # Unicode. Também removemos espaços comuns e não separáveis.
+        valor = (
+            valor.replace("\u2212", "-")
+            .replace("\u2012", "-")
+            .replace("\u2013", "-")
+            .replace("\u2014", "-")
+            .replace("\u00a0", "")
+            .strip()
+        )
+        valor = "".join(valor.split())
+
+        if valor.lower() in (
+            "nan",
+            "none",
+            "nat",
+            "null",
+        ):
+            return default
+
+        # Aceita tanto -5,0892 quanto -5.0892.
+        # Quando os dois separadores aparecem, considera o último
+        # separador como decimal e os anteriores como milhares.
+        if "," in valor and "." in valor:
+            if valor.rfind(",") > valor.rfind("."):
+                valor = valor.replace(".", "")
+                valor = valor.replace(",", ".")
+            else:
+                valor = valor.replace(",", "")
+        elif "," in valor:
+            valor = valor.replace(",", ".")
+
         return float(valor)
+
     except (ValueError, TypeError):
         return default
 
@@ -434,27 +469,46 @@ def carregar_worksheet(
     worksheet,
     headers,
 ):
+    """Carrega a aba preservando os valores brutos do Google Sheets.
 
-    registros = worksheet.get_all_records(
-        default_blank=""
-    )
+    Usamos get_all_values() em vez de get_all_records() para que a
+    configuração regional da planilha não altere a interpretação de
+    coordenadas com vírgula decimal. Latitude e Longitude são convertidas
+    explicitamente depois da leitura.
+    """
+    valores = worksheet.get_all_values()
 
-    if not registros:
-        return pd.DataFrame(
-            columns=headers
-        )
+    if not valores or len(valores) <= 1:
+        return pd.DataFrame(columns=headers)
+
+    cabecalho = [texto(valor) for valor in valores[0]]
+    indice_coluna = {
+        nome: indice
+        for indice, nome in enumerate(cabecalho)
+    }
+
+    registros = []
+
+    for linha in valores[1:]:
+        registro = {}
+
+        for coluna in headers:
+            indice = indice_coluna.get(coluna)
+            if indice is None or indice >= len(linha):
+                registro[coluna] = ""
+            else:
+                registro[coluna] = linha[indice]
+
+        registros.append(registro)
 
     df = pd.DataFrame(
-        registros
+        registros,
+        columns=headers,
     )
 
-    for coluna in headers:
-        if coluna not in df.columns:
-            df[coluna] = ""
-
-    # Google Sheets pode devolver coordenadas como texto com vírgula
-    # decimal ou como número. Normalizamos ambas as formas antes de
-    # qualquer filtro, edição ou desenho no mapa.
+    # A normalização acontece imediatamente após a leitura dos valores
+    # brutos. Assim, tanto "-5,0892" quanto "-5.0892" chegam ao mapa
+    # como float Python, independentemente da localidade do Sheets.
     if "Latitude" in df.columns:
         df["Latitude"] = df["Latitude"].apply(
             lambda valor: normalizar_coordenada(valor, "lat")
@@ -1630,6 +1684,12 @@ def construir_mapa(
             registro["Longitude"],
             "lon",
         )
+
+        # As coordenadas já chegam normalizadas de carregar_worksheet(),
+        # mas fazemos uma segunda validação no ponto de desenho para
+        # garantir que o Folium receba somente floats válidos.
+        if latitude is None or longitude is None:
+            continue
 
         if not coordenadas_validas(
             latitude,
