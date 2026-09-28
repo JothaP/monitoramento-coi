@@ -758,6 +758,7 @@ except Exception as erro:
 
     st.stop()
 
+
 # ============================================================
 # DADOS
 # ============================================================
@@ -779,6 +780,7 @@ except Exception as erro:
     )
 
     st.stop()
+
 
 # ============================================================
 # GARANTIR CABEÇALHOS
@@ -1782,7 +1784,6 @@ if municipio_filtro != "Todos":
         == municipio_filtro
     ]
 
-
 if poco_filtro != "Todos":
 
     pocos_mapa = pocos_mapa[
@@ -1876,32 +1877,40 @@ tipo_mapa = st.selectbox(
 # COORDENADAS DOS POÇOS
 # ============================================================
 
-coordenadas = pocos_mapa.copy()
+if municipio_filtro != "Todos":
 
-coordenadas["LATITUDE"] = coordenadas[
-    "LATITUDE"
-].apply(
-    lambda x: normalizar_coordenada(
-        x,
-        "lat",
+    coordenadas = pocos_mapa.copy()
+
+    coordenadas["LATITUDE"] = coordenadas[
+        "LATITUDE"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lat",
+        )
     )
-)
 
-coordenadas["LONGITUDE"] = coordenadas[
-    "LONGITUDE"
-].apply(
-    lambda x: normalizar_coordenada(
-        x,
-        "lon",
+    coordenadas["LONGITUDE"] = coordenadas[
+        "LONGITUDE"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lon",
+        )
     )
-)
 
-coordenadas = coordenadas.dropna(
-    subset=[
-        "LATITUDE",
-        "LONGITUDE",
-    ]
-).copy()
+    coordenadas = coordenadas.dropna(
+        subset=[
+            "LATITUDE",
+            "LONGITUDE",
+        ]
+    ).copy()
+
+else:
+
+    coordenadas = pd.DataFrame(
+        columns=pocos_mapa.columns
+    )
 
 
 # ============================================================
@@ -1921,60 +1930,6 @@ if not coordenadas.empty:
             "LONGITUDE"
         ].mean()
     )
-
-elif not df_pocos.empty:
-
-    coordenadas_todas = df_pocos.copy()
-
-    coordenadas_todas["LATITUDE"] = (
-        coordenadas_todas[
-            "LATITUDE"
-        ].apply(
-            lambda x: normalizar_coordenada(
-                x,
-                "lat",
-            )
-        )
-    )
-
-    coordenadas_todas["LONGITUDE"] = (
-        coordenadas_todas[
-            "LONGITUDE"
-        ].apply(
-            lambda x: normalizar_coordenada(
-                x,
-                "lon",
-            )
-        )
-    )
-
-    coordenadas_todas = (
-        coordenadas_todas.dropna(
-            subset=[
-                "LATITUDE",
-                "LONGITUDE",
-            ]
-        )
-    )
-
-    if not coordenadas_todas.empty:
-
-        centro_lat = float(
-            coordenadas_todas[
-                "LATITUDE"
-            ].mean()
-        )
-
-        centro_lon = float(
-            coordenadas_todas[
-                "LONGITUDE"
-            ].mean()
-        )
-
-    else:
-
-        centro_lat = -5.0892
-        centro_lon = -42.8016
 
 else:
 
@@ -1996,102 +1951,9 @@ mapa = folium.Map(
     attr=config_mapa["attr"],
 )
 
+
 # ============================================================
 # MARCADORES
-# ============================================================
-
-if municipio_filtro != "Todos":
-
-    for _, poco in coordenadas.iterrows():
-
-        id_poco = str(
-            poco["ID_POCO"]
-        )
-
-    leitura = ultimas_leituras.get(
-        id_poco
-    )
-
-    nome_exibicao = identificacao_exibicao(
-        poco
-    )
-
-    if leitura is None:
-
-        status = "Sem leitura no período"
-
-        detalhe_leitura = (
-            "Sem leitura registrada no período."
-        )
-
-    else:
-
-        vazao = leitura["VAZAO"]
-        unidade = leitura["UNIDADE"]
-
-        data_leitura = (
-            leitura["DATA_LEITURA_DT"]
-        )
-
-        dias = dias_desde_leitura(
-            data_leitura
-        )
-
-        status = (
-            f"{vazao} {unidade}"
-        )
-
-        detalhe_leitura = (
-            f"<b>Última leitura:</b> "
-            f"{data_leitura.strftime('%d/%m/%Y')}<br>"
-            f"<b>Vazão:</b> "
-            f"{vazao} {unidade}<br>"
-            f"<b>Dias desde a leitura:</b> "
-            f"{dias}"
-        )
-
-    popup_html = f"""
-    <div style="min-width:250px">
-        <b>{nome_exibicao}</b><br><br>
-
-        <b>Município:</b>
-        {poco["MUNICIPIO"]}<br>
-
-        <b>ID interno:</b>
-        {id_poco}<br><br>
-
-        <b>Latitude:</b>
-        {poco["LATITUDE"]}<br>
-
-        <b>Longitude:</b>
-        {poco["LONGITUDE"]}<br><br>
-
-        <b>Status:</b>
-        {status}<br><br>
-
-        {detalhe_leitura}
-    </div>
-    """
-
-    folium.Marker(
-        location=[
-            float(
-                poco["LATITUDE"]
-            ),
-            float(
-                poco["LONGITUDE"]
-            ),
-        ],
-        tooltip=nome_exibicao,
-        popup=folium.Popup(
-            popup_html,
-            max_width=350,
-        ),
-    ).add_to(mapa)
-
-
-# ============================================================
-# AJUSTE AUTOMÁTICO DO ENQUADRAMENTO
 # ============================================================
 
 if municipio_filtro != "Todos":
@@ -2105,6 +1967,95 @@ if municipio_filtro != "Todos":
         leitura = ultimas_leituras.get(
             id_poco
         )
+
+        nome_exibicao = identificacao_exibicao(
+            poco
+        )
+
+        if leitura is None:
+
+            status = "Sem leitura no período"
+
+            detalhe_leitura = (
+                "Sem leitura registrada no período."
+            )
+
+        else:
+
+            vazao = leitura["VAZAO"]
+            unidade = leitura["UNIDADE"]
+
+            data_leitura = (
+                leitura["DATA_LEITURA_DT"]
+            )
+
+            dias = dias_desde_leitura(
+                data_leitura
+            )
+
+            status = (
+                f"{vazao} {unidade}"
+            )
+
+            detalhe_leitura = (
+                f"<b>Última leitura:</b> "
+                f"{data_leitura.strftime('%d/%m/%Y')}<br>"
+                f"<b>Vazão:</b> "
+                f"{vazao} {unidade}<br>"
+                f"<b>Dias desde a leitura:</b> "
+                f"{dias}"
+            )
+
+        popup_html = f"""
+        <div style="min-width:250px">
+            <b>{nome_exibicao}</b><br><br>
+
+            <b>Município:</b>
+            {poco["MUNICIPIO"]}<br>
+
+            <b>ID interno:</b>
+            {id_poco}<br><br>
+
+            <b>Latitude:</b>
+            {poco["LATITUDE"]}<br>
+
+            <b>Longitude:</b>
+            {poco["LONGITUDE"]}<br><br>
+
+            <b>Status:</b>
+            {status}<br><br>
+
+            {detalhe_leitura}
+        </div>
+        """
+
+        folium.Marker(
+            location=[
+                float(
+                    poco["LATITUDE"]
+                ),
+                float(
+                    poco["LONGITUDE"]
+                ),
+            ],
+            tooltip=nome_exibicao,
+            popup=folium.Popup(
+                popup_html,
+                max_width=350,
+            ),
+        ).add_to(mapa)
+
+
+# ============================================================
+# AJUSTE AUTOMÁTICO DO ENQUADRAMENTO
+# ============================================================
+
+if (
+    municipio_filtro != "Todos"
+    and not coordenadas.empty
+):
+
+    mapa.fit_bounds(
         [
             [
                 coordenadas[
@@ -2143,7 +2094,8 @@ st_folium(
 # ============================================================
 
 if (
-    not pocos_mapa.empty
+    municipio_filtro != "Todos"
+    and not pocos_mapa.empty
     and coordenadas.empty
 ):
 
@@ -2241,9 +2193,7 @@ else:
 
     poco_grafico = st.selectbox(
         "Poço para o gráfico",
-        list(
-            opcoes_grafico.keys()
-        ),
+        list(opcoes_grafico.keys()),
         key="poco_grafico",
     )
 
@@ -2300,6 +2250,6 @@ else:
 
 st.caption(
     "Dados sincronizados com Google Sheets. "
-    "As leituras são mantidas em cache por até 30 segundos "
+    "As leituras são mantidas em cache por até 120 segundos "
     "e o cache é atualizado imediatamente após alterações."
 )
