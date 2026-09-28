@@ -141,7 +141,7 @@ SPREADSHEET_ID = st.secrets.get(
 )
 
 
-REGISTRO_HEADERS = [
+REGISTRO_CABEÇALHO = [
     "ID",
     "Matrícula",
     "Endereço",
