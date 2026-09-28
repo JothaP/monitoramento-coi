@@ -173,59 +173,55 @@ def gerar_id():
     return uuid4().hex[:12]
 
 
-def converter_float(valor):
-    """Converte coordenadas/números vindos do Google Sheets com robustez."""
-    if valor is None:
-        return None
-
+def parse_float(valor, default=None):
+    """Converte números aceitando vírgula ou ponto decimal."""
     try:
-        if pd.isna(valor):
-            return None
-    except Exception:
-        pass
+        if valor is None:
+            return default
 
-    if isinstance(valor, (int, float)):
-        try:
+        if isinstance(valor, (int, float)):
+            if isinstance(valor, float) and math.isnan(valor):
+                return default
             return float(valor)
-        except (TypeError, ValueError):
-            return None
 
-    valor = texto(valor)
+        valor = texto(valor)
+        if not valor or valor.lower() in ("nan", "none", "nat"):
+            return default
 
-    if not valor:
-        return None
-
-    # Aceita decimal brasileiro e remove espaços/caracteres
-    # que podem acompanhar o valor quando ele vem da planilha.
-    valor = (
-        valor
-        .replace("−", "-")
-        .replace("–", "-")
-        .replace("°", "")
-        .replace(" ", "")
-    )
-
-    # Se houver vírgula decimal, converte para ponto.
-    if "," in valor and "." not in valor:
-        valor = valor.replace(",", ".")
-
-    try:
+        valor = valor.replace(" ", "").replace(",", ".")
         return float(valor)
-    except (TypeError, ValueError):
+    except (ValueError, TypeError):
+        return default
+
+
+def converter_float(valor):
+    return parse_float(valor, default=None)
+
+
+def normalizar_coordenada(valor, tipo="lat"):
+    """Normaliza coordenadas para float com até 6 casas decimais."""
+    num = parse_float(valor, default=None)
+
+    if num is None:
         return None
+
+    if tipo == "lat" and not (-90.0 <= num <= 90.0):
+        return None
+
+    if tipo == "lon" and not (-180.0 <= num <= 180.0):
+        return None
+
+    if num == 0.0:
+        return None
+
+    return round(float(num), 6)
 
 
 def coordenadas_validas(latitude, longitude):
-    lat = converter_float(latitude)
-    lon = converter_float(longitude)
+    lat = normalizar_coordenada(latitude, "lat")
+    lon = normalizar_coordenada(longitude, "lon")
 
-    if lat is None or lon is None:
-        return False
-
-    return (
-        -90 <= lat <= 90
-        and -180 <= lon <= 180
-    )
+    return lat is not None and lon is not None
 
 
 def formatar_data(valor):
@@ -371,6 +367,7 @@ def garantir_cabecalho(
         )
 
 
+@st.cache_resource
 def obter_planilhas():
 
     try:
@@ -454,6 +451,19 @@ def carregar_worksheet(
     for coluna in headers:
         if coluna not in df.columns:
             df[coluna] = ""
+
+    # Google Sheets pode devolver coordenadas como texto com vírgula
+    # decimal ou como número. Normalizamos ambas as formas antes de
+    # qualquer filtro, edição ou desenho no mapa.
+    if "Latitude" in df.columns:
+        df["Latitude"] = df["Latitude"].apply(
+            lambda valor: normalizar_coordenada(valor, "lat")
+        )
+
+    if "Longitude" in df.columns:
+        df["Longitude"] = df["Longitude"].apply(
+            lambda valor: normalizar_coordenada(valor, "lon")
+        )
 
     return df[headers].copy()
 
@@ -627,14 +637,14 @@ def adicionar_registro_com_os(
     dados_os,
 ):
     """
-    Grava o registro e a O.S. inicial e confirma a gravação.
+    Salva o registro principal e sua O.S. inicial juntos.
 
-    A confirmação é importante porque o registro principal e o
-    histórico ficam em abas diferentes. Se a O.S. não aparecer
-    no histórico após o append, o cadastro principal é desfeito.
+    Se a gravação da O.S. falhar depois de o registro principal
+    ter sido salvo, tenta remover o registro principal para evitar
+    que a base fique com uma melhoria sem a O.S. inicial.
     """
 
-    registro_ws, historico_ws = obter_planilhas()
+    registro_ws, _ = obter_planilhas()
 
     adicionar_registro(
         dados_registro
@@ -644,20 +654,7 @@ def adicionar_registro_com_os(
         adicionar_os(
             dados_os
         )
-
-        # Confirma que a O.S. realmente chegou à aba Histórico.
-        linha_os = localizar_linha(
-            historico_ws,
-            dados_os["ID"],
-        )
-
-        if linha_os is None:
-            raise RuntimeError(
-                "A O.S. inicial não apareceu na aba Histórico "
-                "após a gravação. O cadastro não foi concluído."
-            )
-
-    except Exception as exc:
+    except Exception:
         try:
             linha = localizar_linha(
                 registro_ws,
@@ -670,12 +667,13 @@ def adicionar_registro_com_os(
                 )
         except Exception as rollback_exc:
             raise RuntimeError(
-                "A O.S. inicial não foi gravada e também não foi "
-                "possível desfazer o cadastro principal. Verifique "
-                "a planilha."
+                "A O.S. inicial não foi gravada e "
+                "também não foi possível desfazer o "
+                "cadastro principal. Verifique a planilha."
             ) from rollback_exc
 
-        raise exc
+        raise
+
 
 def atualizar_os(
     os_id,
@@ -961,10 +959,45 @@ def aplicar_filtros(
                     )
                 ]
 
-                # O filtro de data afeta o HISTÓRICO, mas não remove
-                # o cadastro da melhoria. Assim, um ponto que possui
-                # latitude/longitude continua visível no mapa mesmo
-                # quando sua O.S. não está dentro do período escolhido.
+                # Mantém no mapa/lista as melhorias que ainda não
+                # possuem histórico. Elas podem ser registros novos
+                # e já possuem latitude/longitude válidas.
+                matriculas_periodo = set(
+                    historico["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                )
+
+                matriculas_com_historico = set(
+                    df_historico["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                )
+
+                matriculas_sem_historico = (
+                    set(
+                        registro["Matrícula"]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                    )
+                    - matriculas_com_historico
+                )
+
+                matriculas_permitidas = (
+                    matriculas_periodo
+                    | matriculas_sem_historico
+                )
+
+                registro = registro[
+                    registro["Matrícula"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin(matriculas_permitidas)
+                ]
 
     # --------------------------------------------------------
     # BAIRRO
@@ -1588,14 +1621,14 @@ def construir_mapa(
 
     for _, registro in df_registro.iterrows():
 
-        # As coordenadas são lidas diretamente do cadastro da melhoria.
-        # Não dependem do histórico de O.S. nem do filtro de data.
-        latitude = converter_float(
-            registro.get("Latitude")
+        latitude = normalizar_coordenada(
+            registro["Latitude"],
+            "lat",
         )
 
-        longitude = converter_float(
-            registro.get("Longitude")
+        longitude = normalizar_coordenada(
+            registro["Longitude"],
+            "lon",
         )
 
         if not coordenadas_validas(
@@ -1762,15 +1795,6 @@ def construir_mapa(
     folium.LayerControl().add_to(
         mapa
     )
-
-    # Garante que o mapa seja enquadrado nas coordenadas cadastradas.
-    # Isso evita que um ponto válido fique fora da área inicialmente visível.
-    if bounds:
-        if len(bounds) == 1:
-            mapa.location = bounds[0]
-            mapa.zoom_start = 16
-        else:
-            mapa.fit_bounds(bounds, padding=(20, 20))
 
     return mapa
 
@@ -1964,59 +1988,73 @@ def dialogo_novo_registro(
 
         return
 
-    # A O.S. informada no cadastro inicial deve ser gravada
-    # obrigatoriamente no Histórico.
+    # IMPORTANTE:
+    # Não usar o nome "adicionar_os" aqui.
+    # "adicionar_os" é a função responsável pelo CRUD da O.S.
+    deve_adicionar_os = True
+
+    if not historico_existente.empty:
+
+        st.info(
+            "Esta matrícula já possui histórico de O.S."
+        )
+
+        deve_adicionar_os = st.checkbox(
+            "Adicionar uma nova O.S.",
+            value=False,
+            key="novo_adicionar_os",
+        )
+
     numero_os = ""
     data_abertura = datetime.now()
     pressao = 0.0
     pontual = "SIM"
 
-    if not historico_existente.empty:
-        st.info(
-            "Esta matrícula já possui histórico de O.S. O número "
-            "informado abaixo será acrescentado ao histórico."
-        )
+    if (
+        historico_existente.empty
+        or deve_adicionar_os
+    ):
 
-    col7, col8 = st.columns(2)
+        col7, col8 = st.columns(2)
 
-    with col7:
+        with col7:
 
-        numero_os = st.text_input(
-            "N. O.S *",
-            placeholder="Digite a identificação da O.S.",
-            key="novo_numero_os",
-        )
+            numero_os = st.text_input(
+                "N. O.S *",
+                placeholder="Digite a identificação da O.S.",
+                key="novo_numero_os",
+            )
 
-    with col8:
+        with col8:
 
-        data_abertura = st.datetime_input(
-            "Data de Abertura *",
-            value=datetime.now(),
-            key="novo_data_abertura",
-        )
+            data_abertura = st.datetime_input(
+                "Data de Abertura *",
+                value=datetime.now(),
+                key="novo_data_abertura",
+            )
 
-    col9, col10 = st.columns(2)
+        col9, col10 = st.columns(2)
 
-    with col9:
+        with col9:
 
-        pressao = st.number_input(
-            "Pressão (MCA) *",
-            min_value=0.0,
-            step=0.01,
-            format="%.2f",
-            key="novo_pressao",
-        )
+            pressao = st.number_input(
+                "Pressão (MCA) *",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key="novo_pressao",
+            )
 
-    with col10:
+        with col10:
 
-        pontual = st.selectbox(
-            "Pontual",
-            [
-                "SIM",
-                "NÃO",
-            ],
-            key="novo_pontual",
-        )
+            pontual = st.selectbox(
+                "Pontual",
+                [
+                    "SIM",
+                    "NÃO",
+                ],
+                key="novo_pontual",
+            )
 
     salvar = st.button(
         "💾 Salvar",
@@ -2064,7 +2102,10 @@ def dialogo_novo_registro(
     # N. O.S. É TEXTO LIVRE
     # --------------------------------------------------------
 
-    if True:
+    if (
+        historico_existente.empty
+        or deve_adicionar_os
+    ):
 
         numero_os = texto(
             numero_os
@@ -2101,11 +2142,13 @@ def dialogo_novo_registro(
         "Matrícula": matricula,
         "Endereço": endereco.strip(),
         "Bairro": bairro.strip(),
-        "Latitude": converter_float(
-            latitude
+        "Latitude": normalizar_coordenada(
+            latitude,
+            "lat",
         ),
-        "Longitude": converter_float(
-            longitude
+        "Longitude": normalizar_coordenada(
+            longitude,
+            "lon",
         ),
         "Parecer": parecer,
         "Data de Registro": (
@@ -2127,27 +2170,39 @@ def dialogo_novo_registro(
         # NOVO REGISTRO + O.S. INICIAL
         # ----------------------------------------------------
 
-        dados_os = {
-            "ID": gerar_id(),
-            "Matrícula": matricula,
-            "N. O.S": texto(
-                numero_os
-            ),
-            "Data de Abertura": (
-                data_abertura.strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            ),
-            "Pressão": pressao,
-            "Pontual": pontual,
-        }
+        if (
+            historico_existente.empty
+            or deve_adicionar_os
+        ):
 
-        # O cadastro inicial e sua O.S. são gravados juntos.
-        # Se a O.S. falhar, o registro principal é desfeito.
-        adicionar_registro_com_os(
-            dados,
-            dados_os,
-        )
+            dados_os = {
+                "ID": gerar_id(),
+                "Matrícula": matricula,
+                "N. O.S": texto(
+                    numero_os
+                ),
+                "Data de Abertura": (
+                    data_abertura.strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                ),
+                "Pressão": pressao,
+                "Pontual": pontual,
+            }
+
+            # O cadastro inicial e sua O.S. são gravados juntos.
+            # Se a O.S. falhar, o registro principal é desfeito.
+            adicionar_registro_com_os(
+                dados,
+                dados_os,
+            )
+
+        else:
+            # Este caminho não é esperado para um novo cadastro,
+            # mas preserva a lógica caso a rotina seja reutilizada.
+            adicionar_registro(
+                dados
+            )
 
         fechar_dialogo()
 
@@ -2378,11 +2433,13 @@ def dialogo_editar_registro(
         "Matrícula": matricula,
         "Endereço": endereco.strip(),
         "Bairro": bairro.strip(),
-        "Latitude": converter_float(
-            latitude
+        "Latitude": normalizar_coordenada(
+            latitude,
+            "lat",
         ),
-        "Longitude": converter_float(
-            longitude
+        "Longitude": normalizar_coordenada(
+            longitude,
+            "lon",
         ),
         "Parecer": parecer,
         "Data de Registro": (
