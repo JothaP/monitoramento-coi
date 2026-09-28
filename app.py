@@ -2,12 +2,24 @@ import streamlit as st
 
 from auth import fazer_login, verificar_autenticacao, fazer_logout
 
+# ============================================================
+
+# CONFIGURAÇÃO DA PÁGINA
+
+# ============================================================
+
 st.set_page_config(
 page_title="Plataforma COI - Hub Central",
 page_icon="🏢",
 layout="wide",
 initial_sidebar_state="collapsed",
 )
+
+# ============================================================
+
+# OCULTAR NAVEGAÇÃO PADRÃO
+
+# ============================================================
 
 st.markdown(
 """ <style>
@@ -18,8 +30,20 @@ display: none;
 unsafe_allow_html=True,
 )
 
+# ============================================================
+
+# SENHAS
+
+# ============================================================
+
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN", "admin2026")
 SENHA_USUARIO = st.secrets.get("SENHA_USUARIO", "coi2026")
+
+# ============================================================
+
+# AUTENTICAÇÃO
+
+# ============================================================
 
 verificar_autenticacao()
 
@@ -94,6 +118,12 @@ key="toggle_modo_escuro_hub",
 
 st.session_state.modo_escuro_hub = modo_escuro_hub
 
+# ============================================================
+
+# MODO ESCURO
+
+# ============================================================
+
 if modo_escuro_hub:
 st.markdown(
 """ <style>
@@ -142,6 +172,12 @@ color: #fafafa;
     unsafe_allow_html=True,
 )
 ```
+
+# ============================================================
+
+# INFORMAÇÕES DO USUÁRIO
+
+# ============================================================
 
 perfil_atual = st.session_state.perfil.upper()
 
