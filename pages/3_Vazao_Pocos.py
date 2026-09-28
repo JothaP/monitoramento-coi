@@ -1,5 +1,6 @@
 import io
 import hashlib
+import re
 import json
 import unicodedata
 from datetime import datetime, date, timedelta
@@ -320,7 +321,12 @@ def parse_float(valor, default=None):
 
         try:
 
-            return float(valor)
+            numero = float(valor)
+
+            if pd.isna(numero):
+                return default
+
+            return numero
 
         except (ValueError, TypeError):
 
@@ -334,18 +340,31 @@ def parse_float(valor, default=None):
             "nan",
             "none",
             "nat",
-            "",
         ):
 
             return default
 
-        texto = (
-            texto
-            .replace(",", ".")
-            .replace(" ", "")
-        )
+        texto = texto.replace(" ", "")
 
-        return float(texto)
+        # Trata formatos brasileiros como 1.234,56
+        if "," in texto:
+
+            texto = (
+                texto
+                .replace(".", "")
+                .replace(",", ".")
+            )
+
+        else:
+
+            texto = texto.replace(",", ".")
+
+        numero = float(texto)
+
+        if pd.isna(numero):
+            return default
+
+        return numero
 
     except (ValueError, TypeError):
 
@@ -996,6 +1015,56 @@ def processar_upload_leituras(
             default=None,
         )
 
+        # ----------------------------------------------------
+        # Vazão é obrigatória para uma leitura válida.
+        # Linhas sem vazão NÃO são importadas.
+        # ----------------------------------------------------
+
+        if vazao is None:
+            invalidas.append(
+                {
+                    "Linha": numero_linha,
+                    "Motivo": (
+                        "Vazão não informada. "
+                        "A linha não representa uma leitura válida."
+                    ),
+                    "Cod.Infra": identificacao_ativo,
+                    "Data": (
+                        data_leitura.strftime("%d/%m/%Y")
+                        if pd.notna(data_leitura)
+                        else str(
+                            linha.get(
+                                coluna_data,
+                                ""
+                            )
+                        ).strip()
+                    ),
+                    "Vazão": "",
+                }
+            )
+            continue
+
+        if vazao < 0:
+            invalidas.append(
+                {
+                    "Linha": numero_linha,
+                    "Motivo": "Vazão negativa.",
+                    "Cod.Infra": identificacao_ativo,
+                    "Data": (
+                        data_leitura.strftime("%d/%m/%Y")
+                        if pd.notna(data_leitura)
+                        else str(
+                            linha.get(
+                                coluna_data,
+                                ""
+                            )
+                        ).strip()
+                    ),
+                    "Vazão": vazao,
+                }
+            )
+            continue
+
         pressao = ""
 
         if coluna_pressao:
@@ -1125,13 +1194,9 @@ def processar_upload_leituras(
                 ),
                 "VAZAO": (
                     str(vazao).replace(".", ",")
-                    if vazao is not None
-                    else ""
                 ),
                 "UNIDADE": (
-                    "m³/h"
-                    if vazao is not None
-                    else ""
+                    "m³/h — Metros cúbicos por hora"
                 ),
                 "PRESSAO": pressao,
                 "OBS": obs,
@@ -2233,7 +2298,8 @@ def modal_importar_leituras():
 
     st.caption(
         "Colunas esperadas: Municípios, Descrição do ativo, "
-        "Cod.Infra, Data, Vazão (m³/h), Pressão e Obs."
+        "Cod.Infra, Data, Vazão (m³/h), Pressão e Obs. "
+        "Linhas sem vazão não serão importadas."
     )
 
     arquivo = st.file_uploader(
@@ -2348,6 +2414,23 @@ def modal_importar_leituras():
 
         st.success(
             f"{len(registros)} nova(s) leitura(s) pronta(s) para importação."
+        )
+
+        st.subheader("Leituras válidas")
+
+        st.dataframe(
+            pd.DataFrame(registros)[
+                [
+                    "IDENTIFICACAO_ATIVO",
+                    "DATA_LEITURA",
+                    "VAZAO",
+                    "UNIDADE",
+                    "PRESSAO",
+                    "OBS",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
         )
 
         confirmar = st.checkbox(
