@@ -598,6 +598,7 @@ def preparar_leituras(df):
         df["DATA_LEITURA"],
         errors="coerce",
         dayfirst=True,
+        format="mixed",
     )
 
     df["VAZAO_NUM"] = pd.to_numeric(
