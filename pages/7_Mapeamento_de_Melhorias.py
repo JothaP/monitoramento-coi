@@ -352,7 +352,6 @@ def garantir_cabecalho(
         )
 
 
-@st.cache_resource
 def obter_planilhas():
 
     try:
@@ -609,14 +608,14 @@ def adicionar_registro_com_os(
     dados_os,
 ):
     """
-    Salva o registro principal e sua O.S. inicial juntos.
+    Grava o registro e a O.S. inicial e confirma a gravação.
 
-    Se a gravação da O.S. falhar depois de o registro principal
-    ter sido salvo, tenta remover o registro principal para evitar
-    que a base fique com uma melhoria sem a O.S. inicial.
+    A confirmação é importante porque o registro principal e o
+    histórico ficam em abas diferentes. Se a O.S. não aparecer
+    no histórico após o append, o cadastro principal é desfeito.
     """
 
-    registro_ws, _ = obter_planilhas()
+    registro_ws, historico_ws = obter_planilhas()
 
     adicionar_registro(
         dados_registro
@@ -626,7 +625,20 @@ def adicionar_registro_com_os(
         adicionar_os(
             dados_os
         )
-    except Exception:
+
+        # Confirma que a O.S. realmente chegou à aba Histórico.
+        linha_os = localizar_linha(
+            historico_ws,
+            dados_os["ID"],
+        )
+
+        if linha_os is None:
+            raise RuntimeError(
+                "A O.S. inicial não apareceu na aba Histórico "
+                "após a gravação. O cadastro não foi concluído."
+            )
+
+    except Exception as exc:
         try:
             linha = localizar_linha(
                 registro_ws,
@@ -639,13 +651,12 @@ def adicionar_registro_com_os(
                 )
         except Exception as rollback_exc:
             raise RuntimeError(
-                "A O.S. inicial não foi gravada e "
-                "também não foi possível desfazer o "
-                "cadastro principal. Verifique a planilha."
+                "A O.S. inicial não foi gravada e também não foi "
+                "possível desfazer o cadastro principal. Verifique "
+                "a planilha."
             ) from rollback_exc
 
-        raise
-
+        raise exc
 
 def atualizar_os(
     os_id,
@@ -931,45 +942,10 @@ def aplicar_filtros(
                     )
                 ]
 
-                # Mantém no mapa/lista as melhorias que ainda não
-                # possuem histórico. Elas podem ser registros novos
-                # e já possuem latitude/longitude válidas.
-                matriculas_periodo = set(
-                    historico["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                )
-
-                matriculas_com_historico = set(
-                    df_historico["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                )
-
-                matriculas_sem_historico = (
-                    set(
-                        registro["Matrícula"]
-                        .astype(str)
-                        .str.strip()
-                        .str.upper()
-                    )
-                    - matriculas_com_historico
-                )
-
-                matriculas_permitidas = (
-                    matriculas_periodo
-                    | matriculas_sem_historico
-                )
-
-                registro = registro[
-                    registro["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                    .isin(matriculas_permitidas)
-                ]
+                # O filtro de data afeta o HISTÓRICO, mas não remove
+                # o cadastro da melhoria. Assim, um ponto que possui
+                # latitude/longitude continua visível no mapa mesmo
+                # quando sua O.S. não está dentro do período escolhido.
 
     # --------------------------------------------------------
     # BAIRRO
@@ -1958,73 +1934,59 @@ def dialogo_novo_registro(
 
         return
 
-    # IMPORTANTE:
-    # Não usar o nome "adicionar_os" aqui.
-    # "adicionar_os" é a função responsável pelo CRUD da O.S.
-    deve_adicionar_os = True
-
-    if not historico_existente.empty:
-
-        st.info(
-            "Esta matrícula já possui histórico de O.S."
-        )
-
-        deve_adicionar_os = st.checkbox(
-            "Adicionar uma nova O.S.",
-            value=False,
-            key="novo_adicionar_os",
-        )
-
+    # A O.S. informada no cadastro inicial deve ser gravada
+    # obrigatoriamente no Histórico.
     numero_os = ""
     data_abertura = datetime.now()
     pressao = 0.0
     pontual = "SIM"
 
-    if (
-        historico_existente.empty
-        or deve_adicionar_os
-    ):
+    if not historico_existente.empty:
+        st.info(
+            "Esta matrícula já possui histórico de O.S. O número "
+            "informado abaixo será acrescentado ao histórico."
+        )
 
-        col7, col8 = st.columns(2)
+    col7, col8 = st.columns(2)
 
-        with col7:
+    with col7:
 
-            numero_os = st.text_input(
-                "N. O.S *",
-                placeholder="Digite a identificação da O.S.",
-                key="novo_numero_os",
-            )
+        numero_os = st.text_input(
+            "N. O.S *",
+            placeholder="Digite a identificação da O.S.",
+            key="novo_numero_os",
+        )
 
-        with col8:
+    with col8:
 
-            data_abertura = st.datetime_input(
-                "Data de Abertura *",
-                value=datetime.now(),
-                key="novo_data_abertura",
-            )
+        data_abertura = st.datetime_input(
+            "Data de Abertura *",
+            value=datetime.now(),
+            key="novo_data_abertura",
+        )
 
-        col9, col10 = st.columns(2)
+    col9, col10 = st.columns(2)
 
-        with col9:
+    with col9:
 
-            pressao = st.number_input(
-                "Pressão (MCA) *",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="novo_pressao",
-            )
+        pressao = st.number_input(
+            "Pressão (MCA) *",
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+            key="novo_pressao",
+        )
 
-        with col10:
+    with col10:
 
-            pontual = st.selectbox(
-                "Pontual",
-                [
-                    "SIM",
-                    "NÃO",
-                ],
-                key="novo_pontual",
-            )
+        pontual = st.selectbox(
+            "Pontual",
+            [
+                "SIM",
+                "NÃO",
+            ],
+            key="novo_pontual",
+        )
 
     salvar = st.button(
         "💾 Salvar",
@@ -2072,10 +2034,7 @@ def dialogo_novo_registro(
     # N. O.S. É TEXTO LIVRE
     # --------------------------------------------------------
 
-    if (
-        historico_existente.empty
-        or deve_adicionar_os
-    ):
+    if True:
 
         numero_os = texto(
             numero_os
@@ -2138,39 +2097,27 @@ def dialogo_novo_registro(
         # NOVO REGISTRO + O.S. INICIAL
         # ----------------------------------------------------
 
-        if (
-            historico_existente.empty
-            or deve_adicionar_os
-        ):
+        dados_os = {
+            "ID": gerar_id(),
+            "Matrícula": matricula,
+            "N. O.S": texto(
+                numero_os
+            ),
+            "Data de Abertura": (
+                data_abertura.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            ),
+            "Pressão": pressao,
+            "Pontual": pontual,
+        }
 
-            dados_os = {
-                "ID": gerar_id(),
-                "Matrícula": matricula,
-                "N. O.S": texto(
-                    numero_os
-                ),
-                "Data de Abertura": (
-                    data_abertura.strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                ),
-                "Pressão": pressao,
-                "Pontual": pontual,
-            }
-
-            # O cadastro inicial e sua O.S. são gravados juntos.
-            # Se a O.S. falhar, o registro principal é desfeito.
-            adicionar_registro_com_os(
-                dados,
-                dados_os,
-            )
-
-        else:
-            # Este caminho não é esperado para um novo cadastro,
-            # mas preserva a lógica caso a rotina seja reutilizada.
-            adicionar_registro(
-                dados
-            )
+        # O cadastro inicial e sua O.S. são gravados juntos.
+        # Se a O.S. falhar, o registro principal é desfeito.
+        adicionar_registro_com_os(
+            dados,
+            dados_os,
+        )
 
         fechar_dialogo()
 
