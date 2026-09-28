@@ -1,47 +1,36 @@
-import streamlit as st
+import io
+import hashlib
+import unicodedata
+from datetime import datetime, date, timedelta
+
 import gspread
 import pandas as pd
-import folium
 import plotly.express as px
-import json
+import streamlit as st
+import folium
 
-from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
-from datetime import date, timedelta
 
 from auth import verificar_autenticacao
 
 
 # ============================================================
-# CONFIGURAÇÃO
+# CONFIGURAÇÕES
 # ============================================================
 
 st.set_page_config(
-    page_title="Vazão de Poços - COI",
-    page_icon="⚙️",
+    page_title="Vazão de Poços",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+verificar_autenticacao()
 
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-
-if not verificar_autenticacao():
-    st.warning("Sessão não iniciada ou expirada.")
-
-    if st.button("Ir para o Login"):
-        st.switch_page("app.py")
-
-    st.stop()
-
-
-# ============================================================
-# CONSTANTES
-# ============================================================
 
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+
+NOME_ABA_POCOS = "POCOS"
+NOME_ABA_LEITURAS = "LEITURAS_POCOS"
 
 CABECALHO_POCOS = [
     "ID_POCO",
@@ -71,164 +60,297 @@ UNIDADES_VAZAO = [
 
 
 # ============================================================
-# ESTADO
+# CONEXÃO COM GOOGLE SHEETS
 # ============================================================
 
-if "modo_escuro_pocos" not in st.session_state:
-    st.session_state.modo_escuro_pocos = False
+@st.cache_resource(show_spinner=False)
+def obter_cliente_google():
+    """
+    Cria o cliente gspread uma única vez por processo do Streamlit.
+    """
+    credenciais = st.secrets["gcp_service_account"]
 
-if "mapa_tipo_pocos" not in st.session_state:
-    st.session_state.mapa_tipo_pocos = "OpenStreetMap"
+    return gspread.service_account_from_dict(
+        dict(credenciais)
+    )
 
 
-# ============================================================
-# CSS
-# ============================================================
+@st.cache_resource(show_spinner=False)
+def obter_planilha():
+    """
+    Abre a planilha uma única vez.
 
-if st.session_state.modo_escuro_pocos:
-    st.markdown(
-        """
-        <style>
-        .stApp {
-            background-color: #111827;
-            color: #f3f4f6;
-        }
+    Isso evita que cada rerun execute novamente open_by_key().
+    """
+    cliente = obter_cliente_google()
+    return cliente.open_by_key(SPREADSHEET_ID)
 
-        [data-testid="stSidebar"] {
-            background-color: #1f2937;
-        }
 
-        [data-testid="stSidebar"] * {
-            color: #f3f4f6 !important;
-        }
+@st.cache_resource(show_spinner=False)
+def obter_aba(nome_aba):
+    """
+    Mantém a referência da worksheet em cache.
 
-        .stDataFrame {
-            border-radius: 8px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    A chamada worksheet() deixa de acontecer a cada rerun.
+    """
+    planilha = obter_planilha()
+
+    try:
+        return planilha.worksheet(nome_aba)
+
+    except gspread.WorksheetNotFound:
+        if nome_aba == NOME_ABA_POCOS:
+            aba = planilha.add_worksheet(
+                title=nome_aba,
+                rows=1000,
+                cols=len(CABECALHO_POCOS),
+            )
+            aba.update(
+                "A1",
+                [CABECALHO_POCOS],
+            )
+            return aba
+
+        if nome_aba == NOME_ABA_LEITURAS:
+            aba = planilha.add_worksheet(
+                title=nome_aba,
+                rows=2000,
+                cols=len(CABECALHO_LEITURAS),
+            )
+            aba.update(
+                "A1",
+                [CABECALHO_LEITURAS],
+            )
+            return aba
+
+        raise
+
+
+@st.cache_resource(show_spinner=False)
+def obter_abas():
+    """
+    Obtém as duas abas uma única vez.
+    """
+    return (
+        obter_aba(NOME_ABA_POCOS),
+        obter_aba(NOME_ABA_LEITURAS),
     )
 
 
 # ============================================================
-# GOOGLE SHEETS
+# CACHE DOS DADOS
 # ============================================================
 
-@st.cache_resource
-def conectar_google_sheets():
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-
-    credentials_dict = json.loads(
-        st.secrets["gcp_json"]
-    )
-
-    credentials = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=scopes,
-    )
-
-    gc = gspread.authorize(credentials)
-
-    return gc.open_by_key(SPREADSHEET_ID)
-
-
-try:
-    planilha = conectar_google_sheets()
-
-except Exception as e:
-    st.error(
-        f"❌ Erro ao conectar com o Google Sheets: {e}"
-    )
-    st.stop()
-
-
-# ============================================================
-# ABAS
-# ============================================================
-
-try:
-    aba_pocos = planilha.worksheet("POCOS")
-
-except gspread.WorksheetNotFound:
-    aba_pocos = planilha.add_worksheet(
-        title="POCOS",
-        rows=1000,
-        cols=20,
-    )
-
-
-try:
-    aba_leituras = planilha.worksheet("LEITURAS_POCOS")
-
-except gspread.WorksheetNotFound:
-    aba_leituras = planilha.add_worksheet(
-        title="LEITURAS_POCOS",
-        rows=5000,
-        cols=20,
-    )
-
-
-# ============================================================
-# CABEÇALHOS
-# ============================================================
-
-def garantir_cabecalho(aba, cabecalho):
-
-    valores = aba.get_all_values()
-
-    if not valores:
-        aba.append_row(cabecalho)
-        return
-
-    primeira_linha = [
-        str(c).strip()
-        for c in valores[0]
-    ]
-
-    if primeira_linha != cabecalho:
-        aba.update(
-            "A1",
-            [cabecalho],
-        )
-
-
-garantir_cabecalho(
-    aba_pocos,
-    CABECALHO_POCOS,
+@st.cache_data(
+    ttl=30,
+    show_spinner=False,
 )
-
-garantir_cabecalho(
-    aba_leituras,
-    CABECALHO_LEITURAS,
-)
-
-
-# ============================================================
-# CARREGAMENTO
-# ============================================================
-
-@st.cache_data(ttl=10)
 def carregar_pocos():
+    """
+    Faz somente uma leitura da aba POCOS a cada 30 segundos,
+    salvo quando o cache é invalidado explicitamente após uma
+    operação de escrita.
+    """
+    aba_pocos, _ = obter_abas()
 
-    dados = aba_pocos.get_all_records()
+    registros = aba_pocos.get_all_records()
 
-    if not dados:
-        return pd.DataFrame(
-            columns=CABECALHO_POCOS
-        )
+    if not registros:
+        return pd.DataFrame(columns=CABECALHO_POCOS)
 
-    df = pd.DataFrame(dados)
+    df = pd.DataFrame(registros)
 
     for coluna in CABECALHO_POCOS:
         if coluna not in df.columns:
             df[coluna] = ""
 
-    df = df[CABECALHO_POCOS].copy()
+    return df[CABECALHO_POCOS].copy()
+
+
+@st.cache_data(
+    ttl=30,
+    show_spinner=False,
+)
+def carregar_leituras():
+    """
+    Faz somente uma leitura da aba LEITURAS_POCOS a cada 30 segundos.
+    """
+    _, aba_leituras = obter_abas()
+
+    registros = aba_leituras.get_all_records()
+
+    if not registros:
+        return pd.DataFrame(columns=CABECALHO_LEITURAS)
+
+    df = pd.DataFrame(registros)
+
+    for coluna in CABECALHO_LEITURAS:
+        if coluna not in df.columns:
+            df[coluna] = ""
+
+    return df[CABECALHO_LEITURAS].copy()
+
+
+def invalidar_cache_dados():
+    """
+    Deve ser chamado somente depois de escrever na planilha.
+    """
+    carregar_pocos.clear()
+    carregar_leituras.clear()
+
+
+# ============================================================
+# GARANTIA DOS CABEÇALHOS
+# ============================================================
+
+def garantir_cabecalhos():
+    """
+    Verifica os cabeçalhos somente quando necessário.
+
+    Não é chamada a cada rerun normal.
+    """
+    aba_pocos, aba_leituras = obter_abas()
+
+    cab_pocos = aba_pocos.row_values(1)
+    if cab_pocos != CABECALHO_POCOS:
+        aba_pocos.update(
+            "A1",
+            [CABECALHO_POCOS],
+        )
+
+    cab_leituras = aba_leituras.row_values(1)
+    if cab_leituras != CABECALHO_LEITURAS:
+        aba_leituras.update(
+            "A1",
+            [CABECALHO_LEITURAS],
+        )
+
+
+# ============================================================
+# UTILITÁRIOS
+# ============================================================
+
+def normalizar_texto(valor):
+    texto = "" if valor is None else str(valor)
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto,
+    ).encode(
+        "ascii",
+        "ignore",
+    ).decode(
+        "ascii"
+    )
+
+    return texto.strip().upper()
+
+
+def normalizar_numero(valor):
+    try:
+        if valor is None or str(valor).strip() == "":
+            return None
+
+        return float(
+            str(valor)
+            .replace(",", ".")
+            .strip()
+        )
+
+    except (ValueError, TypeError):
+        return None
+
+
+def novo_id(prefixo, valores):
+    """
+    Gera IDs internos sequenciais.
+
+    Exemplo:
+    POCO00001
+    LEIT00001
+    """
+    maior = 0
+
+    if valores is not None:
+        for valor in valores:
+            texto = str(valor).strip()
+
+            if texto.startswith(prefixo):
+                parte = texto[len(prefixo):]
+
+                try:
+                    numero = int(parte)
+                    maior = max(maior, numero)
+                except ValueError:
+                    pass
+
+    return f"{prefixo}{maior + 1:05d}"
+
+
+def identificacao_exibicao(row):
+    identificacao = str(
+        row.get("IDENTIFICACAO_ATIVO", "")
+    ).strip()
+
+    nome = str(
+        row.get("NOME_POCO", "")
+    ).strip()
+
+    if nome and identificacao:
+        return f"{nome} — {identificacao}"
+
+    if nome:
+        return nome
+
+    if identificacao:
+        return identificacao
+
+    return str(
+        row.get("ID_POCO", "")
+    )
+
+
+def converter_data(valor):
+    if valor is None or str(valor).strip() == "":
+        return pd.NaT
+
+    return pd.to_datetime(
+        valor,
+        errors="coerce",
+        dayfirst=True,
+    )
+
+
+def formatar_data(valor):
+    data_convertida = converter_data(valor)
+
+    if pd.isna(data_convertida):
+        return ""
+
+    return data_convertida.strftime("%d/%m/%Y")
+
+
+def dias_desde_leitura(data_leitura):
+    data_convertida = converter_data(data_leitura)
+
+    if pd.isna(data_convertida):
+        return None
+
+    return (
+        pd.Timestamp.today().normalize()
+        - data_convertida.normalize()
+    ).days
+
+
+# ============================================================
+# PREPARAÇÃO DOS DATAFRAMES
+# ============================================================
+
+def preparar_pocos(df):
+    df = df.copy()
+
+    if df.empty:
+        return df
 
     for coluna in [
         "ID_POCO",
@@ -236,11 +358,8 @@ def carregar_pocos():
         "NOME_POCO",
         "MUNICIPIO",
     ]:
-        df[coluna] = (
-            df[coluna]
-            .astype(str)
-            .str.strip()
-        )
+        if coluna in df.columns:
+            df[coluna] = df[coluna].fillna("").astype(str).str.strip()
 
     df["LATITUDE"] = pd.to_numeric(
         df["LATITUDE"],
@@ -255,1494 +374,930 @@ def carregar_pocos():
     return df
 
 
-@st.cache_data(ttl=10)
-def carregar_leituras():
+def preparar_leituras(df):
+    df = df.copy()
 
-    dados = aba_leituras.get_all_records()
+    if df.empty:
+        return df
 
-    if not dados:
-        return pd.DataFrame(
-            columns=CABECALHO_LEITURAS
-        )
+    for coluna in [
+        "ID_LEITURA",
+        "ID_POCO",
+        "VAZAO",
+        "UNIDADE",
+    ]:
+        if coluna in df.columns:
+            df[coluna] = df[coluna].fillna("").astype(str).str.strip()
 
-    df = pd.DataFrame(dados)
-
-    for coluna in CABECALHO_LEITURAS:
-        if coluna not in df.columns:
-            df[coluna] = ""
-
-    df = df[CABECALHO_LEITURAS].copy()
-
-    df["ID_LEITURA"] = (
-        df["ID_LEITURA"]
-        .astype(str)
-        .str.strip()
-    )
-
-    df["ID_POCO"] = (
-        df["ID_POCO"]
-        .astype(str)
-        .str.strip()
-    )
-
-    df["DATA_LEITURA"] = pd.to_datetime(
-        df["DATA_LEITURA"]
-        .astype(str)
-        .str.strip(),
+    df["DATA_LEITURA_DT"] = pd.to_datetime(
+        df["DATA_LEITURA"],
         errors="coerce",
         dayfirst=True,
     )
 
-    df["VAZAO"] = pd.to_numeric(
-        df["VAZAO"],
+    df["VAZAO_NUM"] = pd.to_numeric(
+        df["VAZAO"].astype(str).str.replace(",", "."),
         errors="coerce",
-    )
-
-    df["UNIDADE"] = (
-        df["UNIDADE"]
-        .astype(str)
-        .str.strip()
     )
 
     return df
 
 
-pocos = carregar_pocos()
-leituras = carregar_leituras()
-
-
 # ============================================================
-# FUNÇÕES AUXILIARES
+# OPERAÇÕES DE ESCRITA
 # ============================================================
 
-def limpar_cache_dados():
-    carregar_pocos.clear()
-    carregar_leituras.clear()
-
-
-def novo_id(prefixo, existentes):
-
-    existentes = {
-        str(x).strip()
-        for x in existentes
-        if str(x).strip()
-    }
-
-    numero = 1
-
-    while True:
-
-        novo = f"{prefixo}{numero:05d}"
-
-        if novo not in existentes:
-            return novo
-
-        numero += 1
-
-
-def linha_por_id(df, coluna, valor):
-
-    encontrados = df.index[
-        df[coluna].astype(str) == str(valor)
-    ].tolist()
-
-    if not encontrados:
-        return None
-
-    return encontrados[0]
-
-
-def identificacao_exibicao(row):
-
-    identificacao = (
-        str(row["IDENTIFICACAO_ATIVO"]).strip()
-    )
-
-    nome = str(row["NOME_POCO"]).strip()
-
-    if nome and identificacao:
-        return f"{nome} — {identificacao}"
-
-    if nome:
-        return nome
-
-    if identificacao:
-        return identificacao
-
-    return str(row["ID_POCO"])
-
-
-def obter_ultima_leitura(
-    poco_id,
-    df_leituras,
-    data_inicial=None,
-    data_final=None,
+def adicionar_poco(
+    identificacao,
+    nome,
+    municipio,
+    latitude,
+    longitude,
 ):
+    aba_pocos, _ = obter_abas()
 
-    dados = df_leituras[
-        df_leituras["ID_POCO"].astype(str)
-        == str(poco_id)
-    ].copy()
+    df = carregar_pocos()
 
-    dados["DATA_LEITURA"] = pd.to_datetime(
-        dados["DATA_LEITURA"],
-        errors="coerce",
-        dayfirst=True,
+    ids = (
+        df["ID_POCO"].tolist()
+        if not df.empty
+        else []
     )
 
-    dados = dados.dropna(
-        subset=["DATA_LEITURA"]
+    id_poco = novo_id(
+        "POCO",
+        ids,
     )
 
-    if data_inicial is not None:
-        dados = dados[
-            dados["DATA_LEITURA"].dt.date
-            >= data_inicial
-        ]
-
-    if data_final is not None:
-        dados = dados[
-            dados["DATA_LEITURA"].dt.date
-            <= data_final
-        ]
-
-    if dados.empty:
-        return None
-
-    return dados.sort_values(
-        "DATA_LEITURA",
-        ascending=False,
-    ).iloc[0]
-
-
-def formatar_vazao(valor):
-
-    if pd.isna(valor):
-        return "—"
-
-    return (
-        f"{float(valor):,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
-    )
-
-
-def descricao_ultima_leitura(
-    leitura,
-    hoje=None,
-):
-
-    if leitura is None:
-        return "Sem leitura registrada"
-
-    data_leitura = leitura["DATA_LEITURA"]
-
-    if pd.isna(data_leitura):
-        return "Sem leitura registrada"
-
-    if hoje is None:
-        hoje = date.today()
-
-    dias = (
-        hoje - data_leitura.date()
-    ).days
-
-    vazao = formatar_vazao(
-        leitura["VAZAO"]
-    )
-
-    unidade = leitura["UNIDADE"]
-
-    return (
-        f"Última vazão: {vazao} {unidade} | "
-        f"Leitura: {data_leitura.strftime('%d/%m/%Y')} | "
-        f"Há {max(dias, 0)} dias"
-    )
-
-
-# ============================================================
-# NOVO POÇO
-# ============================================================
-
-@st.dialog("➕ Cadastrar Novo Poço")
-def dialogo_novo_poco():
-
-    st.subheader("Dados do poço")
-
-    identificacao = st.text_input(
-        "Identificação do ativo *",
-        placeholder="Ex.: PL-THE-PCO0001",
-        key="novo_poco_identificacao",
-    )
-
-    nome = st.text_input(
-        "Nome do poço",
-        placeholder="Ex.: THE-001",
-        key="novo_poco_nome",
-    )
-
-    municipio = st.text_input(
-        "Município *",
-        key="novo_poco_municipio",
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        latitude = st.number_input(
-            "Latitude *",
-            min_value=-90.0,
-            max_value=90.0,
-            value=0.0,
-            format="%.6f",
-            key="novo_poco_latitude",
-        )
-
-    with col2:
-        longitude = st.number_input(
-            "Longitude *",
-            min_value=-180.0,
-            max_value=180.0,
-            value=0.0,
-            format="%.6f",
-            key="novo_poco_longitude",
-        )
-
-    st.divider()
-
-    if st.button(
-        "💾 Salvar Poço",
-        type="primary",
-        use_container_width=True,
-        key="salvar_novo_poco",
-    ):
-
-        if not identificacao.strip():
-            st.error(
-                "Informe a identificação do ativo."
-            )
-            return
-
-        if not municipio.strip():
-            st.error(
-                "Informe o município."
-            )
-            return
-
-        novo_id_poco = novo_id(
-            "POCO",
-            pocos["ID_POCO"].tolist(),
-        )
-
-        aba_pocos.append_row(
-            [
-                novo_id_poco,
-                identificacao.strip(),
-                nome.strip(),
-                municipio.strip(),
-                latitude,
-                longitude,
-            ]
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Poço cadastrado com sucesso."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# EDITAR POÇO
-# ============================================================
-
-@st.dialog("✏️ Editar Poço")
-def dialogo_editar_poco(poco_id):
-
-    dados = carregar_pocos()
-
-    idx = linha_por_id(
-        dados,
-        "ID_POCO",
-        poco_id,
-    )
-
-    if idx is None:
-        st.error("Poço não encontrado.")
-        return
-
-    poco = dados.loc[idx]
-
-    st.caption(
-        f"ID interno: {poco_id}"
-    )
-
-    identificacao = st.text_input(
-        "Identificação do ativo *",
-        value=str(
-            poco["IDENTIFICACAO_ATIVO"]
-        ),
-        key=f"editar_identificacao_{poco_id}",
-    )
-
-    nome = st.text_input(
-        "Nome do poço",
-        value=str(poco["NOME_POCO"]),
-        key=f"editar_nome_{poco_id}",
-    )
-
-    municipio = st.text_input(
-        "Município *",
-        value=str(poco["MUNICIPIO"]),
-        key=f"editar_municipio_{poco_id}",
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        latitude = st.number_input(
-            "Latitude *",
-            min_value=-90.0,
-            max_value=90.0,
-            value=(
-                float(poco["LATITUDE"])
-                if pd.notna(poco["LATITUDE"])
-                else 0.0
-            ),
-            format="%.6f",
-            key=f"editar_latitude_{poco_id}",
-        )
-
-    with col2:
-        longitude = st.number_input(
-            "Longitude *",
-            min_value=-180.0,
-            max_value=180.0,
-            value=(
-                float(poco["LONGITUDE"])
-                if pd.notna(poco["LONGITUDE"])
-                else 0.0
-            ),
-            format="%.6f",
-            key=f"editar_longitude_{poco_id}",
-        )
-
-    if st.button(
-        "💾 Salvar alterações",
-        type="primary",
-        use_container_width=True,
-        key=f"salvar_edicao_poco_{poco_id}",
-    ):
-
-        if not identificacao.strip():
-            st.error(
-                "Informe a identificação do ativo."
-            )
-            return
-
-        if not municipio.strip():
-            st.error(
-                "Informe o município."
-            )
-            return
-
-        linha_planilha = idx + 2
-
-        aba_pocos.update(
-            f"A{linha_planilha}:F{linha_planilha}",
-            [[
-                poco_id,
-                identificacao.strip(),
-                nome.strip(),
-                municipio.strip(),
-                latitude,
-                longitude,
-            ]],
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Poço atualizado."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# EXCLUIR POÇO
-# ============================================================
-
-@st.dialog("⚠️ Excluir Poço")
-def dialogo_excluir_poco(poco_id):
-
-    dados_pocos = carregar_pocos()
-    dados_leituras = carregar_leituras()
-
-    poco = dados_pocos[
-        dados_pocos["ID_POCO"].astype(str)
-        == str(poco_id)
-    ]
-
-    quantidade = len(
-        dados_leituras[
-            dados_leituras["ID_POCO"].astype(str)
-            == str(poco_id)
-        ]
-    )
-
-    if not poco.empty:
-        identificacao = str(
-            poco.iloc[0]["IDENTIFICACAO_ATIVO"]
-        ).strip()
-
-        nome = str(
-            poco.iloc[0]["NOME_POCO"]
-        ).strip()
-
-    else:
-        identificacao = ""
-        nome = ""
-
-    exibicao = (
-        f"{nome} — {identificacao}"
-        if nome and identificacao
-        else identificacao or nome or poco_id
-    )
-
-    st.warning(
-        f"Você está tentando excluir o poço "
-        f"**{exibicao}**."
-    )
-
-    if quantidade > 0:
-
-        st.error(
-            f"Este poço possui {quantidade} "
-            f"leitura(s) vinculada(s)."
-        )
-
-        st.info(
-            "A exclusão do cadastro do poço não "
-            "excluirá automaticamente as leituras."
-        )
-
-    else:
-
-        st.info(
-            "Este poço não possui leituras vinculadas."
-        )
-
-    confirmar = st.checkbox(
-        "Confirmo que desejo excluir este cadastro.",
-        key=f"confirmar_exclusao_poco_{poco_id}",
-    )
-
-    if st.button(
-        "🗑️ Confirmar exclusão",
-        type="primary",
-        disabled=not confirmar,
-        use_container_width=True,
-        key=f"confirmar_exclusao_poco_botao_{poco_id}",
-    ):
-
-        idx = linha_por_id(
-            dados_pocos,
-            "ID_POCO",
-            poco_id,
-        )
-
-        if idx is None:
-            st.error(
-                "Poço não encontrado."
-            )
-            return
-
-        aba_pocos.delete_rows(
-            idx + 2
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Cadastro do poço excluído."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# NOVA LEITURA
-# ============================================================
-
-@st.dialog("➕ Registrar Leitura")
-def dialogo_nova_leitura(poco_id=None):
-
-    dados_pocos = carregar_pocos()
-
-    if dados_pocos.empty:
-
-        st.warning(
-            "Cadastre pelo menos um poço "
-            "antes de registrar uma leitura."
-        )
-
-        return
-
-    opcoes_pocos = {}
-
-    for _, row in dados_pocos.iterrows():
-
-        label = identificacao_exibicao(row)
-
-        if row["MUNICIPIO"]:
-            label = (
-                f"{label} — "
-                f"{row['MUNICIPIO']}"
-            )
-
-        opcoes_pocos[label] = row["ID_POCO"]
-
-    labels = list(opcoes_pocos.keys())
-
-    indice_padrao = 0
-
-    if poco_id in opcoes_pocos.values():
-
-        indice_padrao = list(
-            opcoes_pocos.values()
-        ).index(poco_id)
-
-    selecionado = st.selectbox(
-        "Poço",
-        labels,
-        index=indice_padrao,
-        key="nova_leitura_poco",
-    )
-
-    poco_escolhido = opcoes_pocos[
-        selecionado
-    ]
-
-    data_leitura = st.date_input(
-        "Data da leitura",
-        value=date.today(),
-        key="nova_leitura_data",
-    )
-
-    vazao = st.number_input(
-        "Vazão",
-        min_value=0.0,
-        value=0.0,
-        format="%.3f",
-        key="nova_leitura_vazao",
-    )
-
-    unidade = st.selectbox(
-        "Unidade",
-        UNIDADES_VAZAO,
-        key="nova_leitura_unidade",
-    )
-
-    if st.button(
-        "💾 Salvar leitura",
-        type="primary",
-        use_container_width=True,
-        key="salvar_nova_leitura",
-    ):
-
-        novo_id_leitura = novo_id(
-            "LEIT",
-            carregar_leituras()[
-                "ID_LEITURA"
-            ].tolist(),
-        )
-
-        aba_leituras.append_row(
-            [
-                novo_id_leitura,
-                poco_escolhido,
-                data_leitura.strftime(
-                    "%d/%m/%Y"
-                ),
-                vazao,
-                unidade,
-            ]
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Leitura registrada."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# EDITAR LEITURA
-# ============================================================
-
-@st.dialog("✏️ Editar Leitura")
-def dialogo_editar_leitura(id_leitura):
-
-    dados = carregar_leituras()
-
-    idx = linha_por_id(
-        dados,
-        "ID_LEITURA",
-        id_leitura,
-    )
-
-    if idx is None:
-
-        st.error(
-            "Leitura não encontrada."
-        )
-
-        return
-
-    leitura = dados.loc[idx]
-
-    st.caption(
-        f"ID da leitura: {id_leitura}"
-    )
-
-    dados_pocos = carregar_pocos()
-
-    mapa_pocos = {}
-
-    for _, row in dados_pocos.iterrows():
-
-        label = identificacao_exibicao(row)
-
-        if row["MUNICIPIO"]:
-            label = (
-                f"{label} — "
-                f"{row['MUNICIPIO']}"
-            )
-
-        mapa_pocos[label] = row["ID_POCO"]
-
-    valores_ids = list(
-        mapa_pocos.values()
-    )
-
-    try:
-        indice_poco = valores_ids.index(
-            str(leitura["ID_POCO"])
-        )
-
-    except ValueError:
-        indice_poco = 0
-
-    poco_label = st.selectbox(
-        "Poço",
-        list(mapa_pocos.keys()),
-        index=indice_poco,
-        key=f"editar_leitura_poco_{id_leitura}",
-    )
-
-    data_original = leitura[
-        "DATA_LEITURA"
-    ]
-
-    if pd.isna(data_original):
-        data_original = date.today()
-    else:
-        data_original = data_original.date()
-
-    data_leitura = st.date_input(
-        "Data da leitura",
-        value=data_original,
-        key=f"editar_leitura_data_{id_leitura}",
-    )
-
-    valor_original = (
-        float(leitura["VAZAO"])
-        if pd.notna(leitura["VAZAO"])
-        else 0.0
-    )
-
-    vazao = st.number_input(
-        "Vazão",
-        min_value=0.0,
-        value=valor_original,
-        format="%.3f",
-        key=f"editar_leitura_vazao_{id_leitura}",
-    )
-
-    unidade_original = str(
-        leitura["UNIDADE"]
-    )
-
-    if (
-        unidade_original
-        and unidade_original not in UNIDADES_VAZAO
-    ):
-        unidades = (
-            UNIDADES_VAZAO
-            + [unidade_original]
-        )
-    else:
-        unidades = UNIDADES_VAZAO
-
-    indice_unidade = (
-        unidades.index(unidade_original)
-        if unidade_original in unidades
-        else 0
-    )
-
-    unidade = st.selectbox(
-        "Unidade",
-        unidades,
-        index=indice_unidade,
-        key=f"editar_leitura_unidade_{id_leitura}",
-    )
-
-    if st.button(
-        "💾 Salvar alterações",
-        type="primary",
-        use_container_width=True,
-        key=f"salvar_edicao_leitura_{id_leitura}",
-    ):
-
-        linha_planilha = idx + 2
-
-        aba_leituras.update(
-            f"A{linha_planilha}:E{linha_planilha}",
-            [[
-                id_leitura,
-                mapa_pocos[poco_label],
-                data_leitura.strftime(
-                    "%d/%m/%Y"
-                ),
-                vazao,
-                unidade,
-            ]],
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Leitura atualizada."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# EXCLUIR LEITURA
-# ============================================================
-
-@st.dialog("🗑️ Excluir Leitura")
-def dialogo_excluir_leitura(id_leitura):
-
-    dados = carregar_leituras()
-
-    idx = linha_por_id(
-        dados,
-        "ID_LEITURA",
-        id_leitura,
-    )
-
-    if idx is None:
-
-        st.error(
-            "Leitura não encontrada."
-        )
-
-        return
-
-    leitura = dados.loc[idx]
-
-    st.warning(
-        "Esta ação excluirá definitivamente "
-        "a leitura selecionada."
-    )
-
-    data_texto = (
-        leitura["DATA_LEITURA"].strftime(
-            "%d/%m/%Y"
-        )
-        if pd.notna(
-            leitura["DATA_LEITURA"]
-        )
-        else "—"
-    )
-
-    st.write(
-        f"**Data:** {data_texto}"
-    )
-
-    st.write(
-        f"**Vazão:** "
-        f"{formatar_vazao(leitura['VAZAO'])} "
-        f"{leitura['UNIDADE']}"
-    )
-
-    confirmar = st.checkbox(
-        "Confirmo a exclusão desta leitura.",
-        key=f"confirmar_exclusao_leitura_{id_leitura}",
-    )
-
-    if st.button(
-        "🗑️ Excluir leitura",
-        type="primary",
-        disabled=not confirmar,
-        use_container_width=True,
-        key=f"botao_excluir_leitura_{id_leitura}",
-    ):
-
-        aba_leituras.delete_rows(
-            idx + 2
-        )
-
-        limpar_cache_dados()
-
-        st.success(
-            "Leitura excluída."
-        )
-
-        st.rerun()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        "## ⚙️ Vazão de Poços"
-    )
-
-    st.caption(
-        "Monitoramento e histórico de vazões"
-    )
-
-    st.divider()
-
-    st.markdown("### 📅 Período")
-
-    hoje = date.today()
-
-    data_inicial = st.date_input(
-        "Data Inicial",
-        value=hoje - timedelta(days=30),
-        key="pocos_data_inicial",
-    )
-
-    data_final = st.date_input(
-        "Data Final",
-        value=hoje,
-        key="pocos_data_final",
-    )
-
-    if data_inicial > data_final:
-        st.error(
-            "A Data Inicial não pode ser maior "
-            "que a Data Final."
-        )
-
-    st.divider()
-
-    st.markdown("### 🔎 Filtros")
-
-    municipios_disponiveis = sorted(
+    aba_pocos.append_row(
         [
-            str(x).strip()
-            for x in pocos[
-                "MUNICIPIO"
-            ].dropna().unique()
-            if str(x).strip()
-        ]
-    )
-
-    municipio_filtro = st.selectbox(
-        "Município",
-        ["Todos"] + municipios_disponiveis,
-        key="pocos_filtro_municipio",
-    )
-
-    pocos_disponiveis = pocos.copy()
-
-    if municipio_filtro != "Todos":
-
-        pocos_disponiveis = pocos_disponiveis[
-            pocos_disponiveis[
-                "MUNICIPIO"
-            ].astype(str)
-            == municipio_filtro
-        ]
-
-    opcoes_pocos_filtro = ["Todos"]
-
-    for _, row in pocos_disponiveis.iterrows():
-
-        opcoes_pocos_filtro.append(
-            f"{identificacao_exibicao(row)} "
-            f"[{row['ID_POCO']}]"
-        )
-
-    poco_filtro = st.selectbox(
-        "Poço",
-        opcoes_pocos_filtro,
-        key="pocos_filtro_poco",
-    )
-
-    st.divider()
-
-    st.markdown("### 🗺️ Mapa")
-
-    mapa_tipo = st.selectbox(
-        "Tipo de mapa",
-        [
-            "OpenStreetMap",
-            "Esri World Imagery",
-            "OpenTopoMap",
+            id_poco,
+            identificacao,
+            nome,
+            municipio,
+            latitude,
+            longitude,
         ],
-        key="mapa_tipo_pocos",
+        value_input_option="USER_ENTERED",
     )
 
-    exibir_rotulos = st.checkbox(
-        "Exibir rótulos",
-        value=False,
-        key="pocos_exibir_rotulos",
+    invalidar_cache_dados()
+
+    return id_poco
+
+
+def atualizar_poco(
+    linha_planilha,
+    id_poco,
+    identificacao,
+    nome,
+    municipio,
+    latitude,
+    longitude,
+):
+    aba_pocos, _ = obter_abas()
+
+    valores = [
+        id_poco,
+        identificacao,
+        nome,
+        municipio,
+        latitude,
+        longitude,
+    ]
+
+    aba_pocos.update(
+        f"A{linha_planilha}:F{linha_planilha}",
+        [valores],
+        value_input_option="USER_ENTERED",
     )
 
-    st.divider()
+    invalidar_cache_dados()
 
-    st.markdown("### ➕ Ações")
 
-    if st.button(
-        "➕ Cadastrar Poço",
-        use_container_width=True,
-    ):
-        dialogo_novo_poco()
+def excluir_poco(linha_planilha):
+    aba_pocos, _ = obter_abas()
 
-    if st.button(
-        "📏 Registrar Leitura",
-        use_container_width=True,
-    ):
-        dialogo_nova_leitura()
-
-    st.divider()
-
-    modo_escuro = st.toggle(
-        "🌙 Modo escuro",
-        value=st.session_state.modo_escuro_pocos,
-        key="toggle_modo_escuro_pocos",
+    aba_pocos.delete_rows(
+        linha_planilha
     )
 
-    if modo_escuro != st.session_state.modo_escuro_pocos:
+    invalidar_cache_dados()
 
-        st.session_state.modo_escuro_pocos = modo_escuro
 
-        st.rerun()
+def adicionar_leitura(
+    id_poco,
+    data_leitura,
+    vazao,
+    unidade,
+):
+    _, aba_leituras = obter_abas()
 
-    st.divider()
+    df = carregar_leituras()
 
-    if st.button(
-        "🏠 Voltar ao Menu Principal",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
+    ids = (
+        df["ID_LEITURA"].tolist()
+        if not df.empty
+        else []
+    )
+
+    id_leitura = novo_id(
+        "LEIT",
+        ids,
+    )
+
+    data_formatada = pd.to_datetime(
+        data_leitura
+    ).strftime("%d/%m/%Y")
+
+    aba_leituras.append_row(
+        [
+            id_leitura,
+            id_poco,
+            data_formatada,
+            vazao,
+            unidade,
+        ],
+        value_input_option="USER_ENTERED",
+    )
+
+    invalidar_cache_dados()
+
+    return id_leitura
+
+
+def atualizar_leitura(
+    linha_planilha,
+    id_leitura,
+    id_poco,
+    data_leitura,
+    vazao,
+    unidade,
+):
+    _, aba_leituras = obter_abas()
+
+    data_formatada = pd.to_datetime(
+        data_leitura
+    ).strftime("%d/%m/%Y")
+
+    aba_leituras.update(
+        f"A{linha_planilha}:E{linha_planilha}",
+        [[
+            id_leitura,
+            id_poco,
+            data_formatada,
+            vazao,
+            unidade,
+        ]],
+        value_input_option="USER_ENTERED",
+    )
+
+    invalidar_cache_dados()
+
+
+def excluir_leitura(linha_planilha):
+    _, aba_leituras = obter_abas()
+
+    aba_leituras.delete_rows(
+        linha_planilha
+    )
+
+    invalidar_cache_dados()
 
 
 # ============================================================
-# VALIDAÇÃO
+# CARREGAMENTO INICIAL
 # ============================================================
 
-if data_inicial > data_final:
+try:
+    aba_pocos, aba_leituras = obter_abas()
+
+except Exception as erro:
+    st.error(
+        f"Não foi possível acessar o Google Sheets: {erro}"
+    )
     st.stop()
-
-
-# ============================================================
-# FILTRO DAS LEITURAS
-# ============================================================
-
-leituras_periodo = leituras.copy()
-
-leituras_periodo["DATA_LEITURA"] = pd.to_datetime(
-    leituras_periodo["DATA_LEITURA"]
-    .astype(str)
-    .str.strip(),
-    errors="coerce",
-    dayfirst=True,
-)
-
-leituras_periodo = leituras_periodo.dropna(
-    subset=["DATA_LEITURA"]
-)
-
-leituras_periodo = leituras_periodo[
-    (
-        leituras_periodo[
-            "DATA_LEITURA"
-        ].dt.date
-        >= data_inicial
-    )
-    &
-    (
-        leituras_periodo[
-            "DATA_LEITURA"
-        ].dt.date
-        <= data_final
-    )
-]
-
-
-# ============================================================
-# FILTRO MUNICÍPIO
-# ============================================================
-
-if municipio_filtro != "Todos":
-
-    ids_municipio = set(
-        pocos[
-            pocos["MUNICIPIO"].astype(str)
-            == municipio_filtro
-        ]["ID_POCO"].astype(str)
-    )
-
-    leituras_periodo = leituras_periodo[
-        leituras_periodo[
-            "ID_POCO"
-        ].astype(str).isin(ids_municipio)
-    ]
-
-
-# ============================================================
-# FILTRO POÇO
-# ============================================================
-
-id_poco_filtro = None
-
-if poco_filtro != "Todos":
-
-    id_poco_filtro = (
-        poco_filtro
-        .split("[")[-1]
-        .replace("]", "")
-        .strip()
-    )
-
-    leituras_periodo = leituras_periodo[
-        leituras_periodo[
-            "ID_POCO"
-        ].astype(str)
-        == id_poco_filtro
-    ]
 
 
 # ============================================================
 # TÍTULO
 # ============================================================
 
-st.title("⚙️ Vazão de Poços")
+st.title("Vazão de Poços")
 
 st.caption(
-    f"Período analisado: "
-    f"{data_inicial.strftime('%d/%m/%Y')} "
-    f"a "
-    f"{data_final.strftime('%d/%m/%Y')}"
+    "Cadastro de poços, leituras de vazão, mapa e histórico."
 )
 
 
 # ============================================================
-# INDICADORES
+# DADOS
 # ============================================================
 
-quantidade_pocos = len(pocos)
+try:
+    df_pocos = preparar_pocos(
+        carregar_pocos()
+    )
 
-quantidade_leituras = len(
-    leituras_periodo
+    df_leituras = preparar_leituras(
+        carregar_leituras()
+    )
+
+except Exception as erro:
+    st.error(
+        f"Erro ao carregar os dados: {erro}"
+    )
+    st.stop()
+
+
+# ============================================================
+# GARANTIR CABEÇALHOS
+# ============================================================
+
+# Só verifica os cabeçalhos quando ainda não houver dados.
+# Depois que as abas estiverem estruturadas, não há necessidade
+# de consultar a API em todo rerun.
+if (
+    df_pocos.empty
+    and df_leituras.empty
+):
+    try:
+        garantir_cabecalhos()
+    except Exception:
+        pass
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.header("Filtros")
+
+hoje = date.today()
+data_inicio_padrao = hoje - timedelta(days=30)
+
+periodo = st.sidebar.date_input(
+    "Período das leituras",
+    value=(
+        data_inicio_padrao,
+        hoje,
+    ),
 )
 
-pocos_com_leitura = (
-    leituras_periodo[
-        "ID_POCO"
+if isinstance(periodo, tuple) and len(periodo) == 2:
+    data_inicio, data_fim = periodo
+else:
+    data_inicio = data_inicio_padrao
+    data_fim = hoje
+
+
+municipios = []
+
+if not df_pocos.empty:
+    municipios = sorted(
+        [
+            x
+            for x in df_pocos["MUNICIPIO"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .unique()
+            if x
+        ],
+        key=normalizar_texto,
+    )
+
+municipio_filtro = st.sidebar.selectbox(
+    "Município",
+    ["Todos"] + municipios,
+)
+
+
+pocos_disponiveis = df_pocos.copy()
+
+if (
+    municipio_filtro != "Todos"
+    and not pocos_disponiveis.empty
+):
+    pocos_disponiveis = pocos_disponiveis[
+        pocos_disponiveis["MUNICIPIO"].astype(str).str.strip()
+        == municipio_filtro
     ]
-    .astype(str)
-    .nunique()
-    if not leituras_periodo.empty
-    else 0
+
+
+opcoes_pocos = ["Todos"]
+
+if not pocos_disponiveis.empty:
+    opcoes_pocos += [
+        identificacao_exibicao(row)
+        for _, row in pocos_disponiveis.iterrows()
+    ]
+
+
+poco_filtro = st.sidebar.selectbox(
+    "Poço",
+    opcoes_pocos,
 )
 
-pocos_sem_leitura = max(
-    quantidade_pocos - pocos_com_leitura,
-    0,
+
+# ============================================================
+# LEITURAS DO PERÍODO
+# ============================================================
+
+leituras_periodo = df_leituras.copy()
+
+if not leituras_periodo.empty:
+    leituras_periodo = leituras_periodo[
+        leituras_periodo["DATA_LEITURA_DT"].notna()
+    ]
+
+    leituras_periodo = leituras_periodo[
+        (
+            leituras_periodo["DATA_LEITURA_DT"].dt.date
+            >= data_inicio
+        )
+        & (
+            leituras_periodo["DATA_LEITURA_DT"].dt.date
+            <= data_fim
+        )
+    ]
+
+
+# ============================================================
+# FILTRO DE POÇOS
+# ============================================================
+
+pocos_mapa = df_pocos.copy()
+
+if municipio_filtro != "Todos":
+    pocos_mapa = pocos_mapa[
+        pocos_mapa["MUNICIPIO"].astype(str).str.strip()
+        == municipio_filtro
+    ]
+
+if poco_filtro != "Todos":
+    pocos_mapa = pocos_mapa[
+        pocos_mapa.apply(
+            identificacao_exibicao,
+            axis=1,
+        )
+        == poco_filtro
+    ]
+
+
+# ============================================================
+# ÚLTIMA LEITURA DE CADA POÇO NO PERÍODO
+# ============================================================
+
+ultimas_leituras = {}
+
+if not leituras_periodo.empty:
+    ordenadas = leituras_periodo.sort_values(
+        "DATA_LEITURA_DT"
+    )
+
+    for id_poco, grupo in ordenadas.groupby(
+        "ID_POCO"
+    ):
+        ultimas_leituras[
+            str(id_poco)
+        ] = grupo.iloc[-1]
+
+
+# ============================================================
+# MÉTRICAS
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric(
+    "Poços cadastrados",
+    len(df_pocos),
 )
 
+col2.metric(
+    "Poços no filtro",
+    len(pocos_mapa),
+)
 
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric(
-        "Poços cadastrados",
-        quantidade_pocos,
-    )
-
-with col2:
-    st.metric(
-        "Leituras no período",
-        quantidade_leituras,
-    )
-
-with col3:
-    st.metric(
-        "Poços com leitura",
-        pocos_com_leitura,
-    )
-
-with col4:
-    st.metric(
-        "Poços sem leitura",
-        pocos_sem_leitura,
-    )
+col3.metric(
+    "Leituras no período",
+    len(leituras_periodo),
+)
 
 
 # ============================================================
 # MAPA
 # ============================================================
 
-st.divider()
+st.subheader("Mapa dos poços")
 
-st.subheader(
-    "🗺️ Localização dos Poços"
+TIPOS_MAPA = {
+    "OpenStreetMap": {
+        "tiles": "OpenStreetMap",
+        "attr": None,
+    },
+    "Esri World Imagery": {
+        "tiles": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "attr": "Esri",
+    },
+    "OpenTopoMap": {
+        "tiles": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "attr": "OpenTopoMap",
+    },
+}
+
+tipo_mapa = st.selectbox(
+    "Mapa",
+    list(TIPOS_MAPA.keys()),
 )
 
-pocos_mapa = pocos.copy()
+coordenadas = pocos_mapa[
+    pocos_mapa["LATITUDE"].notna()
+    & pocos_mapa["LONGITUDE"].notna()
+].copy()
 
-if municipio_filtro != "Todos":
 
-    pocos_mapa = pocos_mapa[
-        pocos_mapa[
-            "MUNICIPIO"
-        ].astype(str)
-        == municipio_filtro
+if not coordenadas.empty:
+    centro_lat = coordenadas["LATITUDE"].mean()
+    centro_lon = coordenadas["LONGITUDE"].mean()
+
+elif not df_pocos.empty:
+    coordenadas_todas = df_pocos[
+        df_pocos["LATITUDE"].notna()
+        & df_pocos["LONGITUDE"].notna()
     ]
 
-if id_poco_filtro:
-
-    pocos_mapa = pocos_mapa[
-        pocos_mapa[
-            "ID_POCO"
-        ].astype(str)
-        == id_poco_filtro
-    ]
-
-
-coordenadas_validas = pocos_mapa.dropna(
-    subset=[
-        "LATITUDE",
-        "LONGITUDE",
-    ]
-)
-
-if coordenadas_validas.empty:
-
-    coordenadas_validas = pocos.dropna(
-        subset=[
-            "LATITUDE",
-            "LONGITUDE",
-        ]
-    )
-
-if coordenadas_validas.empty:
-
-    centro_lat = -5.0892
-    centro_lon = -42.8019
-    zoom = 10
+    if not coordenadas_todas.empty:
+        centro_lat = coordenadas_todas["LATITUDE"].mean()
+        centro_lon = coordenadas_todas["LONGITUDE"].mean()
+    else:
+        centro_lat = -5.0892
+        centro_lon = -42.8016
 
 else:
-
-    centro_lat = coordenadas_validas[
-        "LATITUDE"
-    ].mean()
-
-    centro_lon = coordenadas_validas[
-        "LONGITUDE"
-    ].mean()
-
-    zoom = 10
+    centro_lat = -5.0892
+    centro_lon = -42.8016
 
 
-m = folium.Map(
+config_mapa = TIPOS_MAPA[tipo_mapa]
+
+mapa = folium.Map(
     location=[
         centro_lat,
         centro_lon,
     ],
-    zoom_start=zoom,
-    control_scale=True,
-    tiles=None,
+    zoom_start=7,
+    tiles=config_mapa["tiles"],
+    attr=config_mapa["attr"],
 )
 
 
-if mapa_tipo == "OpenStreetMap":
+for _, poco in coordenadas.iterrows():
 
-    folium.TileLayer(
-        tiles="OpenStreetMap",
-        name="OpenStreetMap",
-    ).add_to(m)
-
-elif mapa_tipo == "Esri World Imagery":
-
-    folium.TileLayer(
-        tiles=(
-            "https://server.arcgisonline.com/"
-            "ArcGIS/rest/services/"
-            "World_Imagery/MapServer/tile/"
-            "{z}/{y}/{x}"
-        ),
-        attr="Esri",
-        name="Esri World Imagery",
-    ).add_to(m)
-
-else:
-
-    folium.TileLayer(
-        tiles=(
-            "https://{s}.tile.opentopomap.org/"
-            "{z}/{x}/{y}.png"
-        ),
-        attr="OpenTopoMap",
-        name="OpenTopoMap",
-    ).add_to(m)
-
-
-# ============================================================
-# MARCADORES
-# ============================================================
-
-for _, poco in pocos_mapa.iterrows():
-
-    latitude = poco["LATITUDE"]
-    longitude = poco["LONGITUDE"]
-
-    if (
-        pd.isna(latitude)
-        or pd.isna(longitude)
-    ):
-        continue
-
-    ultima = obter_ultima_leitura(
-        poco["ID_POCO"],
-        leituras,
-        data_inicial,
-        data_final,
+    id_poco = str(
+        poco["ID_POCO"]
     )
 
-    if ultima is None:
+    leitura = ultimas_leituras.get(
+        id_poco
+    )
 
-        texto_leitura = (
-            "Sem leitura registrada no período."
-        )
+    nome_exibicao = identificacao_exibicao(
+        poco
+    )
+
+    if leitura is None:
+        status = "Sem leitura no período"
+        detalhe_leitura = "Sem leitura registrada no período."
 
     else:
+        vazao = leitura["VAZAO"]
+        unidade = leitura["UNIDADE"]
+        data_leitura = leitura["DATA_LEITURA_DT"]
 
-        texto_leitura = (
-            descricao_ultima_leitura(
-                ultima
-            )
+        dias = dias_desde_leitura(
+            data_leitura
         )
 
-    identificacao = str(
-        poco["IDENTIFICACAO_ATIVO"]
-    ).strip()
+        status = f"{vazao} {unidade}"
 
-    nome = str(
-        poco["NOME_POCO"]
-    ).strip()
-
-    if nome and identificacao:
-        titulo_poco = (
-            f"{nome} — {identificacao}"
-        )
-    else:
-        titulo_poco = (
-            nome
-            or identificacao
-            or poco["ID_POCO"]
+        detalhe_leitura = (
+            f"<b>Última leitura:</b> "
+            f"{data_leitura.strftime('%d/%m/%Y')}<br>"
+            f"<b>Vazão:</b> {vazao} {unidade}<br>"
+            f"<b>Dias desde a leitura:</b> {dias}"
         )
 
     popup_html = f"""
-    <div style="min-width:300px;">
-        <b>{titulo_poco}</b><br>
-        Município: {poco['MUNICIPIO']}<br>
-        <hr>
-        {texto_leitura}
+    <div style="min-width:250px">
+        <b>{nome_exibicao}</b><br><br>
+
+        <b>Município:</b>
+        {poco["MUNICIPIO"]}<br>
+
+        <b>ID interno:</b>
+        {id_poco}<br><br>
+
+        <b>Status:</b>
+        {status}<br><br>
+
+        {detalhe_leitura}
     </div>
     """
 
-    tooltip_text = (
-        f"{titulo_poco} — "
-        f"{texto_leitura}"
-    )
-
     folium.Marker(
         location=[
-            latitude,
-            longitude,
+            poco["LATITUDE"],
+            poco["LONGITUDE"],
         ],
-        tooltip=tooltip_text,
+        tooltip=nome_exibicao,
         popup=folium.Popup(
             popup_html,
             max_width=350,
         ),
-        icon=folium.Icon(
-            icon="tint",
-            prefix="fa",
-        ),
-    ).add_to(m)
+    ).add_to(mapa)
 
-    if exibir_rotulos:
-
-        folium.Marker(
-            location=[
-                latitude,
-                longitude,
-            ],
-            icon=folium.DivIcon(
-                html=f"""
-                <div style="
-                    font-size:12px;
-                    font-weight:600;
-                    white-space:nowrap;
-                    transform:
-                        translate(12px,-10px);
-                ">
-                    {titulo_poco}
-                </div>
-                """
-            ),
-        ).add_to(m)
-
-
-folium.LayerControl().add_to(m)
 
 st_folium(
-    m,
-    width="100%",
-    height=520,
+    mapa,
+    width=None,
+    height=600,
 )
 
 
 # ============================================================
-# CADASTRO DOS POÇOS
+# CADASTRO DE POÇOS
 # ============================================================
 
-st.divider()
+st.subheader("Cadastro de poços")
 
-st.subheader(
-    "📍 Cadastro dos Poços"
-)
+with st.expander(
+    "Cadastrar novo poço",
+    expanded=False,
+):
+    with st.form(
+        "form_novo_poco",
+        clear_on_submit=True,
+    ):
 
-if pocos.empty:
+        identificacao = st.text_input(
+            "Identificação do ativo *",
+            placeholder="Ex.: PL-API-PCO0001",
+        )
 
-    st.info(
-        "Nenhum poço cadastrado."
-    )
+        nome = st.text_input(
+            "Nome do poço",
+            placeholder="Opcional",
+        )
 
-else:
+        municipio = st.text_input(
+            "Município *"
+        )
 
-    tabela_pocos = pocos[
-        [
-            "ID_POCO",
-            "IDENTIFICACAO_ATIVO",
-            "NOME_POCO",
-            "MUNICIPIO",
-            "LATITUDE",
-            "LONGITUDE",
+        col_lat, col_lon = st.columns(2)
+
+        with col_lat:
+            latitude = st.number_input(
+                "Latitude *",
+                format="%.7f",
+                value=0.0,
+            )
+
+        with col_lon:
+            longitude = st.number_input(
+                "Longitude *",
+                format="%.7f",
+                value=0.0,
+            )
+
+        salvar_poco = st.form_submit_button(
+            "Cadastrar poço"
+        )
+
+    if salvar_poco:
+
+        if not identificacao.strip():
+            st.error(
+                "A identificação do ativo é obrigatória."
+            )
+
+        elif not municipio.strip():
+            st.error(
+                "O município é obrigatório."
+            )
+
+        elif latitude == 0.0:
+            st.error(
+                "Informe uma latitude válida."
+            )
+
+        elif longitude == 0.0:
+            st.error(
+                "Informe uma longitude válida."
+            )
+
+        else:
+            try:
+                id_criado = adicionar_poco(
+                    identificacao=identificacao.strip(),
+                    nome=nome.strip(),
+                    municipio=municipio.strip(),
+                    latitude=latitude,
+                    longitude=longitude,
+                )
+
+                st.success(
+                    f"Poço cadastrado com ID {id_criado}."
+                )
+
+                st.rerun()
+
+            except Exception as erro:
+                st.error(
+                    f"Erro ao cadastrar poço: {erro}"
+                )
+
+
+# ============================================================
+# EDIÇÃO / EXCLUSÃO DE POÇOS
+# ============================================================
+
+if not df_pocos.empty:
+
+    with st.expander(
+        "Editar ou excluir poço",
+        expanded=False,
+    ):
+
+        opcoes_edicao = {
+            identificacao_exibicao(row): row
+            for _, row in df_pocos.iterrows()
+        }
+
+        selecionado = st.selectbox(
+            "Selecione o poço",
+            list(opcoes_edicao.keys()),
+            key="poco_edicao",
+        )
+
+        poco_atual = opcoes_edicao[
+            selecionado
         ]
-    ].copy()
 
-    tabela_pocos.columns = [
-        "ID",
-        "Identificação do ativo",
-        "Nome do poço",
-        "Município",
-        "Latitude",
-        "Longitude",
-    ]
+        linha_df = df_pocos.index[
+            df_pocos["ID_POCO"].astype(str)
+            == str(poco_atual["ID_POCO"])
+        ]
 
-    selecao_pocos = st.dataframe(
-        tabela_pocos,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="tabela_pocos",
-    )
+        if len(linha_df) > 0:
+            indice_df = linha_df[0]
+            linha_planilha = indice_df + 2
 
-    linhas_selecionadas = (
-        selecao_pocos.selection.rows
-        if selecao_pocos
-        else []
-    )
+        else:
+            linha_planilha = None
 
-    if linhas_selecionadas:
+        with st.form(
+            "form_edicao_poco"
+        ):
 
-        indice = linhas_selecionadas[0]
+            identificacao_edit = st.text_input(
+                "Identificação do ativo *",
+                value=str(
+                    poco_atual["IDENTIFICACAO_ATIVO"]
+                ),
+            )
 
-        poco_selecionado = (
-            tabela_pocos.iloc[indice]["ID"]
-        )
+            nome_edit = st.text_input(
+                "Nome do poço",
+                value=str(
+                    poco_atual["NOME_POCO"]
+                ),
+            )
 
-        col_editar, col_excluir = (
-            st.columns(2)
-        )
+            municipio_edit = st.text_input(
+                "Município *",
+                value=str(
+                    poco_atual["MUNICIPIO"]
+                ),
+            )
 
-        with col_editar:
+            col_lat, col_lon = st.columns(2)
 
-            if st.button(
-                "✏️ Editar Poço selecionado",
-                use_container_width=True,
-                key="editar_poco_selecionado",
-            ):
-
-                dialogo_editar_poco(
-                    poco_selecionado
+            with col_lat:
+                latitude_edit = st.number_input(
+                    "Latitude *",
+                    value=float(
+                        poco_atual["LATITUDE"]
+                    ),
+                    format="%.7f",
                 )
 
-        with col_excluir:
-
-            if st.button(
-                "🗑️ Excluir Poço selecionado",
-                use_container_width=True,
-                key="excluir_poco_selecionado",
-            ):
-
-                dialogo_excluir_poco(
-                    poco_selecionado
+            with col_lon:
+                longitude_edit = st.number_input(
+                    "Longitude *",
+                    value=float(
+                        poco_atual["LONGITUDE"]
+                    ),
+                    format="%.7f",
                 )
+
+            salvar_edicao = st.form_submit_button(
+                "Salvar alterações"
+            )
+
+        if salvar_edicao:
+
+            if not identificacao_edit.strip():
+                st.error(
+                    "A identificação do ativo é obrigatória."
+                )
+
+            elif not municipio_edit.strip():
+                st.error(
+                    "O município é obrigatório."
+                )
+
+            else:
+                try:
+                    atualizar_poco(
+                        linha_planilha=linha_planilha,
+                        id_poco=str(
+                            poco_atual["ID_POCO"]
+                        ),
+                        identificacao=identificacao_edit.strip(),
+                        nome=nome_edit.strip(),
+                        municipio=municipio_edit.strip(),
+                        latitude=latitude_edit,
+                        longitude=longitude_edit,
+                    )
+
+                    st.success(
+                        "Poço atualizado com sucesso."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+                    st.error(
+                        f"Erro ao atualizar poço: {erro}"
+                    )
+
+        leituras_vinculadas = (
+            df_leituras[
+                df_leituras["ID_POCO"].astype(str)
+                == str(poco_atual["ID_POCO"])
+            ]
+            if not df_leituras.empty
+            else pd.DataFrame()
+        )
+
+        st.divider()
+
+        if not leituras_vinculadas.empty:
+            st.warning(
+                f"Este poço possui "
+                f"{len(leituras_vinculadas)} "
+                f"leitura(s) vinculada(s)."
+            )
+
+        confirmar_exclusao = st.checkbox(
+            "Confirmo que desejo excluir este poço.",
+            key="confirmar_exclusao_poco",
+        )
+
+        if st.button(
+            "Excluir poço",
+            type="secondary",
+            key="btn_excluir_poco",
+        ):
+
+            if not confirmar_exclusao:
+                st.warning(
+                    "Marque a confirmação antes de excluir."
+                )
+
+            elif linha_planilha is None:
+                st.error(
+                    "Não foi possível localizar a linha do poço."
+                )
+
+            else:
+                try:
+                    excluir_poco(
+                        linha_planilha
+                    )
+
+                    st.success(
+                        "Poço excluído."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+                    st.error(
+                        f"Erro ao excluir poço: {erro}"
+                    )
 
 
 # ============================================================
-# HISTÓRICO DE LEITURAS
+# REGISTRO DE LEITURAS
 # ============================================================
 
-st.divider()
+st.subheader("Leituras de vazão")
 
-st.subheader(
-    "📋 Histórico de Leituras"
-)
-
-if leituras_periodo.empty:
+if df_pocos.empty:
 
     st.info(
-        "Nenhuma leitura encontrada "
-        "com os filtros selecionados."
+        "Cadastre pelo menos um poço para registrar leituras."
     )
 
 else:
 
-    historico = leituras_periodo.merge(
-        pocos[
+    with st.expander(
+        "Registrar nova leitura",
+        expanded=False,
+    ):
+
+        opcoes_leitura = {
+            identificacao_exibicao(row): row["ID_POCO"]
+            for _, row in df_pocos.iterrows()
+        }
+
+        with st.form(
+            "form_nova_leitura",
+            clear_on_submit=True,
+        ):
+
+            poco_leitura = st.selectbox(
+                "Poço",
+                list(opcoes_leitura.keys()),
+            )
+
+            data_leitura = st.date_input(
+                "Data da leitura",
+                value=date.today(),
+            )
+
+            col_vazao, col_unidade = st.columns(2)
+
+            with col_vazao:
+                vazao = st.number_input(
+                    "Vazão",
+                    min_value=0.0,
+                    format="%.4f",
+                )
+
+            with col_unidade:
+                unidade = st.selectbox(
+                    "Unidade",
+                    UNIDADES_VAZAO,
+                )
+
+            salvar_leitura = st.form_submit_button(
+                "Registrar leitura"
+            )
+
+        if salvar_leitura:
+
+            try:
+                id_leitura = adicionar_leitura(
+                    id_poco=opcoes_leitura[
+                        poco_leitura
+                    ],
+                    data_leitura=data_leitura,
+                    vazao=vazao,
+                    unidade=unidade,
+                )
+
+                st.success(
+                    f"Leitura registrada com ID {id_leitura}."
+                )
+
+                st.rerun()
+
+            except Exception as erro:
+                st.error(
+                    f"Erro ao registrar leitura: {erro}"
+                )
+
+
+# ============================================================
+# HISTÓRICO
+# ============================================================
+
+st.subheader("Histórico de leituras")
+
+if df_leituras.empty:
+
+    st.info(
+        "Nenhuma leitura registrada."
+    )
+
+else:
+
+    historico = df_leituras.merge(
+        df_pocos[
             [
                 "ID_POCO",
                 "IDENTIFICACAO_ATIVO",
@@ -1754,226 +1309,330 @@ else:
         how="left",
     )
 
-    historico["DATA_LEITURA"] = pd.to_datetime(
-        historico["DATA_LEITURA"],
-        errors="coerce",
-        dayfirst=True,
+    historico["POÇO"] = historico.apply(
+        identificacao_exibicao,
+        axis=1,
     )
 
-    historico["DATA_LEITURA"] = (
-        historico[
-            "DATA_LEITURA"
-        ].dt.strftime("%d/%m/%Y")
+    historico["DATA"] = historico[
+        "DATA_LEITURA_DT"
+    ].dt.strftime(
+        "%d/%m/%Y"
     )
 
-    historico["VAZAO"] = (
-        historico[
-            "VAZAO"
-        ].map(formatar_vazao)
+    historico = historico.sort_values(
+        "DATA_LEITURA_DT",
+        ascending=False,
     )
 
-    historico = historico[
-        [
-            "ID_LEITURA",
-            "ID_POCO",
-            "IDENTIFICACAO_ATIVO",
-            "NOME_POCO",
-            "MUNICIPIO",
-            "DATA_LEITURA",
-            "VAZAO",
-            "UNIDADE",
-        ]
+    colunas_historico = [
+        "ID_LEITURA",
+        "ID_POCO",
+        "POÇO",
+        "IDENTIFICACAO_ATIVO",
+        "NOME_POCO",
+        "MUNICIPIO",
+        "DATA",
+        "VAZAO",
+        "UNIDADE",
     ]
 
-    historico.columns = [
-        "ID Leitura",
-        "ID Poço",
-        "Identificação do ativo",
-        "Nome do poço",
-        "Município",
-        "Data da leitura",
-        "Vazão",
-        "Unidade",
-    ]
-
-    selecao_leituras = st.dataframe(
-        historico,
+    st.dataframe(
+        historico[
+            colunas_historico
+        ],
         use_container_width=True,
         hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="tabela_historico_pocos",
     )
 
-    linhas_leituras = (
-        selecao_leituras.selection.rows
-        if selecao_leituras
-        else []
-    )
 
-    if linhas_leituras:
+# ============================================================
+# EDITAR / EXCLUIR LEITURAS
+# ============================================================
 
-        indice = linhas_leituras[0]
+if not df_leituras.empty:
 
-        leitura_selecionada = (
-            historico.iloc[indice][
-                "ID Leitura"
+    with st.expander(
+        "Editar ou excluir leitura",
+        expanded=False,
+    ):
+
+        historico_opcoes = {}
+
+        for _, leitura in df_leituras.iterrows():
+
+            poco = df_pocos[
+                df_pocos["ID_POCO"].astype(str)
+                == str(leitura["ID_POCO"])
             ]
-        )
 
-        col_editar, col_excluir = (
-            st.columns(2)
-        )
-
-        with col_editar:
-
-            if st.button(
-                "✏️ Editar leitura selecionada",
-                use_container_width=True,
-                key="editar_leitura_selecionada",
-            ):
-
-                dialogo_editar_leitura(
-                    leitura_selecionada
+            if not poco.empty:
+                nome_poco = identificacao_exibicao(
+                    poco.iloc[0]
+                )
+            else:
+                nome_poco = str(
+                    leitura["ID_POCO"]
                 )
 
-        with col_excluir:
+            data_texto = formatar_data(
+                leitura["DATA_LEITURA"]
+            )
 
-            if st.button(
-                "🗑️ Excluir leitura selecionada",
-                use_container_width=True,
-                key="excluir_leitura_selecionada",
-            ):
+            chave = (
+                f"{nome_poco} — "
+                f"{data_texto} — "
+                f"{leitura['VAZAO']} "
+                f"{leitura['UNIDADE']} "
+                f"— {leitura['ID_LEITURA']}"
+            )
 
-                dialogo_excluir_leitura(
-                    leitura_selecionada
+            historico_opcoes[
+                chave
+            ] = leitura
+
+        leitura_selecionada = st.selectbox(
+            "Selecione a leitura",
+            list(historico_opcoes.keys()),
+            key="leitura_edicao",
+        )
+
+        leitura_atual = historico_opcoes[
+            leitura_selecionada
+        ]
+
+        linha_df = df_leituras.index[
+            df_leituras["ID_LEITURA"].astype(str)
+            == str(
+                leitura_atual["ID_LEITURA"]
+            )
+        ]
+
+        if len(linha_df) > 0:
+            linha_leitura_planilha = (
+                linha_df[0] + 2
+            )
+        else:
+            linha_leitura_planilha = None
+
+        poco_da_leitura = str(
+            leitura_atual["ID_POCO"]
+        )
+
+        opcoes_pocos_edicao = {}
+
+        for _, poco in df_pocos.iterrows():
+            opcoes_pocos_edicao[
+                identificacao_exibicao(poco)
+            ] = poco["ID_POCO"]
+
+        nome_poco_atual = None
+
+        for nome, id_poco in opcoes_pocos_edicao.items():
+            if str(id_poco) == poco_da_leitura:
+                nome_poco_atual = nome
+                break
+
+        if nome_poco_atual is None:
+            nome_poco_atual = list(
+                opcoes_pocos_edicao.keys()
+            )[0]
+
+        with st.form(
+            "form_edicao_leitura"
+        ):
+
+            poco_editado = st.selectbox(
+                "Poço",
+                list(opcoes_pocos_edicao.keys()),
+                index=list(
+                    opcoes_pocos_edicao.keys()
+                ).index(
+                    nome_poco_atual
+                ),
+            )
+
+            data_editada = st.date_input(
+                "Data da leitura",
+                value=converter_data(
+                    leitura_atual["DATA_LEITURA"]
+                ).date(),
+            )
+
+            col_vazao, col_unidade = st.columns(2)
+
+            with col_vazao:
+                vazao_editada = st.number_input(
+                    "Vazão",
+                    min_value=0.0,
+                    value=float(
+                        leitura_atual["VAZAO_NUM"]
+                        if pd.notna(
+                            leitura_atual["VAZAO_NUM"]
+                        )
+                        else 0.0
+                    ),
+                    format="%.4f",
                 )
+
+            with col_unidade:
+                unidade_editada = st.selectbox(
+                    "Unidade",
+                    UNIDADES_VAZAO,
+                    index=(
+                        UNIDADES_VAZAO.index(
+                            leitura_atual["UNIDADE"]
+                        )
+                        if leitura_atual["UNIDADE"]
+                        in UNIDADES_VAZAO
+                        else 0
+                    ),
+                )
+
+            salvar_leitura_editada = st.form_submit_button(
+                "Salvar alterações"
+            )
+
+        if salvar_leitura_editada:
+
+            try:
+                atualizar_leitura(
+                    linha_planilha=linha_leitura_planilha,
+                    id_leitura=str(
+                        leitura_atual["ID_LEITURA"]
+                    ),
+                    id_poco=opcoes_pocos_edicao[
+                        poco_editado
+                    ],
+                    data_leitura=data_editada,
+                    vazao=vazao_editada,
+                    unidade=unidade_editada,
+                )
+
+                st.success(
+                    "Leitura atualizada com sucesso."
+                )
+
+                st.rerun()
+
+            except Exception as erro:
+                st.error(
+                    f"Erro ao atualizar leitura: {erro}"
+                )
+
+        confirmar_exclusao_leitura = st.checkbox(
+            "Confirmo que desejo excluir esta leitura.",
+            key="confirmar_exclusao_leitura",
+        )
+
+        if st.button(
+            "Excluir leitura",
+            type="secondary",
+            key="btn_excluir_leitura",
+        ):
+
+            if not confirmar_exclusao_leitura:
+                st.warning(
+                    "Marque a confirmação antes de excluir."
+                )
+
+            elif linha_leitura_planilha is None:
+                st.error(
+                    "Não foi possível localizar a leitura."
+                )
+
+            else:
+                try:
+                    excluir_leitura(
+                        linha_leitura_planilha
+                    )
+
+                    st.success(
+                        "Leitura excluída."
+                    )
+
+                    st.rerun()
+
+                except Exception as erro:
+                    st.error(
+                        f"Erro ao excluir leitura: {erro}"
+                    )
 
 
 # ============================================================
 # GRÁFICO
 # ============================================================
 
-st.divider()
+st.subheader("Evolução da vazão")
 
-st.subheader(
-    "📈 Evolução da Vazão"
-)
-
-if pocos.empty:
+if df_pocos.empty:
 
     st.info(
-        "Cadastre um poço para visualizar "
-        "a evolução."
+        "Cadastre um poço para visualizar o gráfico."
     )
 
 else:
 
-    mapa_pocos_grafico = {}
+    opcoes_grafico = {
+        identificacao_exibicao(row): row["ID_POCO"]
+        for _, row in df_pocos.iterrows()
+    }
 
-    for _, row in pocos.iterrows():
-
-        label = identificacao_exibicao(row)
-
-        if row["MUNICIPIO"]:
-            label = (
-                f"{label} — "
-                f"{row['MUNICIPIO']}"
-            )
-
-        mapa_pocos_grafico[label] = (
-            row["ID_POCO"]
-        )
-
-    selecao_grafico = st.selectbox(
-        "Selecione o poço",
-        list(mapa_pocos_grafico.keys()),
-        key="selecao_grafico_pocos",
+    poco_grafico = st.selectbox(
+        "Poço para o gráfico",
+        list(opcoes_grafico.keys()),
+        key="poco_grafico",
     )
 
-    id_grafico = (
-        mapa_pocos_grafico[
-            selecao_grafico
-        ]
-    )
-
-    dados_grafico = leituras[
-        leituras[
-            "ID_POCO"
-        ].astype(str)
-        == str(id_grafico)
-    ].copy()
-
-    dados_grafico["DATA_LEITURA"] = pd.to_datetime(
-        dados_grafico["DATA_LEITURA"]
-        .astype(str)
-        .str.strip(),
-        errors="coerce",
-        dayfirst=True,
-    )
-
-    dados_grafico = dados_grafico.dropna(
-        subset=[
-            "DATA_LEITURA",
-            "VAZAO",
-        ]
-    )
-
-    dados_grafico = dados_grafico[
-        (
-            dados_grafico[
-                "DATA_LEITURA"
-            ].dt.date
-            >= data_inicial
-        )
-        &
-        (
-            dados_grafico[
-                "DATA_LEITURA"
-            ].dt.date
-            <= data_final
-        )
+    id_poco_grafico = opcoes_grafico[
+        poco_grafico
     ]
 
-    dados_grafico = dados_grafico.sort_values(
-        "DATA_LEITURA"
-    )
+    dados_grafico = df_leituras[
+        df_leituras["ID_POCO"].astype(str)
+        == str(id_poco_grafico)
+    ].copy()
 
     if dados_grafico.empty:
 
         st.info(
-            "Não existem leituras desse poço "
-            "no período selecionado."
+            "Este poço ainda não possui leituras."
         )
 
     else:
 
+        dados_grafico = dados_grafico.sort_values(
+            "DATA_LEITURA_DT"
+        )
+
         fig = px.line(
             dados_grafico,
-            x="DATA_LEITURA",
-            y="VAZAO",
+            x="DATA_LEITURA_DT",
+            y="VAZAO_NUM",
             markers=True,
-            hover_data=[
-                "UNIDADE",
-            ],
             labels={
-                "DATA_LEITURA": "Data da leitura",
-                "VAZAO": "Vazão",
-                "UNIDADE": "Unidade",
+                "DATA_LEITURA_DT": "Data",
+                "VAZAO_NUM": "Vazão",
             },
-            title=(
-                f"Evolução da vazão — "
-                f"{selecao_grafico}"
-            ),
+            title=poco_grafico,
         )
 
         fig.update_layout(
-            hovermode="x unified",
-            xaxis_title="Data da leitura",
-            yaxis_title="Vazão",
+            hovermode="x unified"
         )
 
         st.plotly_chart(
             fig,
             use_container_width=True,
         )
+
+
+# ============================================================
+# INFORMAÇÃO SOBRE CACHE
+# ============================================================
+
+st.caption(
+    "Dados sincronizados com Google Sheets. "
+    "As leituras são mantidas em cache por até 30 segundos "
+    "e o cache é atualizado imediatamente após alterações."
+)
