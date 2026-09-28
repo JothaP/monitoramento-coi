@@ -155,7 +155,7 @@ def obter_abas():
 # ============================================================
 
 @st.cache_data(
-    ttl=30,
+    ttl=120,
     show_spinner=False,
 )
 def carregar_pocos():
@@ -194,7 +194,7 @@ def carregar_pocos():
 
 
 @st.cache_data(
-    ttl=30,
+    ttl=120,
     show_spinner=False,
 )
 def carregar_leituras():
