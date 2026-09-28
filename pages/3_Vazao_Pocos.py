@@ -485,6 +485,7 @@ def converter_data(valor):
         valor,
         errors="coerce",
         dayfirst=True,
+        format="mixed",
     )
 
 
@@ -1060,7 +1061,9 @@ def processar_upload_leituras(
                             )
                         ).strip()
                     ),
-                    "Vazão": vazao,
+                    "Vazão": (
+                        str(vazao).replace(".", ",")
+                    ),
                 }
             )
             continue
