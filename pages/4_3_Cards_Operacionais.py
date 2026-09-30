@@ -1,24 +1,18 @@
-# ============================================================
-# MÓDULO 4_3 — CARDS OPERACIONAIS
-# PLATAFORMA COI
-# Adaptado do Card Executivo V4.5 — Águas do Piauí
-# ============================================================
-
 import io
+import os
 import re
+import textwrap
 import unicodedata
-from datetime import datetime, timedelta
+import zipfile
+from datetime import timedelta
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch
-
 from PIL import Image
-
-from auth import verificar_autenticacao
 
 
 # ============================================================
@@ -27,8 +21,9 @@ from auth import verificar_autenticacao
 
 st.set_page_config(
     page_title="Cards Operacionais - COI",
-    page_icon="📊",
-    layout="wide"
+    page_icon="🃏",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -36,17 +31,146 @@ st.set_page_config(
 # AUTENTICAÇÃO
 # ============================================================
 
-if not verificar_autenticacao():
-    st.warning("Acesso restrito. Faça login para acessar o módulo.")
+from auth import verificar_autenticacao
 
-    if st.button("Ir para o Login"):
+
+if not verificar_autenticacao():
+    st.warning("Sessão não iniciada ou expirada.")
+
+    if st.button(
+        "Ir para o Login",
+        use_container_width=True,
+    ):
         st.switch_page("app.py")
 
     st.stop()
 
 
 # ============================================================
-# PALETA DE CORES
+# RESTRIÇÃO TEMPORÁRIA — ADMINISTRADORES
+# ============================================================
+
+if st.session_state.get("perfil") != "admin":
+
+    st.error(
+        "Este módulo está disponível exclusivamente para administradores "
+        "durante o período de desenvolvimento."
+    )
+
+    if st.button(
+        "Voltar ao Menu Principal",
+        use_container_width=True,
+    ):
+        st.switch_page("app.py")
+
+    st.stop()
+
+
+# ============================================================
+# ESTILO
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+
+        .main-title {
+            font-size: 30px;
+            font-weight: 700;
+            color: #0F172A;
+            margin-bottom: 2px;
+        }
+
+        .main-subtitle {
+            font-size: 15px;
+            color: #64748B;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0F172A;
+            margin-top: 8px;
+            margin-bottom: 4px;
+        }
+
+        .section-description {
+            color: #64748B;
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+
+        .config-box {
+            background-color: #F8FAFC;
+            border: 1px solid #CBD5E1;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 18px;
+        }
+
+        .preview-box {
+            background-color: #F4F7FB;
+            border: 1px solid #CBD5E1;
+            border-radius: 10px;
+            padding: 18px;
+        }
+
+        .info-box {
+            background-color: #F0F4FF;
+            border-left: 4px solid #0027BC;
+            border-radius: 6px;
+            padding: 12px 15px;
+            margin: 10px 0 18px 0;
+            color: #334155;
+        }
+
+        .stDownloadButton > button {
+            width: 100%;
+        }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.markdown("### 🃏 Cards Operacionais")
+
+    st.caption(
+        f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
+    )
+
+    st.caption(
+        f"Perfil: **{st.session_state.get('perfil', '').upper()}**"
+    )
+
+    st.divider()
+
+    if st.button(
+        "🏠 Voltar ao Menu Principal",
+        use_container_width=True,
+    ):
+        st.switch_page("app.py")
+
+    st.divider()
+
+    st.caption("Módulo em desenvolvimento")
+    st.caption("Acesso restrito a administradores.")
+
+
+# ============================================================
+# PALETA
 # ============================================================
 
 C_PRIMARY = "#0027BC"
@@ -62,74 +186,8 @@ C_BG = "#F4F7FB"
 C_CARD = "#FFFFFF"
 
 
-plt.rcParams["font.family"] = "sans-serif"
-plt.rcParams["font.sans-serif"] = ["Arial", "DejaVu Sans"]
-
-
 # ============================================================
-# ESTILO DA INTERFACE
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    .main-title {
-        font-size: 30px;
-        font-weight: 700;
-        color: #0F172A;
-        margin-bottom: 2px;
-    }
-
-    .main-subtitle {
-        font-size: 14px;
-        color: #64748B;
-        margin-bottom: 20px;
-    }
-
-    .section-title {
-        font-size: 15px;
-        font-weight: 700;
-        color: #0F172A;
-        border-left: 4px solid #0027BC;
-        padding-left: 10px;
-        margin-top: 8px;
-        margin-bottom: 12px;
-    }
-
-    .status-box {
-        background: #F0F4FF;
-        border: 1px solid #CBD5E1;
-        border-radius: 8px;
-        padding: 12px 14px;
-        color: #334155;
-        font-size: 13px;
-    }
-
-    .info-box {
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 12px 14px;
-        color: #475569;
-        font-size: 13px;
-    }
-
-    div[data-testid="stMetric"] {
-        background: #FFFFFF;
-        border: 1px solid #CBD5E1;
-        border-radius: 8px;
-        padding: 10px;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# FUNÇÕES DE TEXTO
+# UTILITÁRIOS
 # ============================================================
 
 def remover_acentos(texto):
@@ -140,7 +198,7 @@ def remover_acentos(texto):
 
     texto = unicodedata.normalize(
         "NFKD",
-        texto
+        texto,
     )
 
     return "".join(
@@ -150,6 +208,7 @@ def remover_acentos(texto):
 
 
 def criar_chave_texto(valor):
+
     if pd.isna(valor):
         return ""
 
@@ -158,32 +217,32 @@ def criar_chave_texto(valor):
     texto = re.sub(
         r"[^A-Z0-9 ]",
         " ",
-        texto
+        texto,
     )
 
     return re.sub(
         r"\s+",
         " ",
-        texto
+        texto,
     ).strip()
 
 
 def padronizar_nome_coluna(col):
+
     if pd.isna(col):
         return ""
 
-    col_limpa = remover_acentos(
-        str(col)
-    ).lower()
+    col_limpa = remover_acentos(str(col)).lower()
 
     return re.sub(
         r"[^a-z0-9]",
         "",
-        col_limpa
+        col_limpa,
     )
 
 
 def formatar_nome_cidade(nome):
+
     if pd.isna(nome):
         return "Não informado"
 
@@ -195,14 +254,17 @@ def formatar_nome_cidade(nome):
         "da",
         "dos",
         "das",
-        "e"
+        "e",
     }
 
     resultado = []
 
     for idx, palavra in enumerate(palavras):
 
-        if idx > 0 and palavra.lower() in minusculas:
+        if (
+            idx > 0
+            and palavra.lower() in minusculas
+        ):
             resultado.append(
                 palavra.lower()
             )
@@ -217,93 +279,81 @@ def formatar_nome_cidade(nome):
 def corrigir_nome_exibicao(nome):
 
     correcoes = {
-        "Parnaiba": "Parnaíba",
-        "Luis Correia": "Luís Correia",
-        "Cajueiro da Praia": "Cajueiro da Praia",
-        "Piracuruca": "Piracuruca",
-        "Sao Raimundo Nonato": "São Raimundo Nonato",
-        "Sao Joao do Piaui": "São João do Piauí",
-        "Santo Inacio do Piaui": "Santo Inácio do Piauí",
-        "Conceicao do Caninde": "Conceição do Canindé",
-        "Anisio de Abreu": "Anísio de Abreu",
-        "Dom Inocencio": "Dom Inocêncio",
-        "Simplicio Mendes": "Simplício Mendes",
-        "Bonfim do Piaui": "Bonfim do Piauí",
-        "Sao Lourenco": "São Lourenço",
-        "Sao Francisco de Assis": "São Francisco de Assis"
+
+        "Parnaiba":
+            "Parnaíba",
+
+        "Luis Correia":
+            "Luís Correia",
+
+        "Cajueiro da Praia":
+            "Cajueiro da Praia",
+
+        "Piracuruca":
+            "Piracuruca",
+
+        "Sao Raimundo Nonato":
+            "São Raimundo Nonato",
+
+        "Sao Joao do Piaui":
+            "São João do Piauí",
+
+        "Santo Inacio do Piaui":
+            "Santo Inácio do Piauí",
+
+        "Conceicao do Caninde":
+            "Conceição do Canindé",
+
+        "Anisio de Abreu":
+            "Anísio de Abreu",
+
+        "Dom Inocencio":
+            "Dom Inocêncio",
+
+        "Simplicio Mendes":
+            "Simplício Mendes",
+
+        "Bonfim do Piaui":
+            "Bonfim do Piauí",
+
+        "Sao Lourenco":
+            "São Lourenço",
+
+        "Sao Francisco de Assis":
+            "São Francisco de Assis",
     }
 
     return correcoes.get(
         nome,
-        nome
+        nome,
     )
 
 
-# ============================================================
-# CLASSIFICAÇÃO DOS REGISTROS
-# ============================================================
-
-def classificar_tipo_registro(
-    servico,
-    codigo=None
-):
-
-    if pd.notna(codigo):
-
-        cod_str = str(codigo).strip()
-
-        if "146003" in cod_str:
-            return "RECLAMACAO"
-
-        elif "146005" in cod_str:
-            return "INFORMACAO"
-
-    texto = criar_chave_texto(servico)
-
-    if (
-        "146003" in texto
-        or "RECLAMACAO DE FALTA DE AGUA" in texto
-    ):
-        return "RECLAMACAO"
-
-    if (
-        "146005" in texto
-        or "INFORMACAO DE FALTA DE AGUA" in texto
-    ):
-        return "INFORMACAO"
-
-    return "OUTRO"
-
-
-# ============================================================
-# COLUNA ÚNICA
-# ============================================================
-
 def obter_coluna_unica(
     df_target,
-    nome_col
+    nome_col,
 ):
 
     if nome_col not in df_target.columns:
-
         return pd.Series(
             [None] * len(df_target),
-            index=df_target.index
+            index=df_target.index,
         )
 
     val = df_target[nome_col]
 
-    if isinstance(val, pd.DataFrame):
+    if isinstance(
+        val,
+        pd.DataFrame,
+    ):
         return val.iloc[:, 0]
 
     return val
 
 
-# ============================================================
-# AGRUPAMENTO
-# ============================================================
-
-def obter_campo_agrupamento(escopo):
+def obter_campo_agrupamento(
+    escopo,
+):
 
     escopo = str(
         escopo
@@ -315,15 +365,59 @@ def obter_campo_agrupamento(escopo):
             "bairro_fmt",
             "bairro_key",
             "BAIRROS",
-            "BAIRRO"
+            "BAIRRO",
         )
 
     return (
         "cidade_fmt",
         "cidade_key",
         "MUNICÍPIOS",
-        "MUNICÍPIO"
+        "MUNICÍPIO",
     )
+
+
+# ============================================================
+# CLASSIFICAÇÃO
+# ============================================================
+
+def classificar_tipo_registro(
+    servico,
+    codigo=None,
+):
+
+    if pd.notna(codigo):
+
+        cod_str = str(
+            codigo
+        ).strip()
+
+        if "146003" in cod_str:
+            return "RECLAMACAO"
+
+        elif "146005" in cod_str:
+            return "INFORMACAO"
+
+    texto = criar_chave_texto(
+        servico
+    )
+
+    if (
+        "146003" in texto
+        or
+        "RECLAMACAO DE FALTA DE AGUA"
+        in texto
+    ):
+        return "RECLAMACAO"
+
+    if (
+        "146005" in texto
+        or
+        "INFORMACAO DE FALTA DE AGUA"
+        in texto
+    ):
+        return "INFORMACAO"
+
+    return "OUTRO"
 
 
 # ============================================================
@@ -336,6 +430,7 @@ def ajustar_cabecalho_dataframe(df):
         return df
 
     termos_chave = [
+
         "dataemissao",
         "dtemissao",
         "data",
@@ -355,7 +450,7 @@ def ajustar_cabecalho_dataframe(df):
         "inicio",
         "termino",
         "codigoservico",
-        "codigo"
+        "codigo",
     ]
 
     cols_atuais = [
@@ -400,15 +495,18 @@ def ajustar_cabecalho_dataframe(df):
                 str(c).strip()
                 if pd.notna(c)
                 else f"Col_{i}"
-                for i, c
-                in enumerate(df.iloc[idx])
+                for i, c in enumerate(
+                    df.iloc[idx]
+                )
             ]
 
             df.columns = novos_cabecalhos
 
             df = df.iloc[
                 idx + 1:
-            ].reset_index(drop=True)
+            ].reset_index(
+                drop=True
+            )
 
             return df
 
@@ -416,7 +514,7 @@ def ajustar_cabecalho_dataframe(df):
 
 
 # ============================================================
-# PREPARAÇÃO DA BASE DE O.S.
+# PREPARAÇÃO DA BASE
 # ============================================================
 
 def preparar_dataframe_os(df):
@@ -438,12 +536,17 @@ def preparar_dataframe_os(df):
     ).lower()
 
     if (
-        "contagem de" in cols_unidas
-        or "rotulos de coluna" in cols_unidas
+        "contagem de"
+        in cols_unidas
+        or
+        "rotulos de coluna"
+        in cols_unidas
     ):
+
         raise ValueError(
-            "O arquivo anexado é uma Tabela Dinâmica. "
-            "Envie a base bruta de O.S."
+            "O arquivo anexado é uma "
+            "Tabela Dinâmica. Envie a "
+            "base bruta."
         )
 
     mapa_colunas = {
@@ -454,7 +557,7 @@ def preparar_dataframe_os(df):
             "data",
             "emissao",
             "dtabertura",
-            "dataabertura"
+            "dataabertura",
         ],
 
         "Nº da O.S": [
@@ -464,7 +567,7 @@ def preparar_dataframe_os(df):
             "os",
             "nos",
             "numero",
-            "ordemdeservico"
+            "ordemdeservico",
         ],
 
         "Serviço Solicitado": [
@@ -474,31 +577,32 @@ def preparar_dataframe_os(df):
             "descricaoservico",
             "solicitacao",
             "tiposervico",
-            "descricao"
+            "descricao",
         ],
 
         "Código Serviço": [
             "codigoservico",
             "codservico",
             "codigo",
-            "cdservico"
+            "cdservico",
         ],
 
         "Cidade": [
             "cidade",
             "municipio",
             "localidade",
-            "cidadenome"
+            "cidadenome",
         ],
 
         "Bairro": [
             "bairro",
             "bairronome",
-            "subdistrito"
-        ]
+            "subdistrito",
+        ],
     }
 
     colunas_renomeadas = {}
+
     colunas_usadas = set()
 
     for col_orig in df.columns:
@@ -509,7 +613,7 @@ def preparar_dataframe_os(df):
 
         for (
             col_oficial,
-            sinonimos
+            sinonimos,
         ) in mapa_colunas.items():
 
             if col_oficial in colunas_usadas:
@@ -518,7 +622,8 @@ def preparar_dataframe_os(df):
             if (
                 col_clean in sinonimos
                 or
-                col_clean ==
+                col_clean
+                ==
                 padronizar_nome_coluna(
                     col_oficial
                 )
@@ -539,11 +644,12 @@ def preparar_dataframe_os(df):
     )
 
     obrigatorias = [
+
         "Data Emissão",
         "Nº da O.S",
         "Serviço Solicitado",
         "Cidade",
-        "Bairro"
+        "Bairro",
     ]
 
     faltantes = [
@@ -555,9 +661,9 @@ def preparar_dataframe_os(df):
     if faltantes:
 
         raise ValueError(
-            "Colunas obrigatórias ausentes "
-            "na planilha de O.S.: "
-            + ", ".join(faltantes)
+            "Colunas obrigatórias "
+            "ausentes na planilha de O.S.: "
+            f"{faltantes}"
         )
 
     df = df.dropna(
@@ -566,45 +672,55 @@ def preparar_dataframe_os(df):
 
     col_dt_emissao = obter_coluna_unica(
         df,
-        "Data Emissão"
+        "Data Emissão",
     )
 
     df["data_emissao"] = pd.to_datetime(
         col_dt_emissao,
         dayfirst=True,
-        errors="coerce"
+        errors="coerce",
     )
 
     col_cod = (
         df["Código Serviço"]
-        if "Código Serviço" in df.columns
+        if "Código Serviço"
+        in df.columns
         else None
     )
 
     col_serv_sol = obter_coluna_unica(
         df,
-        "Serviço Solicitado"
+        "Serviço Solicitado",
     )
 
-    df["tipo_registro"] = [
-        classificar_tipo_registro(
-            serv,
-            col_cod.iloc[idx]
-            if col_cod is not None
-            else None
+    tipos = []
+
+    for idx, serv in enumerate(
+        col_serv_sol
+    ):
+
+        codigo = None
+
+        if col_cod is not None:
+            codigo = col_cod.iloc[idx]
+
+        tipos.append(
+            classificar_tipo_registro(
+                serv,
+                codigo,
+            )
         )
-        for idx, serv
-        in enumerate(col_serv_sol)
-    ]
+
+    df["tipo_registro"] = tipos
 
     col_cid = obter_coluna_unica(
         df,
-        "Cidade"
+        "Cidade",
     )
 
     col_bairro = obter_coluna_unica(
         df,
-        "Bairro"
+        "Bairro",
     )
 
     df["cidade_fmt"] = (
@@ -614,8 +730,9 @@ def preparar_dataframe_os(df):
     )
 
     df["cidade_key"] = (
-        col_cid
-        .apply(criar_chave_texto)
+        col_cid.apply(
+            criar_chave_texto
+        )
     )
 
     df["bairro_fmt"] = (
@@ -627,8 +744,9 @@ def preparar_dataframe_os(df):
     )
 
     df["bairro_key"] = (
-        col_bairro
-        .apply(criar_chave_texto)
+        col_bairro.apply(
+            criar_chave_texto
+        )
     )
 
     return df
@@ -641,16 +759,18 @@ def preparar_dataframe_os(df):
 def detectar_periodo_e_data_ref(
     df_os,
     modo_selecionado="AUTO",
-    data_manual=""
+    data_manual="",
 ):
 
     if (
         df_os.empty
-        or "data_emissao" not in df_os.columns
+        or
+        "data_emissao"
+        not in df_os.columns
     ):
         return (
             "DIARIO",
-            datetime.now().strftime("%d/%m/%Y")
+            "30/08/2026",
         )
 
     datas_validas = (
@@ -662,42 +782,58 @@ def detectar_periodo_e_data_ref(
 
         return (
             "DIARIO",
-            datetime.now().strftime("%d/%m/%Y")
+            "30/08/2026",
         )
 
-    maior_data = datas_validas.max()
-    menor_data = datas_validas.min()
+    maior_data = (
+        datas_validas.max()
+    )
 
-    if data_manual and str(
+    menor_data = (
+        datas_validas.min()
+    )
+
+    if (
         data_manual
-    ).strip():
+        and
+        str(data_manual).strip()
+    ):
 
         dt_valida = pd.to_datetime(
             data_manual,
             dayfirst=True,
-            errors="coerce"
+            errors="coerce",
         )
 
         if pd.notna(dt_valida):
-            data_ref_str = dt_valida.strftime(
-                "%d/%m/%Y"
+
+            data_ref_str = (
+                dt_valida.strftime(
+                    "%d/%m/%Y"
+                )
             )
+
         else:
-            data_ref_str = maior_data.strftime(
-                "%d/%m/%Y"
+
+            data_ref_str = (
+                maior_data.strftime(
+                    "%d/%m/%Y"
+                )
             )
 
     else:
 
-        data_ref_str = maior_data.strftime(
-            "%d/%m/%Y"
+        data_ref_str = (
+            maior_data.strftime(
+                "%d/%m/%Y"
+            )
         )
 
     if modo_selecionado != "AUTO":
 
         return (
             modo_selecionado,
-            data_ref_str
+            data_ref_str,
         )
 
     diferenca_dias = (
@@ -710,26 +846,26 @@ def detectar_periodo_e_data_ref(
 
         return (
             "DIARIO",
-            data_ref_str
+            data_ref_str,
         )
 
     elif diferenca_dias <= 7:
 
         return (
             "SEMANAL",
-            data_ref_str
+            data_ref_str,
         )
 
     return (
         "MENSAL",
-        data_ref_str
+        data_ref_str,
     )
 
 
 def filtrar_periodo(
     df,
     modo,
-    data_referencia
+    data_referencia,
 ):
 
     if df.empty:
@@ -738,17 +874,20 @@ def filtrar_periodo(
     data_ref = pd.to_datetime(
         data_referencia,
         dayfirst=True,
-        errors="coerce"
+        errors="coerce",
     )
 
     if pd.isna(data_ref):
+
         raise ValueError(
             "Data de referência inválida."
         )
 
     data_ref = data_ref.normalize()
 
-    modo = str(modo).upper()
+    modo = str(
+        modo
+    ).upper()
 
     if modo == "DIARIO":
 
@@ -756,19 +895,22 @@ def filtrar_periodo(
 
         fim = (
             data_ref
-            + timedelta(days=1)
+            +
+            timedelta(days=1)
         )
 
     elif modo == "SEMANAL":
 
         inicio = (
             data_ref
-            - timedelta(days=6)
+            -
+            timedelta(days=6)
         )
 
         fim = (
             data_ref
-            + timedelta(days=1)
+            +
+            timedelta(days=1)
         )
 
     elif modo == "MENSAL":
@@ -782,20 +924,20 @@ def filtrar_periodo(
             fim = data_ref.replace(
                 year=data_ref.year + 1,
                 month=1,
-                day=1
+                day=1,
             )
 
         else:
 
             fim = data_ref.replace(
                 month=data_ref.month + 1,
-                day=1
+                day=1,
             )
 
     else:
 
         raise ValueError(
-            "Modo de período inválido."
+            f"Modo de período inválido: {modo}"
         )
 
     return df[
@@ -805,25 +947,23 @@ def filtrar_periodo(
     ].copy()
 
 
-# ============================================================
-# FORMATAÇÃO DO CABEÇALHO
-# ============================================================
-
 def formatar_periodo_cabecalho(
     data_ref_str,
-    modo
+    modo,
 ):
 
     data_ref = pd.to_datetime(
         data_ref_str,
         dayfirst=True,
-        errors="coerce"
+        errors="coerce",
     )
 
     if pd.isna(data_ref):
         return data_ref_str
 
-    modo = str(modo).upper()
+    modo = str(
+        modo
+    ).upper()
 
     if modo == "DIARIO":
 
@@ -835,17 +975,20 @@ def formatar_periodo_cabecalho(
 
         inicio = (
             data_ref
-            - timedelta(days=6)
+            -
+            timedelta(days=6)
         )
 
         return (
-            f"{inicio.strftime('%d/%m/%Y')} "
-            f"a {data_ref.strftime('%d/%m/%Y')}"
+            f"{inicio.strftime('%d/%m/%Y')}"
+            f" a "
+            f"{data_ref.strftime('%d/%m/%Y')}"
         )
 
     elif modo == "MENSAL":
 
         meses = {
+
             1: "Janeiro",
             2: "Fevereiro",
             3: "Março",
@@ -857,83 +1000,87 @@ def formatar_periodo_cabecalho(
             9: "Setembro",
             10: "Outubro",
             11: "Novembro",
-            12: "Dezembro"
+            12: "Dezembro",
         }
 
         return (
-            f"{meses[data_ref.month]}/"
-            f"{data_ref.year}"
+            f"{meses[data_ref.month]}"
+            f"/{data_ref.year}"
         )
 
     return data_ref_str
 
 
 # ============================================================
-# KPIs
+# INDICADORES
 # ============================================================
 
 def calcular_kpis_principais(
     df_periodo,
-    escopo="PIAUI"
+    escopo="PIAUI",
 ):
 
     base = df_periodo[
         df_periodo["tipo_registro"].isin(
             [
                 "RECLAMACAO",
-                "INFORMACAO"
+                "INFORMACAO",
             ]
         )
     ]
 
-    _, col_key, _, _ = obter_campo_agrupamento(
-        escopo
+    _, col_key, _, _ = (
+        obter_campo_agrupamento(
+            escopo
+        )
     )
 
     return {
 
-        "total_registros": len(base),
+        "total_registros":
+            len(base),
 
-        "total_reclamacoes": len(
-            base[
-                base["tipo_registro"]
-                == "RECLAMACAO"
-            ]
-        ),
+        "total_reclamacoes":
+            len(
+                base[
+                    base["tipo_registro"]
+                    ==
+                    "RECLAMACAO"
+                ]
+            ),
 
-        "total_informacoes": len(
-            base[
-                base["tipo_registro"]
-                == "INFORMACAO"
-            ]
-        ),
+        "total_informacoes":
+            len(
+                base[
+                    base["tipo_registro"]
+                    ==
+                    "INFORMACAO"
+                ]
+            ),
 
-        "municipios_afetados": base[
-            col_key
-        ].nunique()
+        "municipios_afetados":
+            base[col_key].nunique(),
     }
 
 
-# ============================================================
-# TOP 5
-# ============================================================
-
 def calcular_top5_municipios(
     df_periodo,
-    escopo="PIAUI"
+    escopo="PIAUI",
 ):
 
     base = df_periodo[
         df_periodo["tipo_registro"].isin(
             [
                 "RECLAMACAO",
-                "INFORMACAO"
+                "INFORMACAO",
             ]
         )
     ]
 
-    col_fmt, _, _, _ = obter_campo_agrupamento(
-        escopo
+    col_fmt, _, _, _ = (
+        obter_campo_agrupamento(
+            escopo
+        )
     )
 
     if base.empty:
@@ -944,7 +1091,7 @@ def calcular_top5_municipios(
                 "RECLAMACAO",
                 "INFORMACAO",
                 "TOTAL",
-                "PERCENTUAL"
+                "PERCENTUAL",
             ]
         )
 
@@ -955,7 +1102,7 @@ def calcular_top5_municipios(
         .groupby(
             [
                 col_fmt,
-                "tipo_registro"
+                "tipo_registro",
             ]
         )
         .size()
@@ -964,11 +1111,23 @@ def calcular_top5_municipios(
         )
     )
 
-    if "RECLAMACAO" not in agrupado.columns:
-        agrupado["RECLAMACAO"] = 0
+    if (
+        "RECLAMACAO"
+        not in agrupado.columns
+    ):
 
-    if "INFORMACAO" not in agrupado.columns:
-        agrupado["INFORMACAO"] = 0
+        agrupado[
+            "RECLAMACAO"
+        ] = 0
+
+    if (
+        "INFORMACAO"
+        not in agrupado.columns
+    ):
+
+        agrupado[
+            "INFORMACAO"
+        ] = 0
 
     agrupado["TOTAL"] = (
         agrupado["RECLAMACAO"]
@@ -988,7 +1147,7 @@ def calcular_top5_municipios(
         agrupado
         .sort_values(
             by="TOTAL",
-            ascending=False
+            ascending=False,
         )
         .reset_index()
     )
@@ -997,40 +1156,45 @@ def calcular_top5_municipios(
 
         agrupado[col_fmt] = (
             agrupado[col_fmt]
-            .apply(corrigir_nome_exibicao)
+            .apply(
+                corrigir_nome_exibicao
+            )
         )
 
     return agrupado.head(5)
 
 
-# ============================================================
-# LÍDER
-# ============================================================
-
 def calcular_municipio_lider(
     df_periodo,
-    escopo="PIAUI"
+    escopo="PIAUI",
 ):
 
     base = df_periodo[
         df_periodo["tipo_registro"].isin(
             [
                 "RECLAMACAO",
-                "INFORMACAO"
+                "INFORMACAO",
             ]
         )
     ]
 
-    col_fmt, _, _, tipo_rotulo = obter_campo_agrupamento(
-        escopo
+    col_fmt, _, _, tipo_rotulo = (
+        obter_campo_agrupamento(
+            escopo
+        )
     )
 
     if base.empty:
 
         return {
-            "municipio": "Sem dados",
-            "total_registros": 0,
-            "lider_tipo": tipo_rotulo
+            "municipio":
+                "Sem dados",
+
+            "total_registros":
+                0,
+
+            "lider_tipo":
+                tipo_rotulo,
         }
 
     ranking = (
@@ -1042,38 +1206,40 @@ def calcular_municipio_lider(
 
     if escopo == "PIAUI":
 
-        nome_lider = corrigir_nome_exibicao(
-            nome_lider
+        nome_lider = (
+            corrigir_nome_exibicao(
+                nome_lider
+            )
         )
 
     return {
 
-        "municipio": nome_lider,
+        "municipio":
+            nome_lider,
 
-        "total_registros": int(
-            ranking.iloc[0]
-        ),
+        "total_registros":
+            int(ranking.iloc[0]),
 
-        "lider_tipo": tipo_rotulo
+        "lider_tipo":
+            tipo_rotulo,
     }
 
 
-# ============================================================
-# ÁREAS CRÍTICAS
-# ============================================================
-
 def calcular_kpi_areas_criticas(
     df_periodo,
-    escopo="PIAUI"
+    escopo="PIAUI",
 ):
 
     base_rec = df_periodo[
         df_periodo["tipo_registro"]
-        == "RECLAMACAO"
+        ==
+        "RECLAMACAO"
     ]
 
-    col_fmt, _, _, _ = obter_campo_agrupamento(
-        escopo
+    col_fmt, _, _, _ = (
+        obter_campo_agrupamento(
+            escopo
+        )
     )
 
     rotulo = (
@@ -1085,8 +1251,12 @@ def calcular_kpi_areas_criticas(
     if base_rec.empty:
 
         return {
-            "qtd_criticas": 0,
-            "rotulo_entidade": rotulo
+
+            "qtd_criticas":
+                0,
+
+            "rotulo_entidade":
+                rotulo,
         }
 
     rec_por_agrupamento = (
@@ -1097,35 +1267,38 @@ def calcular_kpi_areas_criticas(
 
     qtd_criticas = int(
         (
-            rec_por_agrupamento > 5
+            rec_por_agrupamento
+            > 5
         ).sum()
     )
 
     return {
-        "qtd_criticas": qtd_criticas,
-        "rotulo_entidade": rotulo
+
+        "qtd_criticas":
+            qtd_criticas,
+
+        "rotulo_entidade":
+            rotulo,
     }
 
-
-# ============================================================
-# ÁREAS EM ATENÇÃO
-# ============================================================
 
 def calcular_municipios_atencao(
     df_periodo,
     limite=5,
-    escopo="PIAUI"
+    escopo="PIAUI",
 ):
 
-    col_fmt, _, _, _ = obter_campo_agrupamento(
-        escopo
+    col_fmt, _, _, _ = (
+        obter_campo_agrupamento(
+            escopo
+        )
     )
 
     base = df_periodo[
         df_periodo["tipo_registro"].isin(
             [
                 "RECLAMACAO",
-                "INFORMACAO"
+                "INFORMACAO",
             ]
         )
     ]
@@ -1138,7 +1311,7 @@ def calcular_municipios_atencao(
         .groupby(
             [
                 col_fmt,
-                "tipo_registro"
+                "tipo_registro",
             ]
         )
         .size()
@@ -1147,11 +1320,23 @@ def calcular_municipios_atencao(
         )
     )
 
-    if "RECLAMACAO" not in agrupado.columns:
-        agrupado["RECLAMACAO"] = 0
+    if (
+        "RECLAMACAO"
+        not in agrupado.columns
+    ):
 
-    if "INFORMACAO" not in agrupado.columns:
-        agrupado["INFORMACAO"] = 0
+        agrupado[
+            "RECLAMACAO"
+        ] = 0
+
+    if (
+        "INFORMACAO"
+        not in agrupado.columns
+    ):
+
+        agrupado[
+            "INFORMACAO"
+        ] = 0
 
     agrupado["TOTAL"] = (
         agrupado["RECLAMACAO"]
@@ -1163,122 +1348,166 @@ def calcular_municipios_atencao(
         agrupado
         .sort_values(
             by="TOTAL",
-            ascending=False
+            ascending=False,
         )
         .reset_index()
     )
 
     resultado = []
 
-    for _, row in agrupado.head(limite).iterrows():
+    for _, row in (
+        agrupado.head(limite)
+        .iterrows()
+    ):
 
         nome_item = row[col_fmt]
 
         if escopo == "PIAUI":
-            nome_item = corrigir_nome_exibicao(
-                nome_item
+
+            nome_item = (
+                corrigir_nome_exibicao(
+                    nome_item
+                )
             )
 
-        resultado.append({
+        resultado.append(
+            {
 
-            "municipio": nome_item,
+                "municipio":
+                    nome_item,
 
-            "registros": int(
-                row["TOTAL"]
-            ),
+                "registros":
+                    int(row["TOTAL"]),
 
-            "rec_oficial": int(
-                row["RECLAMACAO"]
-            ),
+                "rec_oficial":
+                    int(row["RECLAMACAO"]),
 
-            "inf_oficial": int(
-                row["INFORMACAO"]
-            )
-        })
+                "inf_oficial":
+                    int(row["INFORMACAO"]),
+            }
+        )
 
     return resultado
 
 
-# ============================================================
-# DADOS DO DASHBOARD
-# ============================================================
-
 def construir_dashboard_data(
     df_periodo,
-    escopo="PIAUI",
-    eventos_manuais=None
+    modo,
+    data_ref,
+    escopo,
+    eventos_manuais=None,
 ):
 
     if (
         str(escopo).upper()
-        == "TERESINA"
+        ==
+        "TERESINA"
     ):
 
         df_periodo = df_periodo[
             df_periodo["cidade_key"]
-            == "TERESINA"
+            ==
+            "TERESINA"
         ].copy()
 
-    kpis = calcular_kpis_principais(
-        df_periodo,
-        escopo=escopo
-    )
-
-    top5 = calcular_top5_municipios(
-        df_periodo,
-        escopo=escopo
-    )
-
-    total_registros = (
-        kpis["total_registros"]
-    )
-
-    concentracao = (
-
-        (
-            top5["TOTAL"].sum()
-            /
-            total_registros
-            *
-            100
+    kpis = (
+        calcular_kpis_principais(
+            df_periodo,
+            escopo=escopo,
         )
+    )
 
-        if total_registros > 0
-
-        else 0.0
+    top5 = (
+        calcular_top5_municipios(
+            df_periodo,
+            escopo=escopo,
+        )
     )
 
     return {
 
-        "kpis": kpis,
+        "kpis":
+            kpis,
 
-        "top5": top5,
+        "top5":
+            top5,
 
-        "lider": calcular_municipio_lider(
-            df_periodo,
-            escopo=escopo
-        ),
+        "lider":
+            calcular_municipio_lider(
+                df_periodo,
+                escopo=escopo,
+            ),
 
         "areas_criticas":
             calcular_kpi_areas_criticas(
                 df_periodo,
-                escopo=escopo
+                escopo=escopo,
             ),
 
         "concentracao_top5":
-            round(concentracao, 1),
+            round(
+                (
+                    top5["TOTAL"].sum()
+                    /
+                    kpis[
+                        "total_registros"
+                    ]
+                    *
+                    100
+                ),
+                1,
+            )
+            if kpis[
+                "total_registros"
+            ] > 0
+            else 0.0,
 
         "municipios_atencao":
             calcular_municipios_atencao(
                 df_periodo,
-                escopo=escopo
+                escopo=escopo,
             ),
 
-        "escopo": escopo,
+        "escopo":
+            escopo,
 
         "eventos_manuais":
-            eventos_manuais or []
+            eventos_manuais or [],
     }
+
+
+# ============================================================
+# LOGO
+# ============================================================
+
+def converter_logo_para_branco(
+    pil_img,
+):
+
+    if pil_img is None:
+        return None
+
+    try:
+
+        img = pil_img.convert(
+            "RGBA"
+        )
+
+        data = np.array(img)
+
+        data[..., :3] = [
+            255,
+            255,
+            255,
+        ]
+
+        return Image.fromarray(
+            data
+        )
+
+    except Exception:
+
+        return pil_img
 
 
 # ============================================================
@@ -1290,23 +1519,26 @@ def renderizar_card_executivo(
     data_ref,
     modo,
     regional,
-    logo_img=None
+    logo_img=None,
 ):
 
     escopo = dashboard_data.get(
         "escopo",
-        "PIAUI"
+        "PIAUI",
     )
 
-    col_fmt, _, plural_rotulo, singular_rotulo = (
-        obter_campo_agrupamento(
-            escopo
-        )
+    (
+        col_fmt,
+        _,
+        plural_rotulo,
+        singular_rotulo,
+    ) = obter_campo_agrupamento(
+        escopo
     )
 
     fig = plt.figure(
         figsize=(16, 9),
-        facecolor=C_BG
+        facecolor=C_BG,
     )
 
     gs = fig.add_gridspec(
@@ -1317,24 +1549,24 @@ def renderizar_card_executivo(
             1.2,
             2.5,
             2.5,
-            0.3
+            0.3,
         ],
         wspace=0.18,
         hspace=0.3,
         left=0.03,
         right=0.97,
         top=0.95,
-        bottom=0.02
+        bottom=0.02,
     )
 
-    # ========================================================
+    # --------------------------------------------------------
     # CABEÇALHO
-    # ========================================================
+    # --------------------------------------------------------
 
-    patch_header = FancyBboxPatch(
+    header = mpatches.FancyBboxPatch(
         (
             0.03,
-            0.88
+            0.88,
         ),
         0.94,
         0.075,
@@ -1345,11 +1577,11 @@ def renderizar_card_executivo(
         facecolor=C_PRIMARY,
         edgecolor="none",
         zorder=1,
-        transform=fig.transFigure
+        transform=fig.transFigure,
     )
 
     fig.patches.append(
-        patch_header
+        header
     )
 
     ax_header = fig.add_axes(
@@ -1357,17 +1589,19 @@ def renderizar_card_executivo(
             0.04,
             0.88,
             0.92,
-            0.075
+            0.075,
         ],
         facecolor="none",
-        zorder=2
+        zorder=2,
     )
 
     ax_header.axis("off")
 
-    periodo_texto = formatar_periodo_cabecalho(
-        data_ref,
-        modo
+    periodo_texto = (
+        formatar_periodo_cabecalho(
+            data_ref,
+            modo,
+        )
     )
 
     ax_header.text(
@@ -1377,7 +1611,7 @@ def renderizar_card_executivo(
         color="#8DB4FF",
         fontsize=9.0,
         fontweight="bold",
-        va="center"
+        va="center",
     )
 
     ax_header.text(
@@ -1387,7 +1621,7 @@ def renderizar_card_executivo(
         color="#FFFFFF",
         fontsize=18,
         fontweight="bold",
-        va="center"
+        va="center",
     )
 
     ax_header.text(
@@ -1399,34 +1633,17 @@ def renderizar_card_executivo(
         ),
         color="#E2E8F0",
         fontsize=9.5,
-        va="center"
+        va="center",
     )
-
-    # ========================================================
-    # LOGO
-    # ========================================================
 
     if logo_img is not None:
 
         try:
 
             logo_branca = (
-                logo_img
-                .convert("RGBA")
-            )
-
-            data_logo = np.array(
-                logo_branca
-            )
-
-            data_logo[..., :3] = [
-                255,
-                255,
-                255
-            ]
-
-            logo_branca = Image.fromarray(
-                data_logo
+                converter_logo_para_branco(
+                    logo_img
+                )
             )
 
             ax_logo = fig.add_axes(
@@ -1434,9 +1651,9 @@ def renderizar_card_executivo(
                     0.80,
                     0.885,
                     0.15,
-                    0.06
+                    0.06,
                 ],
-                zorder=3
+                zorder=3,
             )
 
             ax_logo.imshow(
@@ -1455,7 +1672,7 @@ def renderizar_card_executivo(
                 fontsize=16,
                 fontweight="bold",
                 ha="right",
-                va="center"
+                va="center",
             )
 
     else:
@@ -1468,17 +1685,17 @@ def renderizar_card_executivo(
             fontsize=16,
             fontweight="bold",
             ha="right",
-            va="center"
+            va="center",
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # ESTILO DOS CARDS
-    # ========================================================
+    # --------------------------------------------------------
 
     def estilizar_card(
         ax,
         border_color=C_BORDER,
-        bg_color=C_CARD
+        bg_color=C_CARD,
     ):
 
         ax.set_facecolor(
@@ -1498,17 +1715,23 @@ def renderizar_card_executivo(
                 1.1
             )
 
-    kpis = dashboard_data["kpis"]
+    # --------------------------------------------------------
+    # KPI
+    # --------------------------------------------------------
 
-    lider = dashboard_data["lider"]
+    kpis = dashboard_data[
+        "kpis"
+    ]
+
+    lider = dashboard_data[
+        "lider"
+    ]
 
     areas_criticas = (
-        dashboard_data["areas_criticas"]
+        dashboard_data[
+            "areas_criticas"
+        ]
     )
-
-    # ========================================================
-    # FUNÇÃO DE KPI
-    # ========================================================
 
     def desenhar_kpi(
         ax,
@@ -1516,24 +1739,26 @@ def renderizar_card_executivo(
         valor,
         cor_val,
         subtexto=None,
-        cor_sub=C_MUTED
+        cor_sub=C_MUTED,
     ):
 
         estilizar_card(ax)
 
-        patch_accent = FancyBboxPatch(
-            (
-                0.0,
-                0.90
-            ),
-            1.0,
-            0.10,
-            boxstyle=(
-                "round,pad=0.0"
-            ),
-            facecolor=cor_val,
-            edgecolor="none",
-            transform=ax.transAxes
+        patch_accent = (
+            mpatches.FancyBboxPatch(
+                (
+                    0.0,
+                    0.90,
+                ),
+                1.0,
+                0.10,
+                boxstyle=(
+                    "round,pad=0.0"
+                ),
+                facecolor=cor_val,
+                edgecolor="none",
+                transform=ax.transAxes,
+            )
         )
 
         ax.add_patch(
@@ -1547,7 +1772,7 @@ def renderizar_card_executivo(
             fontsize=7.5,
             fontweight="bold",
             color=C_MUTED,
-            transform=ax.transAxes
+            transform=ax.transAxes,
         )
 
         ax.text(
@@ -1557,7 +1782,7 @@ def renderizar_card_executivo(
             fontsize=26,
             fontweight="bold",
             color=C_TEXT,
-            transform=ax.transAxes
+            transform=ax.transAxes,
         )
 
         if subtexto:
@@ -1569,12 +1794,12 @@ def renderizar_card_executivo(
                 fontsize=7.5,
                 fontweight="semibold",
                 color=cor_sub,
-                transform=ax.transAxes
+                transform=ax.transAxes,
             )
 
-    # ========================================================
-    # KPIs
-    # ========================================================
+    # --------------------------------------------------------
+    # 7 KPIs
+    # --------------------------------------------------------
 
     ax_k1 = fig.add_subplot(
         gs[1, 0]
@@ -1583,53 +1808,71 @@ def renderizar_card_executivo(
     desenhar_kpi(
         ax_k1,
         "Total O.S.",
-        kpis["total_registros"],
+        kpis[
+            "total_registros"
+        ],
         C_PRIMARY,
-        "Demanda total do período"
+        "Demanda total do período",
     )
 
     ax_k2 = fig.add_subplot(
         gs[1, 1]
     )
 
-    percentual_rec = (
-        kpis["total_reclamacoes"]
+    pct_rec = (
+        kpis[
+            "total_reclamacoes"
+        ]
         /
-        kpis["total_registros"]
+        kpis[
+            "total_registros"
+        ]
         *
         100
-        if kpis["total_registros"] > 0
+        if kpis[
+            "total_registros"
+        ] > 0
         else 0
     )
 
     desenhar_kpi(
         ax_k2,
         "Reclamações",
-        kpis["total_reclamacoes"],
+        kpis[
+            "total_reclamacoes"
+        ],
         C_PRIMARY,
-        f"{percentual_rec:.0f}% do total"
+        f"{pct_rec:.0f}% do total",
     )
 
     ax_k3 = fig.add_subplot(
         gs[1, 2]
     )
 
-    percentual_inf = (
-        kpis["total_informacoes"]
+    pct_inf = (
+        kpis[
+            "total_informacoes"
+        ]
         /
-        kpis["total_registros"]
+        kpis[
+            "total_registros"
+        ]
         *
         100
-        if kpis["total_registros"] > 0
+        if kpis[
+            "total_registros"
+        ] > 0
         else 0
     )
 
     desenhar_kpi(
         ax_k3,
         "Informações",
-        kpis["total_informacoes"],
+        kpis[
+            "total_informacoes"
+        ],
         C_INFO,
-        f"{percentual_inf:.0f}% do total"
+        f"{pct_inf:.0f}% do total",
     )
 
     ax_k4 = fig.add_subplot(
@@ -1639,9 +1882,11 @@ def renderizar_card_executivo(
     desenhar_kpi(
         ax_k4,
         plural_rotulo,
-        kpis["municipios_afetados"],
+        kpis[
+            "municipios_afetados"
+        ],
         "#334155",
-        "Com registros no período"
+        "Com registros no período",
     )
 
     ax_k5 = fig.add_subplot(
@@ -1651,10 +1896,14 @@ def renderizar_card_executivo(
     desenhar_kpi(
         ax_k5,
         f"{singular_rotulo} LÍDER",
-        lider["total_registros"],
+        lider[
+            "total_registros"
+        ],
         C_PRIMARY,
-        lider["municipio"].upper(),
-        cor_sub=C_PRIMARY
+        lider[
+            "municipio"
+        ].upper(),
+        cor_sub=C_PRIMARY,
     )
 
     ax_k6 = fig.add_subplot(
@@ -1678,10 +1927,13 @@ def renderizar_card_executivo(
         "ÁREAS CRÍTICAS",
         qtd_criticas,
         cor_al,
-        "> 5 rec."
-        if qtd_criticas > 0
-        else "Nenhum alerta",
-        cor_sub=cor_al
+        (
+            "> 5 rec."
+            if qtd_criticas > 0
+            else
+            "Nenhum alerta"
+        ),
+        cor_sub=cor_al,
     )
 
     ax_k7 = fig.add_subplot(
@@ -1691,15 +1943,17 @@ def renderizar_card_executivo(
     desenhar_kpi(
         ax_k7,
         "CONCENTRAÇÃO TOP 5",
-        f"{dashboard_data.get('concentracao_top5', 0.0):.0f}%",
+        (
+            f"{dashboard_data.get('concentracao_top5', 0.0):.0f}%"
+        ),
         C_PRIMARY,
         "Volume acumulado",
-        cor_sub=C_MUTED
+        cor_sub=C_MUTED,
     )
 
-    # ========================================================
+    # --------------------------------------------------------
     # TOP 5
-    # ========================================================
+    # --------------------------------------------------------
 
     ax_top5 = fig.add_subplot(
         gs[2:4, 0:4]
@@ -1709,30 +1963,38 @@ def renderizar_card_executivo(
         ax_top5
     )
 
-    ax_top5.grid(False)
+    ax_top5.grid(
+        False
+    )
 
-    top5_df = dashboard_data["top5"]
+    top5_df = dashboard_data[
+        "top5"
+    ]
 
     if not top5_df.empty:
 
         cidades = (
-            top5_df[col_fmt]
-            .tolist()
+            top5_df[
+                col_fmt
+            ].tolist()
         )
 
         reclamacoes_of = (
-            top5_df["RECLAMACAO"]
-            .tolist()
+            top5_df[
+                "RECLAMACAO"
+            ].tolist()
         )
 
         informacoes_of = (
-            top5_df["INFORMACAO"]
-            .tolist()
+            top5_df[
+                "INFORMACAO"
+            ].tolist()
         )
 
         totais_of = (
-            top5_df["TOTAL"]
-            .tolist()
+            top5_df[
+                "TOTAL"
+            ].tolist()
         )
 
         x = np.arange(
@@ -1746,7 +2008,7 @@ def renderizar_card_executivo(
             reclamacoes_of,
             width,
             label="Reclamação",
-            color=C_PRIMARY
+            color=C_PRIMARY,
         )
 
         rects2 = ax_top5.bar(
@@ -1754,29 +2016,32 @@ def renderizar_card_executivo(
             informacoes_of,
             width,
             label="Informação",
-            color=C_INFO
+            color=C_INFO,
         )
 
         ax_top5.set_title(
             (
-                f"TOP 5 {plural_rotulo} "
-                "COM MAIOR DEMANDA"
+                f"TOP 5 "
+                f"{plural_rotulo} "
+                f"COM MAIOR DEMANDA"
             ),
             fontsize=11.0,
             fontweight="bold",
             color=C_TEXT,
             pad=15,
-            loc="left"
+            loc="left",
         )
 
-        ax_top5.set_xticks(x)
+        ax_top5.set_xticks(
+            x
+        )
 
         labels_eixo = [
             f"{cid}\nTotal: {tot}"
             for cid, tot
             in zip(
                 cidades,
-                totais_of
+                totais_of,
             )
         ]
 
@@ -1784,45 +2049,47 @@ def renderizar_card_executivo(
             labels_eixo,
             fontsize=10.0,
             fontweight="bold",
-            color=C_TEXT
+            color=C_TEXT,
         )
 
         ax_top5.legend(
             loc="upper right",
             frameon=False,
-            fontsize=9.5
+            fontsize=9.5,
         )
 
         max_val = max(
             max(
                 reclamacoes_of,
-                default=1
+                default=1,
             ),
             max(
                 informacoes_of,
-                default=1
-            )
+                default=1,
+            ),
         )
 
         ax_top5.set_ylim(
             0,
-            max_val * 1.25
+            max_val * 1.25,
         )
 
         for rects, col_color in zip(
             [
                 rects1,
-                rects2
+                rects2,
             ],
             [
                 C_PRIMARY,
-                C_INFO
-            ]
+                C_INFO,
+            ],
         ):
 
             for rect in rects:
 
-                h = rect.get_height()
+                h = (
+                    rect.get_height()
+                )
 
                 if h > 0:
 
@@ -1831,65 +2098,73 @@ def renderizar_card_executivo(
                         +
                         (
                             max_val
-                            * 0.02
+                            *
+                            0.02
                         )
                         if h
-                        < max_val * 0.15
-                        else h * 0.5
+                        <
+                        max_val
+                        *
+                        0.15
+                        else
+                        h * 0.5
                     )
 
                     color_txt = (
                         col_color
                         if h
-                        < max_val * 0.15
-                        else "white"
+                        <
+                        max_val
+                        *
+                        0.15
+                        else
+                        "white"
                     )
 
                     va_align = (
                         "bottom"
                         if h
-                        < max_val * 0.15
-                        else "center"
+                        <
+                        max_val
+                        *
+                        0.15
+                        else
+                        "center"
                     )
 
                     ax_top5.text(
-                        rect.get_x()
-                        +
-                        rect.get_width()
-                        / 2.,
+                        (
+                            rect.get_x()
+                            +
+                            rect.get_width()
+                            /
+                            2.
+                        ),
                         y_pos,
                         f"{int(h)}",
                         ha="center",
                         va=va_align,
                         fontsize=10.5,
                         fontweight="bold",
-                        color=color_txt
+                        color=color_txt,
                     )
-
-        ax_top5.spines[
-            "top"
-        ].set_visible(False)
-
-        ax_top5.spines[
-            "right"
-        ].set_visible(False)
 
     else:
 
         ax_top5.text(
             0.5,
             0.5,
-            "Não existem registros no período selecionado.",
+            "Nenhum registro encontrado no período.",
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=11,
             color=C_MUTED,
-            transform=ax_top5.transAxes
+            transform=ax_top5.transAxes,
         )
 
-    # ========================================================
+    # --------------------------------------------------------
     # ÁREAS EM ATENÇÃO
-    # ========================================================
+    # --------------------------------------------------------
 
     ax_atencao = fig.add_subplot(
         gs[2, 4:7]
@@ -1902,11 +2177,11 @@ def renderizar_card_executivo(
     ax_atencao.text(
         0.04,
         0.86,
-        f"⚠ {plural_rotulo} EM ATENÇÃO",
+        f"{plural_rotulo} EM ATENÇÃO",
         fontsize=10.5,
         fontweight="bold",
         color=C_ALERT,
-        transform=ax_atencao.transAxes
+        transform=ax_atencao.transAxes,
     )
 
     atencao_list = (
@@ -1923,12 +2198,12 @@ def renderizar_card_executivo(
             (
                 f"Nenhum "
                 f"{singular_rotulo.lower()} "
-                "registrado."
+                f"registrado."
             ),
             fontsize=9.5,
             color=C_MUTED,
             va="center",
-            transform=ax_atencao.transAxes
+            transform=ax_atencao.transAxes,
         )
 
     else:
@@ -1944,15 +2219,15 @@ def renderizar_card_executivo(
                 ax_atencao.plot(
                     [
                         0.04,
-                        0.96
+                        0.96,
                     ],
                     [
                         y_p + 0.12,
-                        y_p + 0.12
+                        y_p + 0.12,
                     ],
                     color="#E2E8F0",
                     linewidth=0.8,
-                    transform=ax_atencao.transAxes
+                    transform=ax_atencao.transAxes,
                 )
 
             ax_atencao.text(
@@ -1963,7 +2238,7 @@ def renderizar_card_executivo(
                 fontweight="bold",
                 color=C_ALERT,
                 va="center",
-                transform=ax_atencao.transAxes
+                transform=ax_atencao.transAxes,
             )
 
             ax_atencao.text(
@@ -1974,7 +2249,7 @@ def renderizar_card_executivo(
                 fontweight="bold",
                 color=C_TEXT,
                 va="center",
-                transform=ax_atencao.transAxes
+                transform=ax_atencao.transAxes,
             )
 
             ax_atencao.text(
@@ -1989,14 +2264,14 @@ def renderizar_card_executivo(
                 fontweight="bold",
                 color=C_MUTED,
                 va="center",
-                transform=ax_atencao.transAxes
+                transform=ax_atencao.transAxes,
             )
 
             y_p -= 0.22
 
-    # ========================================================
+    # --------------------------------------------------------
     # INFORMAÇÕES OPERACIONAIS
-    # ========================================================
+    # --------------------------------------------------------
 
     ax_eventos = fig.add_subplot(
         gs[3, 4:7]
@@ -2013,12 +2288,12 @@ def renderizar_card_executivo(
         fontsize=10.5,
         fontweight="bold",
         color=C_PRIMARY,
-        transform=ax_eventos.transAxes
+        transform=ax_eventos.transAxes,
     )
 
     ev_manuais = dashboard_data.get(
         "eventos_manuais",
-        []
+        [],
     )
 
     if not ev_manuais:
@@ -2033,7 +2308,7 @@ def renderizar_card_executivo(
             fontsize=9.5,
             color=C_MUTED,
             va="center",
-            transform=ax_eventos.transAxes
+            transform=ax_eventos.transAxes,
         )
 
     else:
@@ -2047,14 +2322,14 @@ def renderizar_card_executivo(
             y_tops = [
                 0.72,
                 0.44,
-                0.16
+                0.16,
             ]
 
         elif num_ev == 2:
 
             y_tops = [
                 0.65,
-                0.30
+                0.30,
             ]
 
         else:
@@ -2072,7 +2347,7 @@ def renderizar_card_executivo(
             mun_str = (
                 ev.get(
                     "mun",
-                    ""
+                    "",
                 )
                 .strip()
                 .title()
@@ -2081,7 +2356,7 @@ def renderizar_card_executivo(
             tag_str = (
                 ev.get(
                     "tag",
-                    ""
+                    "",
                 )
                 .strip()
                 .upper()
@@ -2090,7 +2365,7 @@ def renderizar_card_executivo(
             desc_str = (
                 ev.get(
                     "desc",
-                    ""
+                    "",
                 )
                 .strip()
                 .title()
@@ -2125,30 +2400,17 @@ def renderizar_card_executivo(
                     f"Evento {i + 1}"
                 )
 
-            obs = str(
-                ev.get(
-                    "obs",
-                    ""
+            obs_wrap = "\n".join(
+                textwrap.wrap(
+                    str(
+                        ev.get(
+                            "obs",
+                            "",
+                        )
+                    ).strip(),
+                    width=78,
                 )
-            ).strip()
-
-            if len(obs) > 150:
-                obs = obs[:150]
-
-            if obs:
-
-                import textwrap
-
-                obs_wrap = "\n".join(
-                    textwrap.wrap(
-                        obs,
-                        width=78
-                    )
-                )
-
-            else:
-
-                obs_wrap = ""
+            )[:150]
 
             ax_eventos.text(
                 0.04,
@@ -2157,7 +2419,7 @@ def renderizar_card_executivo(
                 fontsize=10.0,
                 fontweight="bold",
                 color=C_TEXT,
-                transform=ax_eventos.transAxes
+                transform=ax_eventos.transAxes,
             )
 
             if obs_wrap:
@@ -2169,408 +2431,373 @@ def renderizar_card_executivo(
                     fontsize=9.5,
                     color=C_OBS_DARK,
                     va="top",
-                    transform=ax_eventos.transAxes
+                    transform=ax_eventos.transAxes,
                 )
 
-    # ========================================================
+    # --------------------------------------------------------
     # RODAPÉ
-    # ========================================================
+    # --------------------------------------------------------
 
     ax_footer = fig.add_subplot(
         gs[4, :]
     )
 
-    ax_footer.axis("off")
+    ax_footer.axis(
+        "off"
+    )
 
     ax_footer.text(
         0.5,
         0.50,
-        (
-            "Fonte: COI – "
-            "Centro de Operações Integradas"
-        ),
+        "Fonte: COI – Centro de Operações Integradas",
         ha="center",
         va="center",
         fontsize=9.0,
         fontweight="semibold",
-        color=C_MUTED
+        color=C_MUTED,
     )
 
-    # ========================================================
-    # EXPORTAÇÃO PARA MEMÓRIA
-    # ========================================================
+    # --------------------------------------------------------
+    # EXPORTAÇÃO
+    # --------------------------------------------------------
 
-    output = io.BytesIO()
+    buffer = io.BytesIO()
 
     plt.savefig(
-        output,
+        buffer,
         format="png",
-        dpi=200,
+        dpi=300,
         bbox_inches="tight",
-        facecolor=fig.get_facecolor()
+        facecolor=fig.get_facecolor(),
     )
 
-    output.seek(0)
+    buffer.seek(0)
 
     plt.close(fig)
 
-    return output
+    return buffer.getvalue()
+
+
+# ============================================================
+# ZIP
+# ============================================================
+
+def gerar_zip_dashboard(
+    png_bytes,
+):
+
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(
+        buffer,
+        "w",
+        zipfile.ZIP_DEFLATED,
+    ) as zipf:
+
+        zipf.writestr(
+            "card_executivo.png",
+            png_bytes,
+        )
+
+    buffer.seek(0)
+
+    return buffer.getvalue()
 
 
 # ============================================================
 # EVENTOS OPERACIONAIS
 # ============================================================
 
-def extrair_eventos_manuais(
-    evento1,
-    tag1,
-    desc1,
-    obs1,
-    evento2,
-    tag2,
-    desc2,
-    obs2,
-    evento3,
-    tag3,
-    desc3,
-    obs3
-):
+def extrair_eventos_manuais():
 
     eventos = []
 
-    grupos = [
-        (
-            evento1,
-            tag1,
-            desc1,
-            obs1
-        ),
-        (
-            evento2,
-            tag2,
-            desc2,
-            obs2
-        ),
-        (
-            evento3,
-            tag3,
-            desc3,
-            obs3
-        )
-    ]
+    for i in range(1, 4):
 
-    for (
-        mun,
-        tag,
-        desc,
-        obs
-    ) in grupos:
+        mun = st.session_state.get(
+            f"evento_{i}_mun",
+            "",
+        )
+
+        tag = st.session_state.get(
+            f"evento_{i}_tag",
+            "",
+        )
+
+        desc = st.session_state.get(
+            f"evento_{i}_desc",
+            "",
+        )
+
+        obs = st.session_state.get(
+            f"evento_{i}_obs",
+            "",
+        )
 
         if any(
-            str(v).strip()
-            for v in [
-                mun,
-                tag,
-                desc,
-                obs
+            [
+                mun.strip(),
+                tag.strip(),
+                desc.strip(),
+                obs.strip(),
             ]
         ):
 
-            eventos.append({
-
-                "mun": str(mun),
-
-                "tag": str(tag),
-
-                "desc": str(desc),
-
-                "obs": str(obs)
-            })
+            eventos.append(
+                {
+                    "mun": mun,
+                    "tag": tag,
+                    "desc": desc,
+                    "obs": obs,
+                }
+            )
 
     return eventos[:3]
 
 
 # ============================================================
-# INICIALIZAÇÃO DO ESTADO
-# ============================================================
-
-if "card_operacional_png" not in st.session_state:
-
-    st.session_state[
-        "card_operacional_png"
-    ] = None
-
-if "card_operacional_info" not in st.session_state:
-
-    st.session_state[
-        "card_operacional_info"
-    ] = None
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        "### Cards Operacionais"
-    )
-
-    st.caption(
-        "Configuração do relatório executivo"
-    )
-
-    st.divider()
-
-    # ========================================================
-    # BASE
-    # ========================================================
-
-    st.markdown(
-        "**1. Base de dados**"
-    )
-
-    arquivo_os = st.file_uploader(
-        "Planilha de O.S.",
-        type=[
-            "xlsx",
-            "xls"
-        ],
-        help=(
-            "Envie a base bruta de Ordens de Serviço."
-        )
-    )
-
-    logo_upload = st.file_uploader(
-        "Logo (opcional)",
-        type=[
-            "png",
-            "jpg",
-            "jpeg"
-        ]
-    )
-
-    st.divider()
-
-    # ========================================================
-    # CONFIGURAÇÃO
-    # ========================================================
-
-    st.markdown(
-        "**2. Configuração do relatório**"
-    )
-
-    escopo = st.selectbox(
-        "Escopo",
-        options=[
-            "PIAUI",
-            "TERESINA"
-        ],
-        format_func=lambda x: (
-            "Piauí (Municípios)"
-            if x == "PIAUI"
-            else "Teresina (Bairros)"
-        )
-    )
-
-    regional = st.text_input(
-        "Regional",
-        value="REGIONAL SEMIÁRIDO - SUL"
-    )
-
-    modo = st.selectbox(
-        "Período",
-        options=[
-            "AUTO",
-            "DIARIO",
-            "SEMANAL",
-            "MENSAL"
-        ],
-        format_func=lambda x: {
-
-            "AUTO": "Automático",
-
-            "DIARIO": "Diário",
-
-            "SEMANAL": "Semanal",
-
-            "MENSAL": "Mensal"
-
-        }[x]
-    )
-
-    data_manual = st.text_input(
-        "Data de referência",
-        placeholder="Ex.: 30/09/2026",
-        help=(
-            "Deixe vazio para utilizar automaticamente "
-            "a maior data encontrada na base."
-        )
-    )
-
-    st.divider()
-
-    # ========================================================
-    # EVENTOS
-    # ========================================================
-
-    st.markdown(
-        "**3. Informações operacionais**"
-    )
-
-    st.caption(
-        "Até 3 eventos podem ser incluídos no card."
-    )
-
-    st.markdown(
-        "Evento 1"
-    )
-
-    ev1_mun = st.text_input(
-        "Município",
-        key="ev1_mun"
-    )
-
-    ev1_tag = st.text_input(
-        "Tag",
-        key="ev1_tag"
-    )
-
-    ev1_desc = st.text_input(
-        "Evento",
-        key="ev1_desc"
-    )
-
-    ev1_obs = st.text_area(
-        "Observação",
-        key="ev1_obs",
-        height=70
-    )
-
-    st.markdown(
-        "Evento 2"
-    )
-
-    ev2_mun = st.text_input(
-        "Município",
-        key="ev2_mun"
-    )
-
-    ev2_tag = st.text_input(
-        "Tag",
-        key="ev2_tag"
-    )
-
-    ev2_desc = st.text_input(
-        "Evento",
-        key="ev2_desc"
-    )
-
-    ev2_obs = st.text_area(
-        "Observação",
-        key="ev2_obs",
-        height=70
-    )
-
-    st.markdown(
-        "Evento 3"
-    )
-
-    ev3_mun = st.text_input(
-        "Município",
-        key="ev3_mun"
-    )
-
-    ev3_tag = st.text_input(
-        "Tag",
-        key="ev3_tag"
-    )
-
-    ev3_desc = st.text_input(
-        "Evento",
-        key="ev3_desc"
-    )
-
-    ev3_obs = st.text_area(
-        "Observação",
-        key="ev3_obs",
-        height=70
-    )
-
-    st.divider()
-
-    gerar = st.button(
-        "GERAR CARD",
-        type="primary",
-        use_container_width=True
-    )
-
-    if st.button(
-        "Voltar ao Menu Principal",
-        use_container_width=True
-    ):
-        st.switch_page(
-            "app.py"
-        )
-
-
-# ============================================================
-# CABEÇALHO DA PÁGINA
+# CABEÇALHO PRINCIPAL
 # ============================================================
 
 st.markdown(
     '<div class="main-title">Cards Operacionais</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 st.markdown(
     '<div class="main-subtitle">'
-    'Relatório executivo de falta de água'
-    '</div>',
-    unsafe_allow_html=True
+    "Geração de relatório executivo de falta de água"
+    "</div>",
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# ÁREA PRINCIPAL
+# 1 — BASE DE DADOS
 # ============================================================
 
-if arquivo_os is None:
+st.markdown(
+    '<div class="section-title">1. Base de Dados</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="section-description">'
+    "Envie a base de Ordens de Serviço que será utilizada "
+    "para gerar o card executivo."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+arquivo_excel = st.file_uploader(
+    "Planilha de O.S.",
+    type=[
+        "xlsx",
+        "xls",
+    ],
+    help=(
+        "Envie a base bruta de Ordens de Serviço. "
+        "Tabelas Dinâmicas não são aceitas."
+    ),
+)
+
+
+# ============================================================
+# 2 — CONFIGURAÇÃO
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">2. Configuração do Card</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="section-description">'
+    "Defina o escopo, regional e período que serão apresentados "
+    "no relatório executivo."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+config_container = st.container(
+    border=True
+)
+
+with config_container:
+
+    col_config_1, col_config_2 = (
+        st.columns(2)
+    )
+
+    with col_config_1:
+
+        escopo = st.selectbox(
+            "Escopo",
+            options=[
+                (
+                    "Piauí (Municípios)",
+                    "PIAUI",
+                ),
+                (
+                    "Teresina (Bairros)",
+                    "TERESINA",
+                ),
+            ],
+            format_func=lambda x: x[0],
+            index=0,
+        )
+
+        regional = st.text_input(
+            "Regional",
+            value=(
+                "REGIONAL SEMIÁRIDO - SUL"
+            ),
+        )
+
+    with col_config_2:
+
+        modo_selecionado = st.selectbox(
+            "Período",
+            options=[
+                "AUTO",
+                "DIARIO",
+                "SEMANAL",
+                "MENSAL",
+            ],
+            format_func=lambda x: {
+                "AUTO":
+                    "Automático",
+                "DIARIO":
+                    "Diário",
+                "SEMANAL":
+                    "Semanal",
+                "MENSAL":
+                    "Mensal",
+            }[x],
+            index=0,
+        )
+
+        data_manual = st.text_input(
+            "Data de referência",
+            value="",
+            placeholder="Ex.: 30/09/2026",
+            help=(
+                "Deixe em branco para utilizar "
+                "automaticamente a maior data encontrada "
+                "na base."
+            ),
+        )
+
+
+# ============================================================
+# 3 — LOGO OPCIONAL
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">3. Identidade Visual</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="section-description">'
+    "A utilização da logo é opcional."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+arquivo_logo = st.file_uploader(
+    "Logo",
+    type=[
+        "png",
+        "jpg",
+        "jpeg",
+    ],
+    key="upload_logo",
+)
+
+
+# ============================================================
+# 4 — INFORMAÇÕES OPERACIONAIS
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">4. Informações Operacionais</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="section-description">'
+    "Adicione até três informações operacionais para aparecerem "
+    "no card executivo."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+for i in range(1, 4):
 
     st.markdown(
-        """
-        <div class="info-box">
-        <strong>Base de dados não carregada.</strong><br>
-        Utilize o painel lateral para enviar a planilha de O.S.
-        e configurar o relatório.
-        </div>
-        """,
-        unsafe_allow_html=True
+        f"**Evento {i}**"
     )
 
-else:
-
-    st.markdown(
-        '<div class="section-title">Base carregada</div>',
-        unsafe_allow_html=True
+    col_mun, col_tag, col_evento = (
+        st.columns(
+            [1.0, 0.8, 1.4]
+        )
     )
 
-    col_info1, col_info2, col_info3 = st.columns(3)
+    with col_mun:
 
-    col_info1.metric(
-        "Arquivo",
-        arquivo_os.name
+        st.text_input(
+            "Município",
+            key=f"evento_{i}_mun",
+            placeholder="Ex.: Picos",
+        )
+
+    with col_tag:
+
+        st.text_input(
+            "TAG",
+            key=f"evento_{i}_tag",
+            placeholder="Ex.: ETA-01",
+        )
+
+    with col_evento:
+
+        st.text_input(
+            "Evento",
+            key=f"evento_{i}_desc",
+            placeholder="Ex.: Falta de energia",
+        )
+
+    st.text_input(
+        "Observação",
+        key=f"evento_{i}_obs",
+        placeholder="Breve detalhe operacional...",
     )
 
-    col_info2.metric(
-        "Formato",
-        arquivo_os.name.split(".")[-1].upper()
-    )
+    if i < 3:
+        st.divider()
 
-    col_info3.metric(
-        "Tamanho",
-        f"{arquivo_os.size / 1024:.1f} KB"
+
+# ============================================================
+# GERAÇÃO
+# ============================================================
+
+st.markdown("")
+
+col_gerar_1, col_gerar_2, col_gerar_3 = (
+    st.columns(
+        [1, 1, 1]
+    )
+)
+
+with col_gerar_2:
+
+    gerar_card = st.button(
+        "Gerar Card Executivo",
+        type="primary",
+        use_container_width=True,
     )
 
 
@@ -2578,253 +2805,295 @@ else:
 # PROCESSAMENTO
 # ============================================================
 
-if gerar:
+if gerar_card:
 
-    if arquivo_os is None:
+    if arquivo_excel is None:
 
         st.error(
-            "Envie a planilha de O.S. antes de gerar o card."
+            "Envie uma planilha de O.S. antes de gerar o card."
         )
 
         st.stop()
 
-    with st.spinner(
-        "Processando a base e gerando o Card Operacional..."
-    ):
+    try:
 
-        try:
-
-            # ------------------------------------------------
-            # LEITURA DA PLANILHA
-            # ------------------------------------------------
-
-            arquivo_os.seek(0)
+        with st.spinner(
+            "Processando a base e gerando o card executivo..."
+        ):
 
             raw_df = pd.read_excel(
-                arquivo_os
+                arquivo_excel
             )
-
-            if raw_df.empty:
-
-                raise ValueError(
-                    "A planilha enviada está vazia."
-                )
-
-            # ------------------------------------------------
-            # PREPARAÇÃO
-            # ------------------------------------------------
 
             df_os = preparar_dataframe_os(
                 raw_df
             )
 
-            # ------------------------------------------------
-            # PERÍODO
-            # ------------------------------------------------
-
-            modo_final, data_ref = (
+            modo, data_ref = (
                 detectar_periodo_e_data_ref(
                     df_os,
-                    modo,
-                    data_manual
+                    modo_selecionado,
+                    data_manual,
                 )
             )
-
-            # ------------------------------------------------
-            # FILTRO
-            # ------------------------------------------------
 
             df_periodo = filtrar_periodo(
                 df_os,
-                modo_final,
-                data_ref
+                modo=modo,
+                data_referencia=data_ref,
             )
-
-            # ------------------------------------------------
-            # EVENTOS
-            # ------------------------------------------------
-
-            eventos = extrair_eventos_manuais(
-
-                ev1_mun,
-                ev1_tag,
-                ev1_desc,
-                ev1_obs,
-
-                ev2_mun,
-                ev2_tag,
-                ev2_desc,
-                ev2_obs,
-
-                ev3_mun,
-                ev3_tag,
-                ev3_desc,
-                ev3_obs
-            )
-
-            # ------------------------------------------------
-            # DADOS DO DASHBOARD
-            # ------------------------------------------------
-
-            dashboard_data = construir_dashboard_data(
-                df_periodo,
-                escopo=escopo,
-                eventos_manuais=eventos
-            )
-
-            # ------------------------------------------------
-            # LOGO
-            # ------------------------------------------------
 
             logo_img = None
 
-            if logo_upload is not None:
-
-                logo_upload.seek(0)
+            if arquivo_logo is not None:
 
                 logo_img = Image.open(
-                    logo_upload
+                    arquivo_logo
                 )
 
-            # ------------------------------------------------
-            # RENDERIZAÇÃO
-            # ------------------------------------------------
-
-            png_buffer = renderizar_card_executivo(
-                dashboard_data,
-                data_ref,
-                modo_final,
-                regional.strip()
-                or "REGIONAL",
-                logo_img
+            eventos = (
+                extrair_eventos_manuais()
             )
 
-            # ------------------------------------------------
-            # SESSION STATE
-            # ------------------------------------------------
-
-            st.session_state[
-                "card_operacional_png"
-            ] = png_buffer.getvalue()
-
-            st.session_state[
-                "card_operacional_info"
-            ] = {
-
-                "modo": modo_final,
-
-                "data_ref": data_ref,
-
-                "registros_base": len(
-                    df_os
-                ),
-
-                "registros_periodo": len(
-                    df_periodo
-                ),
-
-                "escopo": escopo
-            }
-
-            st.success(
-                "Card Operacional gerado com sucesso."
+            dashboard_data = (
+                construir_dashboard_data(
+                    df_periodo,
+                    modo,
+                    data_ref,
+                    escopo[1],
+                    eventos,
+                )
             )
 
-        except Exception as err:
-
-            st.session_state[
-                "card_operacional_png"
-            ] = None
-
-            st.session_state[
-                "card_operacional_info"
-            ] = None
-
-            st.error(
-                f"Não foi possível gerar o card: {err}"
+            png_bytes = (
+                renderizar_card_executivo(
+                    dashboard_data,
+                    data_ref,
+                    modo,
+                    regional.strip()
+                    or "REGIONAL",
+                    logo_img,
+                )
             )
+
+            zip_bytes = (
+                gerar_zip_dashboard(
+                    png_bytes
+                )
+            )
+
+            st.session_state[
+                "card_png_bytes"
+            ] = png_bytes
+
+            st.session_state[
+                "card_zip_bytes"
+            ] = zip_bytes
+
+            st.session_state[
+                "card_dashboard_data"
+            ] = dashboard_data
+
+            st.session_state[
+                "card_modo"
+            ] = modo
+
+            st.session_state[
+                "card_data_ref"
+            ] = data_ref
+
+            st.session_state[
+                "card_gerado"
+            ] = True
+
+    except ValueError as err:
+
+        st.error(
+            str(err)
+        )
+
+        st.session_state[
+            "card_gerado"
+        ] = False
+
+    except Exception as err:
+
+        st.error(
+            "Não foi possível gerar o card."
+        )
+
+        st.exception(
+            err
+        )
+
+        st.session_state[
+            "card_gerado"
+        ] = False
 
 
 # ============================================================
-# EXIBIÇÃO DO CARD
+# RESULTADO
 # ============================================================
 
-if (
-    st.session_state[
-        "card_operacional_png"
-    ] is not None
+if st.session_state.get(
+    "card_gerado",
+    False,
 ):
 
+    dashboard_data = (
+        st.session_state[
+            "card_dashboard_data"
+        ]
+    )
+
+    modo = (
+        st.session_state[
+            "card_modo"
+        ]
+    )
+
+    data_ref = (
+        st.session_state[
+            "card_data_ref"
+        ]
+    )
+
+    png_bytes = (
+        st.session_state[
+            "card_png_bytes"
+        ]
+    )
+
+    zip_bytes = (
+        st.session_state[
+            "card_zip_bytes"
+        ]
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RESUMO DO PROCESSAMENTO
+    # --------------------------------------------------------
+
     st.markdown(
-        '<div class="section-title">Card Operacional</div>',
-        unsafe_allow_html=True
+        '<div class="section-title">'
+        "Card gerado"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
-    info = st.session_state[
-        "card_operacional_info"
-    ]
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Período",
-        info["modo"]
+    kpis_resultado = (
+        dashboard_data[
+            "kpis"
+        ]
     )
 
-    col2.metric(
-        "Data de referência",
-        info["data_ref"]
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+
+        st.metric(
+            "O.S. no período",
+            kpis_resultado[
+                "total_registros"
+            ],
+        )
+
+    with c2:
+
+        st.metric(
+            "Reclamações",
+            kpis_resultado[
+                "total_reclamacoes"
+            ],
+        )
+
+    with c3:
+
+        st.metric(
+            "Informações",
+            kpis_resultado[
+                "total_informacoes"
+            ],
+        )
+
+    with c4:
+
+        st.metric(
+            (
+                "Municípios"
+                if escopo[1]
+                == "PIAUI"
+                else
+                "Bairros"
+            ),
+            kpis_resultado[
+                "municipios_afetados"
+            ],
+        )
+
+    st.caption(
+        (
+            f"Período utilizado: "
+            f"{formatar_periodo_cabecalho(data_ref, modo)} "
+            f"({modo})"
+        )
     )
 
-    col3.metric(
-        "Registros na base",
-        info["registros_base"]
-    )
+    # --------------------------------------------------------
+    # PRÉ-VISUALIZAÇÃO
+    # --------------------------------------------------------
 
-    col4.metric(
-        "Registros no período",
-        info["registros_periodo"]
+    st.markdown(
+        '<div class="section-title">'
+        "Pré-visualização"
+        "</div>",
+        unsafe_allow_html=True,
     )
 
     st.markdown(
-        "<br>",
-        unsafe_allow_html=True
+        '<div class="section-description">'
+        "Visualização do card executivo em formato paisagem 16:9."
+        "</div>",
+        unsafe_allow_html=True,
     )
 
     st.image(
-        st.session_state[
-            "card_operacional_png"
-        ],
-        use_container_width=True
+        png_bytes,
+        use_container_width=True,
     )
 
-    st.markdown(
-        "<br>",
-        unsafe_allow_html=True
+    # --------------------------------------------------------
+    # DOWNLOADS
+    # --------------------------------------------------------
+
+    st.markdown("")
+
+    col_download_1, col_download_2 = (
+        st.columns(2)
     )
 
-    st.download_button(
-        label="BAIXAR CARD EM PNG",
-        data=st.session_state[
-            "card_operacional_png"
-        ],
-        file_name=(
-            "card_operacional.png"
-        ),
-        mime="image/png",
-        use_container_width=False
-    )
+    with col_download_1:
 
-else:
+        st.download_button(
+            label="Baixar Card em PNG",
+            data=png_bytes,
+            file_name=(
+                "card_executivo.png"
+            ),
+            mime="image/png",
+            use_container_width=True,
+        )
 
-    if arquivo_os is not None:
+    with col_download_2:
 
-        st.markdown(
-            """
-            <div class="info-box">
-            A base foi carregada. Configure o relatório no painel
-            lateral e clique em <strong>GERAR CARD</strong>.
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.download_button(
+            label="Baixar Pacote ZIP",
+            data=zip_bytes,
+            file_name=(
+                "card_executivo.zip"
+            ),
+            mime="application/zip",
+            use_container_width=True,
         )
