@@ -402,7 +402,7 @@ with col7:
 
     st.markdown("#### 🗺️ Módulo 7")
     st.markdown("**Mapeamento de Melhorias**")
-    st.caption("Status: Ativo")
+    st.caption("Status: Suspenso")
 
     if st.session_state.get("perfil") == "admin":
 
