@@ -168,26 +168,47 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.markdown(
+    st.html(
         """
-        <div class="tool-card">
-
-            <div class="tool-card-title">
+        <div style="
+            background:#FFFFFF;
+            border:1px solid #CBD5E1;
+            border-radius:12px;
+            padding:22px;
+            min-height:230px;
+            box-sizing:border-box;
+        ">
+            <div style="
+                font-size:18px;
+                font-weight:700;
+                color:#0F172A;
+                margin-bottom:8px;
+            ">
                 📦 Gerador de Lotes
             </div>
 
-            <div class="tool-card-description">
+            <div style="
+                font-size:14px;
+                line-height:1.5;
+                color:#475569;
+                min-height:45px;
+                margin-bottom:16px;
+            ">
                 Geração de lotes para processos de cancelamento
                 de Ordens de Serviço.
             </div>
 
-            <div class="tool-card-status">
-                Status: <strong>Ativo</strong>
+            <div style="
+                font-size:13px;
+                color:#64748B;
+            ">
+                Status:
+                <strong style="color:#16A34A;">
+                    Ativo
+                </strong>
             </div>
-
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     st.write("")
@@ -209,26 +230,47 @@ with col1:
 
 with col2:
 
-    st.markdown(
+    st.html(
         """
-        <div class="tool-card">
-
-            <div class="tool-card-title">
+        <div style="
+            background:#FFFFFF;
+            border:1px solid #CBD5E1;
+            border-radius:12px;
+            padding:22px;
+            min-height:230px;
+            box-sizing:border-box;
+        ">
+            <div style="
+                font-size:18px;
+                font-weight:700;
+                color:#0F172A;
+                margin-bottom:8px;
+            ">
                 📊 Gerador de Painel
             </div>
 
-            <div class="tool-card-description">
+            <div style="
+                font-size:14px;
+                line-height:1.5;
+                color:#475569;
+                min-height:45px;
+                margin-bottom:16px;
+            ">
                 Geração de painéis e análises operacionais
                 a partir das bases disponibilizadas.
             </div>
 
-            <div class="tool-card-status">
-                Status: <strong>Ativo</strong>
+            <div style="
+                font-size:13px;
+                color:#64748B;
+            ">
+                Status:
+                <strong style="color:#16A34A;">
+                    Ativo
+                </strong>
             </div>
-
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     st.write("")
@@ -242,34 +284,53 @@ with col2:
         st.switch_page(
             "pages/4_2_Gerador_de_Painel.py"
         )
-
-
 # ============================================================
 # 4.3 — CARDS OPERACIONAIS
 # ============================================================
 
 with col3:
 
-    st.markdown(
+    st.html(
         """
-        <div class="tool-card">
-
-            <div class="tool-card-title">
+        <div style="
+            background:#FFFFFF;
+            border:1px solid #CBD5E1;
+            border-radius:12px;
+            padding:22px;
+            min-height:230px;
+            box-sizing:border-box;
+        ">
+            <div style="
+                font-size:18px;
+                font-weight:700;
+                color:#0F172A;
+                margin-bottom:8px;
+            ">
                 🃏 Cards Operacionais
             </div>
 
-            <div class="tool-card-description">
+            <div style="
+                font-size:14px;
+                line-height:1.5;
+                color:#475569;
+                min-height:45px;
+                margin-bottom:16px;
+            ">
                 Geração de cards e indicadores executivos
                 para acompanhamento operacional.
             </div>
 
-            <div class="tool-card-status">
-                Status: <strong>Ativo</strong>
+            <div style="
+                font-size:13px;
+                color:#64748B;
+            ">
+                Status:
+                <strong style="color:#16A34A;">
+                    Ativo
+                </strong>
             </div>
-
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
     st.write("")
