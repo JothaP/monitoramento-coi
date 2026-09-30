@@ -158,17 +158,39 @@ with st.sidebar:
     st.divider()
 
     if st.button(
+        "🛠️ Voltar para Ferramentas Operacionais",
+        use_container_width=True,
+        key="voltar_ferramentas_operacionais",
+    ):
+        st.switch_page(
+            "pages/4_Ferramentas_Operacionais.py"
+        )
+
+    if st.button(
         "🏠 Voltar ao Menu Principal",
         use_container_width=True,
+        key="voltar_menu_principal",
     ):
         st.switch_page("app.py")
 
     st.divider()
 
+    # ========================================================
+    # APARÊNCIA
+    # ========================================================
+
+    st.markdown("### Aparência")
+
+    modo_noturno = st.toggle(
+        "🌙 Modo noturno",
+        value=st.session_state.get("modo_noturno_cards", False),
+        key="modo_noturno_cards",
+    )
+
+    st.divider()
+
     st.caption("Módulo em desenvolvimento")
     st.caption("Acesso restrito a administradores.")
-
-
 # ============================================================
 # PALETA
 # ============================================================
