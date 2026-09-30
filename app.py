@@ -1,15 +1,436 @@
 import streamlit as st
 
+from auth import fazer_login, verificar_autenticacao, fazer_logout
+
 
 st.set_page_config(
-    page_title="Plataforma COI",
+    page_title="Plataforma COI - Hub Central",
     page_icon="🏢",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 
-st.title("Plataforma COI")
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-st.write("Teste de inicialização da aplicação.")
 
-st.success("O app.py está sendo executado corretamente.")
+# ============================================================
+# CREDENCIAIS
+# ============================================================
+
+SENHA_ADMIN = st.secrets.get(
+    "SENHA_ADMIN",
+    "admin2026",
+)
+
+SENHA_USUARIO = st.secrets.get(
+    "SENHA_USUARIO",
+    "coi2026",
+)
+
+
+# ============================================================
+# GARANTIR ESTADO INICIAL
+# ============================================================
+
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = ""
+
+if "perfil" not in st.session_state:
+    st.session_state.perfil = ""
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+if not st.session_state.get("autenticado"):
+
+    st.title("🔐 Acesso Restrito - Plataforma COI")
+
+    st.markdown(
+        "Por favor, insira a senha de acesso para continuar."
+    )
+
+    with st.form("form_login"):
+
+        senha_digitada = st.text_input(
+            "Senha de Acesso",
+            type="password",
+        )
+
+        botao_login = st.form_submit_button(
+            "Entrar",
+            type="primary",
+            use_container_width=True,
+        )
+
+        if botao_login:
+
+            if senha_digitada == SENHA_ADMIN:
+
+                fazer_login(
+                    usuario="admin",
+                    perfil="admin",
+                )
+
+                st.success(
+                    "Login de Administrador realizado com sucesso!"
+                )
+
+                st.rerun()
+
+            elif senha_digitada == SENHA_USUARIO:
+
+                fazer_login(
+                    usuario="operador",
+                    perfil="usuario",
+                )
+
+                st.success(
+                    "Login de Usuário realizado com sucesso!"
+                )
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "❌ Senha incorreta. Tente novamente."
+                )
+
+    st.stop()
+
+
+# ============================================================
+# VALIDAR SESSÃO EXISTENTE
+# ============================================================
+
+verificar_autenticacao()
+
+
+# ============================================================
+# HUB CENTRAL
+# ============================================================
+
+if "modo_escuro_hub" not in st.session_state:
+    st.session_state.modo_escuro_hub = False
+
+
+modo_escuro_hub = st.toggle(
+    "🌙 Modo escuro",
+    value=st.session_state.modo_escuro_hub,
+    key="toggle_modo_escuro_hub",
+)
+
+
+st.session_state.modo_escuro_hub = modo_escuro_hub
+
+
+# ============================================================
+# MODO ESCURO
+# ============================================================
+
+if modo_escuro_hub:
+
+    st.markdown(
+        """
+        <style>
+
+            .stApp {
+                background-color: #0e1117;
+                color: #fafafa;
+            }
+
+            .stApp p,
+            .stApp label,
+            .stApp h1,
+            .stApp h2,
+            .stApp h3,
+            .stApp h4,
+            .stApp h5,
+            .stApp h6 {
+                color: #f0f0f0 !important;
+            }
+
+            .stButton > button {
+                background-color: #000000 !important;
+                color: #ffffff !important;
+                border: 1px solid #444c56 !important;
+            }
+
+            .stButton > button * {
+                color: #ffffff !important;
+            }
+
+            .stButton > button:hover {
+                background-color: #000000 !important;
+                color: #ff0000 !important;
+                border-color: #ff0000 !important;
+            }
+
+            .stButton > button:hover * {
+                color: #ff0000 !important;
+            }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# INFORMAÇÕES DO USUÁRIO
+# ============================================================
+
+perfil_atual = st.session_state.get(
+    "perfil",
+    "",
+).upper()
+
+
+st.write(
+    f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**"
+)
+
+st.divider()
+
+st.markdown("### Selecione o módulo desejado:")
+st.markdown("")
+
+
+# ============================================================
+# PRIMEIRA LINHA
+# ============================================================
+
+col1, col2, col3 = st.columns(3)
+
+
+# ============================================================
+# MÓDULO 1
+# ============================================================
+
+with col1:
+
+    st.markdown("#### 💧 Módulo 1")
+    st.markdown("**Baixa Pressão**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Baixa Pressão",
+        type="primary",
+        use_container_width=True,
+        key="acessar_baixa_pressao",
+    ):
+
+        st.switch_page(
+            "pages/1_Baixa_Pressao.py"
+        )
+
+
+# ============================================================
+# MÓDULO 2
+# ============================================================
+
+with col2:
+
+    st.markdown("#### 🗺️ Módulo 2")
+    st.markdown("**Mapeamento de Pressão**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Mapeamento",
+        type="primary",
+        use_container_width=True,
+        key="acessar_mapeamento_pressao",
+    ):
+
+        st.switch_page(
+            "pages/2_Mapeamento_Pressao.py"
+        )
+
+
+# ============================================================
+# MÓDULO 3
+# ============================================================
+
+with col3:
+
+    st.markdown("#### 🚰 Módulo 3")
+    st.markdown("**Vazão de Poços**")
+
+    if st.session_state.get("perfil") == "admin":
+
+        st.caption(
+            "Status: Em desenvolvimento (Admin)"
+        )
+
+        if st.button(
+            "Acessar Vazão de Poços",
+            use_container_width=True,
+            key="acessar_vazao_pocos",
+        ):
+
+            st.switch_page(
+                "pages/3_Vazao_Pocos.py"
+            )
+
+    else:
+
+        st.caption(
+            "Status: Em desenvolvimento"
+        )
+
+        st.button(
+            "Acessar Vazão de Poços",
+            disabled=True,
+            use_container_width=True,
+            key="vazao_pocos_restrito",
+        )
+
+        st.markdown(
+            """
+            <p style="font-size:12px; color:gray;">
+                🔒 Restrito a administradores
+            </p>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+# ============================================================
+# SEGUNDA LINHA
+# ============================================================
+
+st.markdown("")
+
+col4, col5, col6 = st.columns(3)
+
+
+# ============================================================
+# MÓDULO 4
+# ============================================================
+
+with col4:
+
+    st.markdown("#### 🛠️ Módulo 4")
+    st.markdown("**Ferramentas Operacionais**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Ferramentas",
+        type="primary",
+        use_container_width=True,
+        key="acessar_ferramentas_operacionais",
+    ):
+
+        st.switch_page(
+            "pages/4_Ferramentas_Operacionais.py"
+        )
+
+
+# ============================================================
+# MÓDULO 5
+# ============================================================
+
+with col5:
+
+    st.markdown("#### 📋 Módulo 5")
+    st.markdown("**Cadastros e Consultas COI**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Cadastros e Consultas",
+        type="primary",
+        use_container_width=True,
+        key="acessar_cadastros_consultas",
+    ):
+
+        st.switch_page(
+            "pages/5_Cadastros_Consultas_COI.py"
+        )
+
+
+# ============================================================
+# MÓDULO 6
+# ============================================================
+
+with col6:
+
+    st.markdown("#### 🔧 Módulo 6")
+    st.markdown("**Ferramentas Adicionais**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Ferramentas Adicionais",
+        type="primary",
+        use_container_width=True,
+        key="acessar_ferramentas_adicionais",
+    ):
+
+        st.switch_page(
+            "pages/6_Ferramentas_Adicionais.py"
+        )
+
+
+# ============================================================
+# TERCEIRA LINHA
+# ============================================================
+
+st.markdown("")
+
+col7_esq, col7, col7_dir = st.columns(3)
+
+
+# ============================================================
+# MÓDULO 7
+# ============================================================
+
+with col7:
+
+    st.markdown("#### 🗺️ Módulo 7")
+    st.markdown("**Mapeamento de Melhorias**")
+    st.caption("Status: Ativo")
+
+    if st.button(
+        "Acessar Mapeamento de Melhorias",
+        type="primary",
+        use_container_width=True,
+        key="acessar_mapeamento_melhorias",
+    ):
+
+        st.switch_page(
+            "pages/7_Mapeamento_de_Melhorias.py"
+        )
+
+
+# ============================================================
+# ENCERRAR SESSÃO
+# ============================================================
+
+st.markdown("")
+
+if st.button(
+    "Encerrar Sessão / Sair",
+    key="encerrar_sessao",
+):
+
+    fazer_logout()
+
+    st.success(
+        "Sessão encerrada com sucesso!"
+    )
+
+    st.rerun()
