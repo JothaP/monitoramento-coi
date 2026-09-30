@@ -40,32 +40,51 @@ st.markdown(
             margin-bottom: 20px;
         }
 
+        /* ----------------------------------------------------
+           CARDS DAS FERRAMENTAS
+        ---------------------------------------------------- */
+
         .tool-card {
             background-color: #FFFFFF;
             border: 1px solid #CBD5E1;
             border-radius: 12px;
             padding: 22px;
             min-height: 230px;
+            box-sizing: border-box;
         }
 
-        .tool-title {
+        .tool-card-title {
             font-size: 18px;
             font-weight: 700;
             color: #0F172A;
-            margin-bottom: 6px;
+            margin-bottom: 8px;
         }
 
-        .tool-description {
+        .tool-card-description {
             font-size: 14px;
+            line-height: 1.5;
             color: #475569;
             min-height: 45px;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
         }
 
-        .tool-status {
+        .tool-card-status {
             font-size: 13px;
             color: #64748B;
-            margin-bottom: 12px;
+        }
+
+        .tool-card-status strong {
+            color: #16A34A;
+            font-weight: 700;
+        }
+
+        /* ----------------------------------------------------
+           BOTÕES
+        ---------------------------------------------------- */
+
+        div.stButton > button {
+            border-radius: 8px;
+            font-weight: 600;
         }
 
     </style>
@@ -80,9 +99,7 @@ st.markdown(
 
 if not verificar_autenticacao():
 
-    st.warning(
-        "Sessão não iniciada ou expirada."
-    )
+    st.warning("Sessão não iniciada ou expirada.")
 
     if st.button(
         "Ir para o Login",
@@ -99,9 +116,7 @@ if not verificar_autenticacao():
 
 with st.sidebar:
 
-    st.markdown(
-        "### 🛠️ Ferramentas Operacionais"
-    )
+    st.markdown("### 🛠️ Ferramentas Operacionais")
 
     st.caption(
         f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
@@ -157,16 +172,16 @@ with col1:
         """
         <div class="tool-card">
 
-            <div class="tool-title">
+            <div class="tool-card-title">
                 📦 Gerador de Lotes
             </div>
 
-            <div class="tool-description">
+            <div class="tool-card-description">
                 Geração de lotes para processos de cancelamento
                 de Ordens de Serviço.
             </div>
 
-            <div class="tool-status">
+            <div class="tool-card-status">
                 Status: <strong>Ativo</strong>
             </div>
 
@@ -175,7 +190,7 @@ with col1:
         unsafe_allow_html=True,
     )
 
-    st.markdown("")
+    st.write("")
 
     if st.button(
         "Acessar Gerador de Lotes",
@@ -183,7 +198,6 @@ with col1:
         use_container_width=True,
         key="btn_gerador_lotes",
     ):
-
         st.switch_page(
             "pages/4_1_Gerador_Lotes_Cancelamento.py"
         )
@@ -199,16 +213,16 @@ with col2:
         """
         <div class="tool-card">
 
-            <div class="tool-title">
+            <div class="tool-card-title">
                 📊 Gerador de Painel
             </div>
 
-            <div class="tool-description">
+            <div class="tool-card-description">
                 Geração de painéis e análises operacionais
                 a partir das bases disponibilizadas.
             </div>
 
-            <div class="tool-status">
+            <div class="tool-card-status">
                 Status: <strong>Ativo</strong>
             </div>
 
@@ -217,7 +231,7 @@ with col2:
         unsafe_allow_html=True,
     )
 
-    st.markdown("")
+    st.write("")
 
     if st.button(
         "Acessar Gerador de Painel",
@@ -225,7 +239,6 @@ with col2:
         use_container_width=True,
         key="btn_gerador_painel",
     ):
-
         st.switch_page(
             "pages/4_2_Gerador_de_Painel.py"
         )
@@ -241,16 +254,16 @@ with col3:
         """
         <div class="tool-card">
 
-            <div class="tool-title">
+            <div class="tool-card-title">
                 🃏 Cards Operacionais
             </div>
 
-            <div class="tool-description">
+            <div class="tool-card-description">
                 Geração de cards e indicadores executivos
                 para acompanhamento operacional.
             </div>
 
-            <div class="tool-status">
+            <div class="tool-card-status">
                 Status: <strong>Ativo</strong>
             </div>
 
@@ -259,7 +272,7 @@ with col3:
         unsafe_allow_html=True,
     )
 
-    st.markdown("")
+    st.write("")
 
     if st.button(
         "Acessar Cards Operacionais",
@@ -267,7 +280,6 @@ with col3:
         use_container_width=True,
         key="btn_cards_operacionais",
     ):
-
         st.switch_page(
             "pages/4_3_Cards_Operacionais.py"
         )
