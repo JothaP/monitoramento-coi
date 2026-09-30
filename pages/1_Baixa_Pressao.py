@@ -1903,8 +1903,9 @@ legend_html = f"""
     font-size: 10px;
     line-height: 1.35;
     width: 176px;
+    color: #1f2937;
 ">
-    <div style="font-weight: 700; margin-bottom: 4px;">
+    <div style="font-weight: 700; margin-bottom: 4px; color: #111827;">
         Pressão
     </div>
 
