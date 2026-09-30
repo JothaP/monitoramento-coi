@@ -1791,17 +1791,49 @@ if not df_filtrado.empty:
             f"<br><b>Classificação:</b> {classificacao}"
         )
 
-        folium.CircleMarker(
+        # Marcador em formato de "pin" de localização, mantendo
+        # as cores exatas definidas para cada faixa de pressão.
+        marker_html = f"""
+        <div style="
+            width: 22px;
+            height: 28px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+        ">
+            <svg width="22" height="28" viewBox="0 0 24 30"
+                 xmlns="http://www.w3.org/2000/svg"
+                 style="display:block; overflow:visible;">
+                <path
+                    d="M12 1.5C6.55 1.5 2.25 5.8 2.25 11.15
+                       C2.25 18.15 12 28.5 12 28.5
+                       C12 28.5 21.75 18.15 21.75 11.15
+                       C21.75 5.8 17.45 1.5 12 1.5Z"
+                    fill="{cor}"
+                    stroke="#FFFFFF"
+                    stroke-width="1.5"
+                />
+                <circle
+                    cx="12"
+                    cy="11"
+                    r="3.4"
+                    fill="#FFFFFF"
+                />
+            </svg>
+        </div>
+        """
+
+        folium.map.Marker(
             location=[
                 row["Latitude"],
                 row["Longitude"]
             ],
-            radius=8,
-            color=cor,
-            weight=2,
-            fill=True,
-            fill_color=cor,
-            fill_opacity=0.95,
+            icon=folium.DivIcon(
+                html=marker_html,
+                icon_size=(22, 28),
+                icon_anchor=(11, 28),
+                class_name="pressao-location-marker"
+            ),
             popup=folium.Popup(
                 popup,
                 max_width=250
@@ -1859,70 +1891,74 @@ if not df_filtrado.empty:
 legend_html = f"""
 <div style="
     position: fixed;
-    bottom: 28px;
-    left: 28px;
+    bottom: 24px;
+    left: 24px;
     z-index: 9999;
-    background-color: rgba(255, 255, 255, 0.95);
+    background-color: rgba(255, 255, 255, 0.94);
     border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    padding: 10px 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.20);
+    border-radius: 7px;
+    padding: 7px 9px;
+    box-shadow: 0 2px 7px rgba(0, 0, 0, 0.16);
     font-family: Arial, sans-serif;
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: 10px;
+    line-height: 1.35;
+    width: 176px;
 ">
-    <div style="font-weight: 700; margin-bottom: 6px;">
-        Legenda de Pressão
+    <div style="font-weight: 700; margin-bottom: 4px;">
+        Pressão
     </div>
-    <div>
+
+    <div style="white-space: nowrap;">
         <span style="
             display:inline-block;
-            width:12px;
-            height:12px;
+            width:9px;
+            height:9px;
             border-radius:50%;
             background:{COR_SEM_PRESSAO};
-            margin-right:6px;
+            margin-right:5px;
             vertical-align:middle;
         "></span>
         Sem Pressão (0 MCA)
     </div>
-    <div>
+
+    <div style="white-space: nowrap;">
         <span style="
             display:inline-block;
-            width:12px;
-            height:12px;
+            width:9px;
+            height:9px;
             border-radius:50%;
             background:{COR_BAIXA_PRESSAO};
-            margin-right:6px;
+            margin-right:5px;
             vertical-align:middle;
         "></span>
         Baixa Pressão (&gt; 0 e ≤ 5 MCA)
     </div>
-    <div>
+
+    <div style="white-space: nowrap;">
         <span style="
             display:inline-block;
-            width:12px;
-            height:12px;
+            width:9px;
+            height:9px;
             border-radius:50%;
             background:{COR_EM_ATENCAO};
-            margin-right:6px;
+            margin-right:5px;
             vertical-align:middle;
         "></span>
         Em Atenção (&gt; 5 e ≤ 15 MCA)
     </div>
-    <div>
+
+    <div style="white-space: nowrap;">
         <span style="
             display:inline-block;
-            width:12px;
-            height:12px;
+            width:9px;
+            height:9px;
             border-radius:50%;
             background:{COR_ALTA_PRESSAO};
-            margin-right:6px;
+            margin-right:5px;
             vertical-align:middle;
         "></span>
         Alta Pressão (&gt; 15 MCA)
     </div>
-</div>
 """
 
 m.get_root().html.add_child(Element(legend_html))
