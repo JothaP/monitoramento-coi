@@ -11,6 +11,10 @@ st.set_page_config(
 )
 
 
+# ============================================================
+# OCULTAR NAVEGAÇÃO PADRÃO DO STREAMLIT
+# ============================================================
+
 st.markdown(
     """
     <style>
@@ -23,16 +27,28 @@ st.markdown(
 )
 
 
+# ============================================================
+# AUTENTICAÇÃO
+# ============================================================
+
 if not verificar_autenticacao():
     st.warning("Sessão não iniciada ou expirada.")
 
-    if st.button("Ir para o Login"):
+    if st.button(
+        "Ir para o Login",
+        use_container_width=True,
+    ):
         st.switch_page("app.py")
 
     st.stop()
 
 
+# ============================================================
+# SIDEBAR
+# ============================================================
+
 with st.sidebar:
+
     st.markdown("### 🛠️ Ferramentas Operacionais")
 
     st.caption(
@@ -52,15 +68,28 @@ with st.sidebar:
         st.switch_page("app.py")
 
 
+# ============================================================
+# CABEÇALHO
+# ============================================================
+
 st.title("🛠️ Ferramentas Operacionais")
 st.caption("Selecione a ferramenta desejada:")
 st.divider()
 
 
+# ============================================================
+# GRID DE FERRAMENTAS
+# ============================================================
+
 col1, col2, col3 = st.columns(3)
 
 
+# ============================================================
+# 4.1 — GERADOR DE LOTES
+# ============================================================
+
 with col1:
+
     st.markdown("#### 📦 Gerador de Lotes")
     st.markdown("**Cancelamento de O.S.**")
     st.caption("Status: Ativo")
@@ -76,7 +105,12 @@ with col1:
         )
 
 
+# ============================================================
+# 4.2 — GERADOR DE PAINEL
+# ============================================================
+
 with col2:
+
     st.markdown("#### 📊 Gerador de Painel")
     st.markdown("**Painéis Operacionais**")
 
@@ -106,21 +140,31 @@ with col2:
         )
 
         st.markdown(
-            "<p style='font-size:12px; color:gray;'>"
-            "🔒 Restrito a administradores"
-            "</p>",
-            unsafe_allow_html=True
+            """
+            <p style='font-size:12px; color:gray;'>
+                🔒 Restrito a administradores
+            </p>
+            """,
+            unsafe_allow_html=True,
         )
 
 
+# ============================================================
+# 4.3 — CARDS OPERACIONAIS
+# ============================================================
+
 with col3:
+
     st.markdown("#### 🃏 Cards Operacionais")
     st.markdown("**Cards e Indicadores**")
-    st.caption("Status: Em desenvolvimento")
+    st.caption("Status: Ativo")
 
-    st.button(
-        "Em breve",
-        disabled=True,
+    if st.button(
+        "Acessar Cards Operacionais",
+        type="primary",
         use_container_width=True,
         key="btn_cards_operacionais",
-    )
+    ):
+        st.switch_page(
+            "pages/4_3_Cards_Operacionais.py"
+        )
