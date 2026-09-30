@@ -45,27 +45,6 @@ if not verificar_autenticacao():
 
     st.stop()
 
-
-# ============================================================
-# RESTRIÇÃO TEMPORÁRIA — ADMINISTRADORES
-# ============================================================
-
-if st.session_state.get("perfil") != "admin":
-
-    st.error(
-        "Este módulo está disponível exclusivamente para administradores "
-        "durante o período de desenvolvimento."
-    )
-
-    if st.button(
-        "Voltar ao Menu Principal",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
-
-    st.stop()
-
-
 # ============================================================
 # ESTILO
 # ============================================================
@@ -189,8 +168,8 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption("Módulo em desenvolvimento")
-    st.caption("Acesso restrito a administradores.")
+st.caption("Disponível para usuários autenticados.")
+
 # ============================================================
 # PALETA
 # ============================================================
