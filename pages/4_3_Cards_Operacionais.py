@@ -187,10 +187,143 @@ C_CARD = "#FFFFFF"
 
 
 # ============================================================
+# IDENTIDADE VISUAL / LOGOS DAS UNIDADES
+# ============================================================
+
+LOGOS_UNIDADES = {
+    "Águas de Teresina": "logo_aguas_de_teresina.png",
+    "Águas do Piauí": "logo_aguas_do_piaui.png",
+    "Águas de Timon": "logo_aguas_de_timon.png",
+}
+
+
+def carregar_logo_unidade(nome_unidade):
+    """
+    Localiza e carrega automaticamente a logo da unidade
+    a partir dos arquivos presentes no repositório.
+
+    São aceitas as seguintes estruturas:
+
+        pages/
+            4_3_Cards_Operacionais.py
+            logo_aguas_de_teresina.png
+
+    ou:
+
+        pages/
+            4_3_Cards_Operacionais.py
+            logos/
+                logo_aguas_de_teresina.png
+
+    ou:
+
+        assets/
+            logo_aguas_de_teresina.png
+
+    ou:
+
+        assets/
+            logos/
+                logo_aguas_de_teresina.png
+    """
+
+    nome_arquivo = LOGOS_UNIDADES.get(
+        nome_unidade
+    )
+
+    if not nome_arquivo:
+        return None
+
+    diretorio_modulo = os.path.dirname(
+        os.path.abspath(__file__)
+    )
+
+    diretorio_projeto = os.path.dirname(
+        diretorio_modulo
+    )
+
+    caminhos = [
+
+        # Mesmo diretório do módulo
+        os.path.join(
+            diretorio_modulo,
+            nome_arquivo,
+        ),
+
+        # pages/logos/
+        os.path.join(
+            diretorio_modulo,
+            "logos",
+            nome_arquivo,
+        ),
+
+        # pages/assets/
+        os.path.join(
+            diretorio_modulo,
+            "assets",
+            nome_arquivo,
+        ),
+
+        # pages/assets/logos/
+        os.path.join(
+            diretorio_modulo,
+            "assets",
+            "logos",
+            nome_arquivo,
+        ),
+
+        # raiz do projeto
+        os.path.join(
+            diretorio_projeto,
+            nome_arquivo,
+        ),
+
+        # raiz do projeto / logos
+        os.path.join(
+            diretorio_projeto,
+            "logos",
+            nome_arquivo,
+        ),
+
+        # raiz do projeto / assets
+        os.path.join(
+            diretorio_projeto,
+            "assets",
+            nome_arquivo,
+        ),
+
+        # raiz do projeto / assets / logos
+        os.path.join(
+            diretorio_projeto,
+            "assets",
+            "logos",
+            nome_arquivo,
+        ),
+    ]
+
+    for caminho in caminhos:
+
+        if os.path.exists(caminho):
+
+            try:
+
+                return Image.open(
+                    caminho
+                ).convert("RGBA")
+
+            except Exception:
+
+                continue
+
+    return None
+
+
+# ============================================================
 # UTILITÁRIOS
 # ============================================================
 
 def remover_acentos(texto):
+
     if pd.isna(texto):
         return ""
 
@@ -1268,7 +1401,8 @@ def calcular_kpi_areas_criticas(
     qtd_criticas = int(
         (
             rec_por_agrupamento
-            > 5
+            >
+            5
         ).sum()
     )
 
@@ -1520,6 +1654,7 @@ def renderizar_card_executivo(
     modo,
     regional,
     logo_img=None,
+    unidade_nome="Águas do Piauí",
 ):
 
     escopo = dashboard_data.get(
@@ -1636,6 +1771,16 @@ def renderizar_card_executivo(
         va="center",
     )
 
+    # --------------------------------------------------------
+    # LOGO DA UNIDADE
+    # --------------------------------------------------------
+
+    texto_fallback_unidade = (
+        unidade_nome.upper()
+        if unidade_nome
+        else "ÁGUAS DO PIAUÍ"
+    )
+
     if logo_img is not None:
 
         try:
@@ -1667,7 +1812,7 @@ def renderizar_card_executivo(
             ax_header.text(
                 0.99,
                 0.50,
-                "ÁGUAS DO PIAUÍ",
+                texto_fallback_unidade,
                 color="#FFFFFF",
                 fontsize=16,
                 fontweight="bold",
@@ -1680,7 +1825,7 @@ def renderizar_card_executivo(
         ax_header.text(
             0.99,
             0.50,
-            "ÁGUAS DO PIAUÍ",
+            texto_fallback_unidade,
             color="#FFFFFF",
             fontsize=16,
             fontweight="bold",
@@ -2690,7 +2835,7 @@ with config_container:
 
 
 # ============================================================
-# 3 — LOGO OPCIONAL
+# 3 — IDENTIDADE VISUAL
 # ============================================================
 
 st.markdown(
@@ -2700,20 +2845,43 @@ st.markdown(
 
 st.markdown(
     '<div class="section-description">'
-    "A utilização da logo é opcional."
+    "Selecione a unidade para aplicar automaticamente "
+    "a identidade visual correspondente ao card."
     "</div>",
     unsafe_allow_html=True,
 )
 
-arquivo_logo = st.file_uploader(
-    "Logo",
-    type=[
-        "png",
-        "jpg",
-        "jpeg",
-    ],
-    key="upload_logo",
+unidade_selecionada = st.radio(
+    "Selecionar Unidade",
+    options=list(
+        LOGOS_UNIDADES.keys()
+    ),
+    horizontal=True,
+    key="unidade_selecionada",
 )
+
+logo_selecionada = carregar_logo_unidade(
+    unidade_selecionada
+)
+
+if logo_selecionada is None:
+
+    st.error(
+        f"Logo da unidade '{unidade_selecionada}' "
+        "não foi encontrada no repositório."
+    )
+
+    st.caption(
+        "Verifique se o arquivo "
+        f"'{LOGOS_UNIDADES[unidade_selecionada]}' "
+        "foi enviado ao GitHub."
+    )
+
+else:
+
+    st.caption(
+        f"Unidade selecionada: **{unidade_selecionada}**"
+    )
 
 
 # ============================================================
@@ -2815,6 +2983,15 @@ if gerar_card:
 
         st.stop()
 
+    if logo_selecionada is None:
+
+        st.error(
+            "A logo da unidade selecionada não foi encontrada. "
+            "Verifique os arquivos no GitHub antes de gerar o card."
+        )
+
+        st.stop()
+
     try:
 
         with st.spinner(
@@ -2843,14 +3020,6 @@ if gerar_card:
                 data_referencia=data_ref,
             )
 
-            logo_img = None
-
-            if arquivo_logo is not None:
-
-                logo_img = Image.open(
-                    arquivo_logo
-                )
-
             eventos = (
                 extrair_eventos_manuais()
             )
@@ -2872,7 +3041,8 @@ if gerar_card:
                     modo,
                     regional.strip()
                     or "REGIONAL",
-                    logo_img,
+                    logo_selecionada,
+                    unidade_selecionada,
                 )
             )
 
@@ -2901,6 +3071,10 @@ if gerar_card:
             st.session_state[
                 "card_data_ref"
             ] = data_ref
+
+            st.session_state[
+                "card_unidade"
+            ] = unidade_selecionada
 
             st.session_state[
                 "card_gerado"
@@ -2956,6 +3130,13 @@ if st.session_state.get(
         st.session_state[
             "card_data_ref"
         ]
+    )
+
+    unidade_gerada = (
+        st.session_state.get(
+            "card_unidade",
+            unidade_selecionada,
+        )
     )
 
     png_bytes = (
@@ -3024,7 +3205,8 @@ if st.session_state.get(
             (
                 "Municípios"
                 if escopo[1]
-                == "PIAUI"
+                ==
+                "PIAUI"
                 else
                 "Bairros"
             ),
@@ -3035,6 +3217,7 @@ if st.session_state.get(
 
     st.caption(
         (
+            f"Unidade: **{unidade_gerada}**  |  "
             f"Período utilizado: "
             f"{formatar_periodo_cabecalho(data_ref, modo)} "
             f"({modo})"
