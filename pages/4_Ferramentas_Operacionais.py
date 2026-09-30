@@ -16,84 +16,6 @@ st.set_page_config(
 
 
 # ============================================================
-# ESTILO
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-
-        .main-title {
-            font-size: 30px;
-            font-weight: 700;
-            color: #0F172A;
-            margin-bottom: 2px;
-        }
-
-        .main-subtitle {
-            font-size: 15px;
-            color: #64748B;
-            margin-bottom: 20px;
-        }
-
-        /* ----------------------------------------------------
-           CARDS DAS FERRAMENTAS
-        ---------------------------------------------------- */
-
-        .tool-card {
-            background-color: #FFFFFF;
-            border: 1px solid #CBD5E1;
-            border-radius: 12px;
-            padding: 22px;
-            min-height: 230px;
-            box-sizing: border-box;
-        }
-
-        .tool-card-title {
-            font-size: 18px;
-            font-weight: 700;
-            color: #0F172A;
-            margin-bottom: 8px;
-        }
-
-        .tool-card-description {
-            font-size: 14px;
-            line-height: 1.5;
-            color: #475569;
-            min-height: 45px;
-            margin-bottom: 16px;
-        }
-
-        .tool-card-status {
-            font-size: 13px;
-            color: #64748B;
-        }
-
-        .tool-card-status strong {
-            color: #16A34A;
-            font-weight: 700;
-        }
-
-        /* ----------------------------------------------------
-           BOTÕES
-        ---------------------------------------------------- */
-
-        div.stButton > button {
-            border-radius: 8px;
-            font-weight: 600;
-        }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
 # AUTENTICAÇÃO
 # ============================================================
 
@@ -140,16 +62,10 @@ with st.sidebar:
 # CABEÇALHO
 # ============================================================
 
-st.markdown(
-    '<div class="main-title">Ferramentas Operacionais</div>',
-    unsafe_allow_html=True,
-)
+st.title("🛠️ Ferramentas Operacionais")
 
-st.markdown(
-    '<div class="main-subtitle">'
+st.caption(
     "Selecione a ferramenta operacional desejada."
-    "</div>",
-    unsafe_allow_html=True,
 )
 
 st.divider()
@@ -168,48 +84,14 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.html(
-        """
-        <div style="
-            background:#FFFFFF;
-            border:1px solid #CBD5E1;
-            border-radius:12px;
-            padding:22px;
-            min-height:230px;
-            box-sizing:border-box;
-        ">
-            <div style="
-                font-size:18px;
-                font-weight:700;
-                color:#0F172A;
-                margin-bottom:8px;
-            ">
-                📦 Gerador de Lotes
-            </div>
+    st.markdown("### 📦 Gerador de Lotes")
 
-            <div style="
-                font-size:14px;
-                line-height:1.5;
-                color:#475569;
-                min-height:45px;
-                margin-bottom:16px;
-            ">
-                Geração de lotes para processos de cancelamento
-                de Ordens de Serviço.
-            </div>
-
-            <div style="
-                font-size:13px;
-                color:#64748B;
-            ">
-                Status:
-                <strong style="color:#16A34A;">
-                    Ativo
-                </strong>
-            </div>
-        </div>
-        """
+    st.write(
+        "Geração de lotes para processos de cancelamento "
+        "de Ordens de Serviço."
     )
+
+    st.caption("Status: **Ativo**")
 
     st.write("")
 
@@ -219,6 +101,7 @@ with col1:
         use_container_width=True,
         key="btn_gerador_lotes",
     ):
+
         st.switch_page(
             "pages/4_1_Gerador_Lotes_Cancelamento.py"
         )
@@ -230,48 +113,14 @@ with col1:
 
 with col2:
 
-    st.html(
-        """
-        <div style="
-            background:#FFFFFF;
-            border:1px solid #CBD5E1;
-            border-radius:12px;
-            padding:22px;
-            min-height:230px;
-            box-sizing:border-box;
-        ">
-            <div style="
-                font-size:18px;
-                font-weight:700;
-                color:#0F172A;
-                margin-bottom:8px;
-            ">
-                📊 Gerador de Painel
-            </div>
+    st.markdown("### 📊 Gerador de Painel")
 
-            <div style="
-                font-size:14px;
-                line-height:1.5;
-                color:#475569;
-                min-height:45px;
-                margin-bottom:16px;
-            ">
-                Geração de painéis e análises operacionais
-                a partir das bases disponibilizadas.
-            </div>
-
-            <div style="
-                font-size:13px;
-                color:#64748B;
-            ">
-                Status:
-                <strong style="color:#16A34A;">
-                    Ativo
-                </strong>
-            </div>
-        </div>
-        """
+    st.write(
+        "Geração de painéis e análises operacionais "
+        "a partir das bases disponibilizadas."
     )
+
+    st.caption("Status: **Ativo**")
 
     st.write("")
 
@@ -281,57 +130,26 @@ with col2:
         use_container_width=True,
         key="btn_gerador_painel",
     ):
+
         st.switch_page(
             "pages/4_2_Gerador_de_Painel.py"
         )
+
+
 # ============================================================
 # 4.3 — CARDS OPERACIONAIS
 # ============================================================
 
 with col3:
 
-    st.html(
-        """
-        <div style="
-            background:#FFFFFF;
-            border:1px solid #CBD5E1;
-            border-radius:12px;
-            padding:22px;
-            min-height:230px;
-            box-sizing:border-box;
-        ">
-            <div style="
-                font-size:18px;
-                font-weight:700;
-                color:#0F172A;
-                margin-bottom:8px;
-            ">
-                🃏 Cards Operacionais
-            </div>
+    st.markdown("### 🃏 Cards Operacionais")
 
-            <div style="
-                font-size:14px;
-                line-height:1.5;
-                color:#475569;
-                min-height:45px;
-                margin-bottom:16px;
-            ">
-                Geração de cards e indicadores executivos
-                para acompanhamento operacional.
-            </div>
-
-            <div style="
-                font-size:13px;
-                color:#64748B;
-            ">
-                Status:
-                <strong style="color:#16A34A;">
-                    Ativo
-                </strong>
-            </div>
-        </div>
-        """
+    st.write(
+        "Geração de cards e indicadores executivos "
+        "para acompanhamento operacional."
     )
+
+    st.caption("Status: **Ativo**")
 
     st.write("")
 
@@ -341,6 +159,7 @@ with col3:
         use_container_width=True,
         key="btn_cards_operacionais",
     ):
+
         st.switch_page(
             "pages/4_3_Cards_Operacionais.py"
         )
