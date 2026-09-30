@@ -1,142 +1,35 @@
-import streamlit as st
-
-from auth import verificar_autenticacao
-
-
-st.set_page_config(
-    page_title="Ferramentas Operacionais - COI",
-    page_icon="🛠️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-
 # ============================================================
-# OCULTAR NAVEGAÇÃO PADRÃO DO STREAMLIT
+# 4.3 — CARDS OPERACIONAIS
 # ============================================================
 
-st.markdown(
-    """
-    <style>
-        [data-testid="stSidebarNav"] {
-            display: none !important;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+with col3:
 
-
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-
-if not verificar_autenticacao():
-    st.warning("Sessão não iniciada ou expirada.")
-
-    if st.button(
-        "Ir para o Login",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
-
-    st.stop()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown("### 🛠️ Ferramentas Operacionais")
-
-    st.caption(
-        f"Usuário: **{st.session_state.get('usuario_logado', '')}**"
-    )
-
-    st.caption(
-        f"Perfil: **{st.session_state.get('perfil', '').upper()}**"
-    )
-
-    st.divider()
-
-    if st.button(
-        "🏠 Voltar ao Menu Principal",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
-
-
-# ============================================================
-# CABEÇALHO
-# ============================================================
-
-st.title("🛠️ Ferramentas Operacionais")
-st.caption("Selecione a ferramenta desejada:")
-st.divider()
-
-
-# ============================================================
-# GRID DE FERRAMENTAS
-# ============================================================
-
-col1, col2, col3 = st.columns(3)
-
-
-# ============================================================
-# 4.1 — GERADOR DE LOTES
-# ============================================================
-
-with col1:
-
-    st.markdown("#### 📦 Gerador de Lotes")
-    st.markdown("**Cancelamento de O.S.**")
-    st.caption("Status: Ativo")
-
-    if st.button(
-        "Acessar Gerador de Lotes",
-        type="primary",
-        use_container_width=True,
-        key="btn_gerador_lotes",
-    ):
-        st.switch_page(
-            "pages/4_1_Gerador_Lotes_Cancelamento.py"
-        )
-
-
-# ============================================================
-# 4.2 — GERADOR DE PAINEL
-# ============================================================
-
-with col2:
-
-    st.markdown("#### 📊 Gerador de Painel")
-    st.markdown("**Painéis Operacionais**")
+    st.markdown("#### 🃏 Cards Operacionais")
+    st.markdown("**Cards e Indicadores**")
 
     if st.session_state.get("perfil") == "admin":
 
-        st.caption("Status: Ativo (Admin)")
+        st.caption("Status: Em desenvolvimento (Admin)")
 
         if st.button(
-            "Acessar Gerador de Painel",
+            "Acessar Cards Operacionais",
             type="primary",
             use_container_width=True,
-            key="btn_gerador_painel",
+            key="btn_cards_operacionais",
         ):
             st.switch_page(
-                "pages/4_2_Gerador_de_Painel.py"
+                "pages/4_3_Cards_Operacionais.py"
             )
 
     else:
 
-        st.caption("Status: Restrito")
+        st.caption("Status: Em desenvolvimento")
 
         st.button(
-            "Acessar Gerador de Painel",
+            "Acessar Cards Operacionais",
             disabled=True,
             use_container_width=True,
-            key="btn_gerador_painel_bloqueado",
+            key="btn_cards_operacionais_bloqueado",
         )
 
         st.markdown(
@@ -146,25 +39,4 @@ with col2:
             </p>
             """,
             unsafe_allow_html=True,
-        )
-
-
-# ============================================================
-# 4.3 — CARDS OPERACIONAIS
-# ============================================================
-
-with col3:
-
-    st.markdown("#### 🃏 Cards Operacionais")
-    st.markdown("**Cards e Indicadores**")
-    st.caption("Status: Ativo")
-
-    if st.button(
-        "Acessar Cards Operacionais",
-        type="primary",
-        use_container_width=True,
-        key="btn_cards_operacionais",
-    ):
-        st.switch_page(
-            "pages/4_3_Cards_Operacionais.py"
         )
