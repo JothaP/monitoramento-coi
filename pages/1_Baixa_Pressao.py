@@ -14,6 +14,7 @@ import uuid
 from typing import Optional
 import time
 import plotly.express as px
+from branca.element import Element
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -67,6 +68,31 @@ COLUNAS_PADRAO = [
     "Pressao_MCA",
     "Observacao"
 ]
+
+# ============================================================
+# CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
+# ============================================================
+COR_SEM_PRESSAO = "#FF5C60"       # RGB 255, 92, 96
+COR_BAIXA_PRESSAO = "#F8DC00"     # RGB 248, 220, 0
+COR_EM_ATENCAO = "#FF8FE1"        # RGB 255, 143, 225
+COR_ALTA_PRESSAO = "#A11FFF"      # RGB 161, 31, 255
+
+
+def classificar_pressao(pressao):
+    """Retorna a classificação e a cor correspondente à pressão."""
+    try:
+        valor = float(pressao)
+    except (TypeError, ValueError):
+        valor = 0.0
+
+    if valor == 0:
+        return "Sem Pressão", COR_SEM_PRESSAO
+    elif valor <= 5:
+        return "Baixa Pressão", COR_BAIXA_PRESSAO
+    elif valor <= 15:
+        return "Em Atenção", COR_EM_ATENCAO
+    else:
+        return "Alta Pressão", COR_ALTA_PRESSAO
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -1082,9 +1108,10 @@ with st.sidebar:
         "Faixa de Pressão",
         [
             "Todas",
-            "Críticos (0 MCA)",
-            "Atenção (≤ 5 MCA)",
-            "Normais (> 5 MCA)"
+            "Sem Pressão (0 MCA)",
+            "Baixa Pressão (> 0 e ≤ 5 MCA)",
+            "Em Atenção (> 5 e ≤ 15 MCA)",
+            "Alta Pressão (> 15 MCA)"
         ],
         key="filtro_pressao"
     )
@@ -1500,13 +1527,13 @@ if bairro_sel != "Todos":
         df_filtrado["Bairro"] == bairro_sel
     ]
 
-if faixa_sel == "Críticos (0 MCA)":
+if faixa_sel == "Sem Pressão (0 MCA)":
 
     df_filtrado = df_filtrado[
         df_filtrado["Pressao_MCA"] == 0
     ]
 
-elif faixa_sel == "Atenção (≤ 5 MCA)":
+elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
 
     df_filtrado = df_filtrado[
         (
@@ -1518,10 +1545,22 @@ elif faixa_sel == "Atenção (≤ 5 MCA)":
         )
     ]
 
-elif faixa_sel == "Normais (> 5 MCA)":
+elif faixa_sel == "Em Atenção (> 5 e ≤ 15 MCA)":
 
     df_filtrado = df_filtrado[
-        df_filtrado["Pressao_MCA"] > 5
+        (
+            df_filtrado["Pressao_MCA"] > 5
+        )
+        &
+        (
+            df_filtrado["Pressao_MCA"] <= 15
+        )
+    ]
+
+elif faixa_sel == "Alta Pressão (> 15 MCA)":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Pressao_MCA"] > 15
     ]
 
 
@@ -1532,13 +1571,13 @@ if not df_filtrado.empty:
 
     total = len(df_filtrado)
 
-    criticos = len(
+    sem_pressao = len(
         df_filtrado[
             df_filtrado["Pressao_MCA"] == 0
         ]
     )
 
-    atencao = len(
+    baixa_pressao = len(
         df_filtrado[
             (
                 df_filtrado["Pressao_MCA"] > 0
@@ -1550,13 +1589,25 @@ if not df_filtrado.empty:
         ]
     )
 
-    normais = len(
+    em_atencao = len(
         df_filtrado[
-            df_filtrado["Pressao_MCA"] > 5
+            (
+                df_filtrado["Pressao_MCA"] > 5
+            )
+            &
+            (
+                df_filtrado["Pressao_MCA"] <= 15
+            )
         ]
     )
 
-    k1, k2, k3, k4 = st.columns(4)
+    alta_pressao = len(
+        df_filtrado[
+            df_filtrado["Pressao_MCA"] > 15
+        ]
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
 
     k1.metric(
         "Total de Ocorrências",
@@ -1564,18 +1615,23 @@ if not df_filtrado.empty:
     )
 
     k2.metric(
-        "Críticos (0 MCA)",
-        criticos
+        "Sem Pressão (0 MCA)",
+        sem_pressao
     )
 
     k3.metric(
-        "Em Atenção (≤ 5 MCA)",
-        atencao
+        "Baixa Pressão (≤ 5 MCA)",
+        baixa_pressao
     )
 
     k4.metric(
-        "Normais (> 5 MCA)",
-        normais
+        "Em Atenção (> 5 e ≤ 15 MCA)",
+        em_atencao
+    )
+
+    k5.metric(
+        "Alta Pressão (> 15 MCA)",
+        alta_pressao
     )
 
 else:
@@ -1701,15 +1757,7 @@ if not df_filtrado.empty:
             row["Observacao"]
         ).strip()
 
-        cor = (
-            "red"
-            if pressao == 0
-            else (
-                "orange"
-                if pressao <= 5
-                else "blue"
-            )
-        )
+        classificacao, cor = classificar_pressao(pressao)
 
         obs_tooltip_text = (
             f" | Obs: {obs}"
@@ -1739,23 +1787,26 @@ if not df_filtrado.empty:
             f"{obs_popup_html}"
         )
 
-        marker_icon = folium.Icon(
-            color=cor,
-            icon="tint",
-            prefix="fa"
+        popup += (
+            f"<br><b>Classificação:</b> {classificacao}"
         )
 
-        folium.Marker(
+        folium.CircleMarker(
             location=[
                 row["Latitude"],
                 row["Longitude"]
             ],
+            radius=8,
+            color=cor,
+            weight=2,
+            fill=True,
+            fill_color=cor,
+            fill_opacity=0.95,
             popup=folium.Popup(
                 popup,
                 max_width=250
             ),
-            tooltip=tooltip_str,
-            icon=marker_icon
+            tooltip=tooltip_str
         ).add_to(m)
 
         if mostrar_rotulos:
@@ -1801,6 +1852,80 @@ if not df_filtrado.empty:
                 )
             ).add_to(m)
 
+
+# ============================================================
+# LEGENDA DAS CORES
+# ============================================================
+legend_html = f"""
+<div style="
+    position: fixed;
+    bottom: 28px;
+    left: 28px;
+    z-index: 9999;
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.20);
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+">
+    <div style="font-weight: 700; margin-bottom: 6px;">
+        Legenda de Pressão
+    </div>
+    <div>
+        <span style="
+            display:inline-block;
+            width:12px;
+            height:12px;
+            border-radius:50%;
+            background:{COR_SEM_PRESSAO};
+            margin-right:6px;
+            vertical-align:middle;
+        "></span>
+        Sem Pressão (0 MCA)
+    </div>
+    <div>
+        <span style="
+            display:inline-block;
+            width:12px;
+            height:12px;
+            border-radius:50%;
+            background:{COR_BAIXA_PRESSAO};
+            margin-right:6px;
+            vertical-align:middle;
+        "></span>
+        Baixa Pressão (&gt; 0 e ≤ 5 MCA)
+    </div>
+    <div>
+        <span style="
+            display:inline-block;
+            width:12px;
+            height:12px;
+            border-radius:50%;
+            background:{COR_EM_ATENCAO};
+            margin-right:6px;
+            vertical-align:middle;
+        "></span>
+        Em Atenção (&gt; 5 e ≤ 15 MCA)
+    </div>
+    <div>
+        <span style="
+            display:inline-block;
+            width:12px;
+            height:12px;
+            border-radius:50%;
+            background:{COR_ALTA_PRESSAO};
+            margin-right:6px;
+            vertical-align:middle;
+        "></span>
+        Alta Pressão (&gt; 15 MCA)
+    </div>
+</div>
+"""
+
+m.get_root().html.add_child(Element(legend_html))
 
 map_data = st_folium(
     m,
@@ -2024,9 +2149,19 @@ if not df_all.empty:
                     fig.add_hline(
                         y=5,
                         line_dash="dash",
-                        line_color="orange",
+                        line_color=COR_BAIXA_PRESSAO,
                         annotation_text=(
-                            "Limite de Atenção (5 MCA)"
+                            "Limite: Baixa Pressão (5 MCA)"
+                        ),
+                        annotation_position="top left"
+                    )
+
+                    fig.add_hline(
+                        y=15,
+                        line_dash="dash",
+                        line_color=COR_ALTA_PRESSAO,
+                        annotation_text=(
+                            "Limite: Alta Pressão (15 MCA)"
                         ),
                         annotation_position="top left"
                     )
@@ -2034,8 +2169,8 @@ if not df_all.empty:
                     fig.add_hline(
                         y=0,
                         line_dash="solid",
-                        line_color="red",
-                        annotation_text="Crítico (0 MCA)",
+                        line_color=COR_SEM_PRESSAO,
+                        annotation_text="Sem Pressão (0 MCA)",
                         annotation_position="bottom left"
                     )
 
