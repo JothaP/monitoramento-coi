@@ -391,7 +391,7 @@ with col6:
 
 st.markdown("")
 
-col7_esq, col7, col7_dir = st.columns(3)
+col7, col8, col9 = st.columns(3)
 
 
 # ============================================================
@@ -404,15 +404,35 @@ with col7:
     st.markdown("**Mapeamento de Melhorias**")
     st.caption("Status: Ativo")
 
-    if st.button(
-        "Acessar Mapeamento de Melhorias",
-        type="primary",
-        use_container_width=True,
-        key="acessar_mapeamento_melhorias",
-    ):
+    if st.session_state.get("perfil") == "admin":
 
-        st.switch_page(
-            "pages/7_Mapeamento_de_Melhorias.py"
+        if st.button(
+            "Acessar Mapeamento de Melhorias",
+            type="primary",
+            use_container_width=True,
+            key="acessar_mapeamento_melhorias",
+        ):
+
+            st.switch_page(
+                "pages/7_Mapeamento_de_Melhorias.py"
+            )
+
+    else:
+
+        st.button(
+            "Acessar Mapeamento de Melhorias",
+            disabled=True,
+            use_container_width=True,
+            key="mapeamento_melhorias_restrito",
+        )
+
+        st.markdown(
+            """
+            <p style="font-size:12px; color:gray;">
+                🔒 Restrito a administradores
+            </p>
+            """,
+            unsafe_allow_html=True,
         )
 
 
