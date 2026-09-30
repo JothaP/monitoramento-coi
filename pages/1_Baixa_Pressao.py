@@ -1894,22 +1894,30 @@ legend_html = f"""
     bottom: 24px;
     left: 24px;
     z-index: 9999;
-    background-color: rgba(255, 255, 255, 0.94);
+    background-color: #ffffff !important;
     border: 1px solid #cbd5e1;
     border-radius: 7px;
-    padding: 7px 9px;
+    padding: 8px 10px;
     box-shadow: 0 2px 7px rgba(0, 0, 0, 0.16);
     font-family: Arial, sans-serif;
     font-size: 10px;
-    line-height: 1.35;
+    line-height: 1.4;
     width: 176px;
-    color: #1f2937;
+    color: #1f2937 !important;
 ">
-    <div style="font-weight: 700; margin-bottom: 4px; color: #111827;">
+
+    <div style="
+        font-weight: 700;
+        margin-bottom: 5px;
+        color: #111827 !important;
+    ">
         Pressão
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+        color: #1f2937 !important;
+    ">
         <span style="
             display:inline-block;
             width:9px;
@@ -1919,10 +1927,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
-        Sem Pressão (0 MCA)
+        <span style="color:#1f2937 !important;">
+            Sem Pressão (0 MCA)
+        </span>
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+        color: #1f2937 !important;
+    ">
         <span style="
             display:inline-block;
             width:9px;
@@ -1932,10 +1945,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
-        Baixa Pressão (&gt; 0 e ≤ 5 MCA)
+        <span style="color:#1f2937 !important;">
+            Baixa Pressão (&gt; 0 e ≤ 5 MCA)
+        </span>
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+        color: #1f2937 !important;
+    ">
         <span style="
             display:inline-block;
             width:9px;
@@ -1945,10 +1963,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
-        Em Atenção (&gt; 5 e ≤ 15 MCA)
+        <span style="color:#1f2937 !important;">
+            Em Atenção (&gt; 5 e ≤ 15 MCA)
+        </span>
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+        color: #1f2937 !important;
+    ">
         <span style="
             display:inline-block;
             width:9px;
@@ -1958,12 +1981,17 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
-        Alta Pressão (&gt; 15 MCA)
+        <span style="color:#1f2937 !important;">
+            Alta Pressão (&gt; 15 MCA)
+        </span>
     </div>
+
+</div>
 """
 
-m.get_root().html.add_child(Element(legend_html))
-
+m.get_root().html.add_child(
+    Element(legend_html)
+)
 map_data = st_folium(
     m,
     width="100%",
