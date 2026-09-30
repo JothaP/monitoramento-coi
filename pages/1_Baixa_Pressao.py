@@ -1794,34 +1794,14 @@ if not df_filtrado.empty:
         # Marcador em formato de "pin" de localização, mantendo
         # as cores exatas definidas para cada faixa de pressão.
         marker_html = f"""
-        <div style="
-            width: 22px;
-            height: 28px;
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-        ">
-            <svg width="22" height="28" viewBox="0 0 24 30"
-                 xmlns="http://www.w3.org/2000/svg"
-                 style="display:block; overflow:visible;">
-                <path
-                    d="M12 1.5C6.55 1.5 2.25 5.8 2.25 11.15
-                       C2.25 18.15 12 28.5 12 28.5
-                       C12 28.5 21.75 18.15 21.75 11.15
-                       C21.75 5.8 17.45 1.5 12 1.5Z"
-                    fill="{cor}"
-                    stroke="#FFFFFF"
-                    stroke-width="1.5"
-                />
-                <circle
-                    cx="12"
-                    cy="11"
-                    r="3.4"
-                    fill="#FFFFFF"
-                />
-            </svg>
-        </div>
-        """
+<div style="width:33px;height:42px;display:flex;align-items:flex-start;justify-content:center;">
+    <svg width="33" height="42" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 29C12 29 22 19.5 22 11.5C22 5.7 17.5 1 12 1C6.5 1 2 5.7 2 11.5C2 19.5 12 29 12 29Z"
+              fill="{cor}" stroke="#FFFFFF" stroke-width="1.5"/>
+        <circle cx="12" cy="11" r="3.4" fill="#FFFFFF"/>
+    </svg>
+</div>
+"""
 
         folium.map.Marker(
             location=[
@@ -1830,8 +1810,8 @@ if not df_filtrado.empty:
             ],
             icon=folium.DivIcon(
                 html=marker_html,
-                icon_size=(22, 28),
-                icon_anchor=(11, 28),
+                icon_size=(33, 42),
+                icon_anchor=(16.5, 42),
                 class_name="pressao-location-marker"
             ),
             popup=folium.Popup(
