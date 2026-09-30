@@ -46,6 +46,25 @@ if not st.session_state.get("autenticado"):
 
 
 # ============================================================
+# RESTRIÇÃO — ADMINISTRADORES
+# ============================================================
+
+if st.session_state.get("perfil") != "admin":
+
+    st.error(
+        "Este módulo está disponível exclusivamente para "
+        "administradores."
+    )
+
+    if st.button(
+        "🏠 Voltar ao Menu Principal",
+        use_container_width=True,
+    ):
+        st.switch_page("app.py")
+
+    st.stop()
+
+# ============================================================
 # CONFIGURAÇÃO DA PLANILHA
 # ============================================================
 
