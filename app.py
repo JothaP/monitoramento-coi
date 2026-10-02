@@ -58,7 +58,7 @@ if "perfil" not in st.session_state:
 
 if not st.session_state.get("autenticado"):
 
-    st.title("🔐 Acesso Restrito - Plataforma COI")
+    st.title("🔐 Acesso Restrito - Plataforma de Análises - COI")
 
     st.markdown(
         "Por favor, insira a senha de acesso para continuar."
