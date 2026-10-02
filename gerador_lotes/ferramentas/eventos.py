@@ -948,12 +948,18 @@ def cruzar_eventos_com_backlog(
         columns=COLUNAS_LOTE,
     )
 
-    return (
-        resultado,
-        len(df),
-        avisos,
-        len(resultado),
-    )
+    total_os = (
+    int(resultado["Quant. de O.S"].sum())
+    if not resultado.empty
+    else 0
+)
+
+return (
+    resultado,
+    len(df),
+    avisos,
+    total_os,
+)
 
 # ============================================================
 # LIMPEZA EXCLUSIVA DA ANÁLISE DE EVENTOS
@@ -1274,19 +1280,19 @@ def render_eventos():
             )
 
         with col3:
-            st.markdown(
-                f"""
-                <div class="coi-metric">
-                    <div class="coi-metric-label">
-                        Linhas geradas
-                    </div>
-                    <div class="coi-metric-value">
-                        {estatisticas.get("os_cancelamento", 0):,}
-                    </div>
-                </div>
-                """.replace(",", "."),
-                unsafe_allow_html=True,
-            )
+    st.markdown(
+        f"""
+        <div class="coi-metric">
+            <div class="coi-metric-label">
+                Total de O.S
+            </div>
+            <div class="coi-metric-value">
+                {estatisticas.get("os_cancelamento", 0):,}
+            </div>
+        </div>
+        """.replace(",", "."),
+        unsafe_allow_html=True,
+    )
 
         with col4:
 
