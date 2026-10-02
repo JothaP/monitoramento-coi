@@ -17,7 +17,6 @@ import time
 import plotly.express as px
 from branca.element import Element
 
-
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================
@@ -44,23 +43,18 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
 # ============================================================
 # TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
 from auth import verificar_autenticacao
 
 if not verificar_autenticacao():
-
-    st.warning(
-        "Sessão não iniciada ou expirada."
-    )
+    st.warning("Sessão não iniciada ou expirada.")
 
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
 
     st.stop()
-
 
 # ============================================================
 # CONSTANTES
@@ -68,9 +62,7 @@ if not verificar_autenticacao():
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 
-SPREADSHEET_ID = (
-    "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
-)
+SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 
 COLUNAS_PADRAO = [
     "ID",
@@ -84,7 +76,6 @@ COLUNAS_PADRAO = [
     "Matricula"
 ]
 
-
 # ============================================================
 # CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
 # ============================================================
@@ -95,44 +86,25 @@ COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
-
     """Retorna a classificação e a cor correspondente à pressão."""
 
     try:
-
         valor = float(pressao)
 
     except (TypeError, ValueError):
-
         valor = 0.0
 
     if valor == 0:
-
-        return (
-            "Sem Pressão",
-            COR_SEM_PRESSAO
-        )
+        return "Sem Pressão", COR_SEM_PRESSAO
 
     elif valor <= 5:
-
-        return (
-            "Baixa Pressão",
-            COR_BAIXA_PRESSAO
-        )
+        return "Baixa Pressão", COR_BAIXA_PRESSAO
 
     elif valor <= 15:
-
-        return (
-            "Em Atenção",
-            COR_EM_ATENCAO
-        )
+        return "Em Atenção", COR_EM_ATENCAO
 
     else:
-
-        return (
-            "Alta Pressão",
-            COR_ALTA_PRESSAO
-        )
+        return "Alta Pressão", COR_ALTA_PRESSAO
 
 
 # ============================================================
@@ -150,17 +122,12 @@ def conectar_google_sheets():
         st.secrets["gcp_json"]
     )
 
-    credentials = (
-        Credentials
-        .from_service_account_info(
-            credentials_dict,
-            scopes=scopes
-        )
+    credentials = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes
     )
 
-    gc = gspread.authorize(
-        credentials
-    )
+    gc = gspread.authorize(credentials)
 
     sh = gc.open_by_key(
         SPREADSHEET_ID
@@ -188,28 +155,21 @@ def conectar_google_sheets():
 
     try:
 
-        dados_iniciais = (
-            ws.get_all_values()
-        )
+        dados_iniciais = ws.get_all_values()
 
-        if (
-            not dados_iniciais
-            or len(dados_iniciais) == 0
-        ):
+        if not dados_iniciais or len(dados_iniciais) == 0:
 
-            ws.append_row(
-                [
-                    "ID",
-                    "Data",
-                    "Municipio",
-                    "Bairro",
-                    "Latitude",
-                    "Longitude",
-                    "Pressao_MCA",
-                    "Observacao",
-                    "Matricula"
-                ]
-            )
+            ws.append_row([
+                "ID",
+                "Data",
+                "Municipio",
+                "Bairro",
+                "Latitude",
+                "Longitude",
+                "Pressao_MCA",
+                "Observacao",
+                "Matricula"
+            ])
 
         else:
 
@@ -232,8 +192,7 @@ def conectar_google_sheets():
             if "Matricula" not in cabecalho_atual:
 
                 proxima_coluna = chr(
-                    ord("A")
-                    + len(cabecalho_atual)
+                    ord("A") + len(cabecalho_atual)
                 )
 
                 ws.update(
@@ -274,11 +233,9 @@ def normalizar_coluna(
     nome: str
 ) -> str:
 
-    nome = (
-        str(nome)
-        .strip()
-        .lower()
-    )
+    nome = str(
+        nome
+    ).strip().lower()
 
     mapeamento = {
 
@@ -287,39 +244,28 @@ def normalizar_coluna(
         "data": "Data",
 
         "municipio": "Municipio",
-
         "município": "Municipio",
 
         "bairro": "Bairro",
 
         "latitude": "Latitude",
-
         "lat": "Latitude",
 
         "longitude": "Longitude",
-
         "lon": "Longitude",
-
         "long": "Longitude",
 
         "pressao_mca": "Pressao_MCA",
-
         "pressão_mca": "Pressao_MCA",
-
         "pressao": "Pressao_MCA",
-
         "pressão": "Pressao_MCA",
-
         "mca": "Pressao_MCA",
 
         "observacao": "Observacao",
-
         "observação": "Observacao",
-
         "obs": "Observacao",
 
         "matricula": "Matricula",
-
         "matrícula": "Matricula"
     }
 
@@ -334,41 +280,30 @@ def parse_float(
     default=None
 ):
 
-    if (
-        valor is None
-        or (
-            isinstance(valor, float)
-            and pd.isna(valor)
-        )
+    if valor is None or (
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
-
         return default
 
     if isinstance(
         valor,
         (int, float)
     ):
-
         return float(valor)
 
     try:
 
-        texto = (
-            str(valor)
-            .strip()
-        )
+        texto = str(
+            valor
+        ).strip()
 
-        if (
-            not texto
-            or texto.lower()
-            in (
-                "nan",
-                "none",
-                "nat",
-                ""
-            )
+        if not texto or texto.lower() in (
+            "nan",
+            "none",
+            "nat",
+            ""
         ):
-
             return default
 
         texto = (
@@ -398,29 +333,19 @@ def normalizar_coordenada(
     )
 
     if num is None:
-
         return None
 
-    if (
-        tipo == "lat"
-        and not (
-            -90.0 <= num <= 90.0
-        )
+    if tipo == "lat" and not (
+        -90.0 <= num <= 90.0
     ):
-
         return None
 
-    if (
-        tipo == "lon"
-        and not (
-            -180.0 <= num <= 180.0
-        )
+    if tipo == "lon" and not (
+        -180.0 <= num <= 180.0
     ):
-
         return None
 
     if num == 0.0:
-
         return None
 
     return round(
@@ -433,14 +358,10 @@ def normalizar_data(
     valor
 ) -> str:
 
-    if (
-        valor is None
-        or (
-            isinstance(valor, float)
-            and pd.isna(valor)
-        )
+    if valor is None or (
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
-
         return ""
 
     if isinstance(
@@ -452,22 +373,16 @@ def normalizar_data(
             "%d/%m/%Y"
         )
 
-    texto = (
-        str(valor)
-        .strip()
-    )
+    texto = str(
+        valor
+    ).strip()
 
-    if (
-        not texto
-        or texto.lower()
-        in (
-            "nan",
-            "none",
-            "nat",
-            ""
-        )
+    if not texto or texto.lower() in (
+        "nan",
+        "none",
+        "nat",
+        ""
     ):
-
         return ""
 
     formatos = [
@@ -500,9 +415,7 @@ def carregar_dados() -> pd.DataFrame:
 
     try:
 
-        valores = (
-            worksheet.get_all_values()
-        )
+        valores = worksheet.get_all_values()
 
     except Exception as e:
 
@@ -514,10 +427,7 @@ def carregar_dados() -> pd.DataFrame:
             columns=COLUNAS_PADRAO
         )
 
-    if (
-        not valores
-        or len(valores) < 2
-    ):
+    if not valores or len(valores) < 2:
 
         return pd.DataFrame(
             columns=COLUNAS_PADRAO
@@ -538,7 +448,6 @@ def carregar_dados() -> pd.DataFrame:
             str(c).strip()
             for c in linha
         ):
-
             continue
 
         reg = {}
@@ -570,117 +479,96 @@ def carregar_dados() -> pd.DataFrame:
     for col in COLUNAS_PADRAO:
 
         if col not in df.columns:
-
             df[col] = ""
 
     def limpar_id(v):
 
         s = str(v).strip()
 
-        if (
-            not s
-            or s.lower()
-            in (
-                "nan",
-                "none",
-                ""
-            )
+        if not s or s.lower() in (
+            "nan",
+            "none",
+            ""
         ):
 
             return gerar_id()
 
         return s
 
-    df["ID"] = (
-        df["ID"]
-        .apply(limpar_id)
+    df["ID"] = df["ID"].apply(
+        limpar_id
     )
 
-    df["Data"] = (
-        df["Data"]
-        .apply(normalizar_data)
+    df["Data"] = df["Data"].apply(
+        normalizar_data
     )
 
     df["Municipio"] = (
         df["Municipio"]
         .astype(str)
         .str.strip()
-        .replace(
-            {
-                "": "Teresina",
-                "nan": "Teresina",
-                "None": "Teresina"
-            }
-        )
+        .replace({
+            "": "Teresina",
+            "nan": "Teresina",
+            "None": "Teresina"
+        })
     )
 
     df["Bairro"] = (
         df["Bairro"]
         .astype(str)
         .str.strip()
-        .replace(
-            {
-                "nan": "",
-                "None": ""
-            }
-        )
+        .replace({
+            "nan": "",
+            "None": ""
+        })
     )
 
     df["Matricula"] = (
         df["Matricula"]
         .astype(str)
         .str.strip()
-        .replace(
-            {
-                "nan": "",
-                "None": ""
-            }
+        .replace({
+            "nan": "",
+            "None": ""
+        })
+    )
+
+    df["Latitude"] = df[
+        "Latitude"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lat"
         )
     )
 
-    df["Latitude"] = (
-        df["Latitude"]
-        .apply(
-            lambda x:
-                normalizar_coordenada(
-                    x,
-                    "lat"
-                )
+    df["Longitude"] = df[
+        "Longitude"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lon"
         )
     )
 
-    df["Longitude"] = (
-        df["Longitude"]
-        .apply(
-            lambda x:
-                normalizar_coordenada(
-                    x,
-                    "lon"
-                )
-        )
-    )
-
-    df["Pressao_MCA"] = (
-        df["Pressao_MCA"]
-        .apply(
-            lambda x:
-                parse_float(
-                    x,
-                    0.0
-                ) or 0.0
-        )
+    df["Pressao_MCA"] = df[
+        "Pressao_MCA"
+    ].apply(
+        lambda x: parse_float(
+            x,
+            0.0
+        ) or 0.0
     )
 
     df["Observacao"] = (
         df["Observacao"]
         .astype(str)
         .str.strip()
-        .replace(
-            {
-                "nan": "",
-                "None": ""
-            }
-        )
+        .replace({
+            "nan": "",
+            "None": ""
+        })
     )
 
     df = df[
@@ -715,19 +603,17 @@ def adicionar_ponto(
 
     novo_id = gerar_id()
 
-    worksheet.append_row(
-        [
-            str(novo_id),
-            str(data_str),
-            str(municipio),
-            str(bairro),
-            float(lat),
-            float(lon),
-            float(pressao),
-            str(observacao),
-            str(matricula)
-        ]
-    )
+    worksheet.append_row([
+        str(novo_id),
+        str(data_str),
+        str(municipio),
+        str(bairro),
+        float(lat),
+        float(lon),
+        float(pressao),
+        str(observacao),
+        str(matricula)
+    ])
 
     time.sleep(0.3)
 
@@ -741,12 +627,9 @@ def adicionar_lote_seguro(
 ):
 
     if not linhas_dados:
-
         return 0
 
-    df_atual = (
-        carregar_dados()
-    )
+    df_atual = carregar_dados()
 
     chaves_existentes = set()
 
@@ -784,7 +667,6 @@ def adicionar_lote_seguro(
                 ).strip().lower(),
 
                 lat_f,
-
                 lon_f
             )
 
@@ -817,9 +699,7 @@ def adicionar_lote_seguro(
         )
 
         chave_nova = (
-            str(
-                d_val
-            ).strip(),
+            str(d_val).strip(),
 
             str(
                 mun_val
@@ -830,14 +710,10 @@ def adicionar_lote_seguro(
             ).strip().lower(),
 
             lat_f,
-
             lon_f
         )
 
-        if (
-            chave_nova
-            not in chaves_existentes
-        ):
+        if chave_nova not in chaves_existentes:
 
             linhas_novas.append(
                 linha
@@ -911,7 +787,6 @@ def atualizar_ponto(
         )
 
         if celula is None:
-
             return False
 
         linha = celula.row
@@ -957,7 +832,6 @@ def excluir_ponto(
         )
 
         if celula is None:
-
             return False
 
         worksheet.delete_rows(
@@ -998,10 +872,7 @@ def gerar_kml(df):
             "Longitude"
         )
 
-        if (
-            pd.notnull(lat)
-            and pd.notnull(lon)
-        ):
+        if pd.notnull(lat) and pd.notnull(lon):
 
             try:
 
@@ -1024,17 +895,23 @@ def gerar_kml(df):
                             "Ponto"
                         )
                     ),
+
                     description=(
                         f"Matrícula: "
                         f"{row.get('Matricula', '')}\n"
+
                         f"Município: "
                         f"{row.get('Municipio', '')}\n"
+
                         f"Bairro: "
                         f"{row.get('Bairro', '')}\n"
+
                         f"Pressão: "
                         f"{row.get('Pressao_MCA', '')} MCA"
+
                         f"{obs_text}"
                     ),
+
                     coords=[
                         (
                             float(lon),
@@ -1058,18 +935,12 @@ def gerar_kml(df):
 # ============================================================
 hoje = date.today()
 
-if (
-    "data_inicial_selecionada"
-    not in st.session_state
-):
+if "data_inicial_selecionada" not in st.session_state:
 
     st.session_state.data_inicial_selecionada = hoje
 
 
-if (
-    "data_final_selecionada"
-    not in st.session_state
-):
+if "data_final_selecionada" not in st.session_state:
 
     st.session_state.data_final_selecionada = hoje
 
@@ -1084,34 +955,22 @@ if "clicked_lon" not in st.session_state:
     st.session_state.clicked_lon = None
 
 
-if (
-    "modo_adicionar_mapa"
-    not in st.session_state
-):
+if "modo_adicionar_mapa" not in st.session_state:
 
     st.session_state.modo_adicionar_mapa = False
 
 
-if (
-    "dados_upload_pendentes_bp"
-    not in st.session_state
-):
+if "dados_upload_pendentes_bp" not in st.session_state:
 
     st.session_state.dados_upload_pendentes_bp = None
 
 
-if (
-    "nome_arquivo_pendente_bp"
-    not in st.session_state
-):
+if "nome_arquivo_pendente_bp" not in st.session_state:
 
     st.session_state.nome_arquivo_pendente_bp = None
 
 
-if (
-    "file_uploader_key_bp"
-    not in st.session_state
-):
+if "file_uploader_key_bp" not in st.session_state:
 
     st.session_state.file_uploader_key_bp = 0
 
@@ -1141,10 +1000,7 @@ def modal_novo_ponto():
 
         data_cadastro = st.date_input(
             "Data do Registro",
-            value=(
-                st.session_state
-                .data_final_selecionada
-            ),
+            value=st.session_state.data_final_selecionada,
             format="DD/MM/YYYY"
         )
 
@@ -1270,24 +1126,19 @@ def modal_editar_ponto(
     df_all = carregar_dados()
 
     df_edit_busca = df_all[
-        df_all["ID"]
-        == id_registro
+        df_all["ID"] == id_registro
     ]
 
     if not df_edit_busca.empty:
 
-        reg_edit = (
-            df_edit_busca.iloc[0]
-        )
+        reg_edit = df_edit_busca.iloc[0]
 
         try:
 
-            data_parsed = (
-                datetime.strptime(
-                    str(reg_edit["Data"]),
-                    "%d/%m/%Y"
-                ).date()
-            )
+            data_parsed = datetime.strptime(
+                str(reg_edit["Data"]),
+                "%d/%m/%Y"
+            ).date()
 
         except ValueError:
 
@@ -1352,8 +1203,7 @@ def modal_editar_ponto(
                 value=float(
                     reg_edit[
                         "Pressao_MCA"
-                    ]
-                    or 0.0
+                    ] or 0.0
                 ),
                 min_value=0.0,
                 step=0.1
@@ -1370,21 +1220,17 @@ def modal_editar_ponto(
 
             with col_salvar:
 
-                salvar_edicao = (
-                    st.form_submit_button(
-                        "💾 Salvar",
-                        type="primary",
-                        use_container_width=True
-                    )
+                salvar_edicao = st.form_submit_button(
+                    "💾 Salvar",
+                    type="primary",
+                    use_container_width=True
                 )
 
             with col_canc:
 
-                cancelar_edicao = (
-                    st.form_submit_button(
-                        "❌ Cancelar",
-                        use_container_width=True
-                    )
+                cancelar_edicao = st.form_submit_button(
+                    "❌ Cancelar",
+                    use_container_width=True
                 )
 
             if salvar_edicao:
@@ -1433,9 +1279,7 @@ def modal_editar_ponto(
                         lat_n,
                         lon_n,
                         pressao_e,
-                        data_para_str(
-                            data_e
-                        ),
+                        data_para_str(data_e),
                         observacao_e.strip()
                     ):
 
@@ -1515,11 +1359,8 @@ def modal_previa_upload():
                 "para o Google Sheets..."
             ):
 
-                qtd_inserida = (
-                    adicionar_lote_seguro(
-                        st.session_state
-                        .dados_upload_pendentes_bp
-                    )
+                qtd_inserida = adicionar_lote_seguro(
+                    st.session_state.dados_upload_pendentes_bp
                 )
 
             st.session_state.dados_upload_pendentes_bp = None
@@ -1572,9 +1413,6 @@ with st.sidebar:
         "Baixa Pressão • Tempo Real"
     )
 
-    # ========================================================
-    # NOVO FILTRO POR PERÍODO
-    # ========================================================
     st.markdown(
         "#### 📅 Selecionar Período"
     )
@@ -1585,10 +1423,7 @@ with st.sidebar:
 
         data_inicial = st.date_input(
             "Data inicial",
-            value=(
-                st.session_state
-                .data_inicial_selecionada
-            ),
+            value=st.session_state.data_inicial_selecionada,
             format="DD/MM/YYYY",
             key="calendario_data_inicial"
         )
@@ -1597,21 +1432,13 @@ with st.sidebar:
 
         data_final = st.date_input(
             "Data final",
-            value=(
-                st.session_state
-                .data_final_selecionada
-            ),
+            value=st.session_state.data_final_selecionada,
             format="DD/MM/YYYY",
             key="calendario_data_final"
         )
 
-    st.session_state.data_inicial_selecionada = (
-        data_inicial
-    )
-
-    st.session_state.data_final_selecionada = (
-        data_final
-    )
+    st.session_state.data_inicial_selecionada = data_inicial
+    st.session_state.data_final_selecionada = data_final
 
     if data_inicial > data_final:
 
@@ -1643,19 +1470,13 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # FILTROS
-    # ========================================================
     st.markdown(
         "#### 🔍 Filtros"
     )
 
     df_all = carregar_dados()
 
-    if (
-        not df_all.empty
-        and periodo_valido
-    ):
+    if not df_all.empty and periodo_valido:
 
         df_all["DataObjFiltro"] = pd.to_datetime(
             df_all["Data"],
@@ -1665,16 +1486,12 @@ with st.sidebar:
 
         df_data = df_all[
             (
-                df_all[
-                    "DataObjFiltro"
-                ].dt.date
+                df_all["DataObjFiltro"].dt.date
                 >= data_inicial
             )
             &
             (
-                df_all[
-                    "DataObjFiltro"
-                ].dt.date
+                df_all["DataObjFiltro"].dt.date
                 <= data_final
             )
         ].copy()
@@ -1687,13 +1504,8 @@ with st.sidebar:
             else df_all
         )
 
-    # ========================================================
-    # FILTRO POR MATRÍCULA
-    # ========================================================
     matriculas_opts = (
-
         ["Todas"]
-
         + sorted(
             [
                 str(v).strip()
@@ -1705,9 +1517,7 @@ with st.sidebar:
                 if str(v).strip()
             ]
         )
-
         if not df_data.empty
-
         else ["Todas"]
     )
 
@@ -1717,24 +1527,15 @@ with st.sidebar:
         key="filtro_matricula"
     )
 
-    # ========================================================
-    # FILTRO POR MUNICÍPIO
-    # ========================================================
     municipios_opts = (
-
         ["Todos"]
-
         + sorted(
-            df_data[
-                "Municipio"
-            ]
+            df_data["Municipio"]
             .dropna()
             .unique()
             .tolist()
         )
-
         if not df_data.empty
-
         else ["Todos"]
     )
 
@@ -1744,40 +1545,26 @@ with st.sidebar:
         key="filtro_municipio"
     )
 
-    # ========================================================
-    # FILTRO POR BAIRRO
-    # ========================================================
     bairros_base = (
-
         df_data[
-            df_data[
-                "Municipio"
-            ] == mun_sel
+            df_data["Municipio"] == mun_sel
         ]
-
         if (
             mun_sel != "Todos"
             and not df_data.empty
         )
-
         else df_data
     )
 
     bairros_opts = (
-
         ["Todos"]
-
         + sorted(
-            bairros_base[
-                "Bairro"
-            ]
+            bairros_base["Bairro"]
             .dropna()
             .unique()
             .tolist()
         )
-
         if not bairros_base.empty
-
         else ["Todos"]
     )
 
@@ -1787,9 +1574,6 @@ with st.sidebar:
         key="filtro_bairro"
     )
 
-    # ========================================================
-    # FILTRO POR PRESSÃO
-    # ========================================================
     faixa_sel = st.selectbox(
         "Faixa de Pressão",
         [
@@ -1804,9 +1588,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # AÇÕES E DADOS
-    # ========================================================
     st.markdown(
         "#### ➕ Ações e Dados"
     )
@@ -1821,10 +1602,7 @@ with st.sidebar:
 
     arquivo_upload = st.file_uploader(
         "📂 Enviar Planilha (XLSX/CSV)",
-        type=[
-            "xlsx",
-            "csv"
-        ],
+        type=["xlsx", "csv"],
         key=(
             f"upload_baixa_pressao_"
             f"{st.session_state.file_uploader_key_bp}"
@@ -1886,8 +1664,7 @@ with st.sidebar:
     if arquivo_upload is not None:
 
         if (
-            st.session_state
-            .nome_arquivo_pendente_bp
+            st.session_state.nome_arquivo_pendente_bp
             != arquivo_upload.name
         ):
 
@@ -1919,19 +1696,15 @@ with st.sidebar:
                         )
                     )
 
-                    data_val = (
-                        normalizar_data(
-                            raw_data
-                        )
+                    data_val = normalizar_data(
+                        raw_data
                     )
 
                     if not data_val:
 
-                        data_val = (
-                            data_para_str(
-                                st.session_state
-                                .data_final_selecionada
-                            )
+                        data_val = data_para_str(
+                            st.session_state
+                            .data_final_selecionada
                         )
 
                     matricula = str(
@@ -1964,28 +1737,24 @@ with st.sidebar:
                         )
                     ).strip()
 
-                    lat_val = (
-                        normalizar_coordenada(
+                    lat_val = normalizar_coordenada(
+                        row.get(
+                            "Latitude",
                             row.get(
-                                "Latitude",
-                                row.get(
-                                    "Lat"
-                                )
-                            ),
-                            "lat"
-                        )
+                                "Lat"
+                            )
+                        ),
+                        "lat"
                     )
 
-                    lon_val = (
-                        normalizar_coordenada(
+                    lon_val = normalizar_coordenada(
+                        row.get(
+                            "Longitude",
                             row.get(
-                                "Longitude",
-                                row.get(
-                                    "Lon"
-                                )
-                            ),
-                            "lon"
-                        )
+                                "Lon"
+                            )
+                        ),
+                        "lon"
                     )
 
                     pres_val = parse_float(
@@ -2019,19 +1788,17 @@ with st.sidebar:
                         and lon_val is not None
                     ):
 
-                        lote_para_enviar.append(
-                            [
-                                gerar_id(),
-                                data_val,
-                                muni,
-                                bair,
-                                float(lat_val),
-                                float(lon_val),
-                                float(pres_val),
-                                obs_val,
-                                matricula
-                            ]
-                        )
+                        lote_para_enviar.append([
+                            gerar_id(),
+                            data_val,
+                            muni,
+                            bair,
+                            float(lat_val),
+                            float(lon_val),
+                            float(pres_val),
+                            obs_val,
+                            matricula
+                        ])
 
                 if lote_para_enviar:
 
@@ -2069,9 +1836,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # EXPORTAÇÃO
-    # ========================================================
     st.markdown(
         "#### 📥 Exportar Dados"
     )
@@ -2091,9 +1855,7 @@ with st.sidebar:
                 sheet_name="Baixa_Pressao"
             )
 
-        excel_data = (
-            output.getvalue()
-        )
+        excel_data = output.getvalue()
 
         st.download_button(
             label="📊 Baixar em Excel (XLSX)",
@@ -2120,17 +1882,12 @@ with st.sidebar:
                 f"baixa_pressao_"
                 f"{datetime.now().strftime('%Y%m%d')}.kml"
             ),
-            mime=(
-                "application/vnd.google-earth.kml+xml"
-            ),
+            mime="application/vnd.google-earth.kml+xml",
             use_container_width=True
         )
 
     st.divider()
 
-    # ========================================================
-    # ATUALIZAÇÃO
-    # ========================================================
     st.markdown(
         "#### ⏱️ Atualização"
     )
@@ -2172,31 +1929,24 @@ with st.sidebar:
 
     st.divider()
 
-    if (
-        "modo_escuro_bp"
-        not in st.session_state
-    ):
+    if "modo_escuro_bp" not in st.session_state:
 
         st.session_state.modo_escuro_bp = False
 
     modo_escuro_bp = st.toggle(
         "🌙 Modo escuro",
-        value=(
-            st.session_state
-            .modo_escuro_bp
-        ),
+        value=st.session_state.modo_escuro_bp,
         key="toggle_modo_escuro_bp",
     )
 
-    st.session_state.modo_escuro_bp = (
-        modo_escuro_bp
-    )
+    st.session_state.modo_escuro_bp = modo_escuro_bp
 
     if modo_escuro_bp:
 
         st.markdown(
             """
             <style>
+
                 .stApp {
                     background-color: #0e1117;
                     color: #fafafa;
@@ -2261,6 +2011,7 @@ with st.sidebar:
                 [data-testid="stDataFrame"] {
                     color: #f0f0f0;
                 }
+
             </style>
             """,
             unsafe_allow_html=True,
@@ -2291,17 +2042,13 @@ if periodo_valido:
             f"a **{data_para_str(data_final)}**"
         )
 
-
 df = carregar_dados()
 
 
 # ============================================================
 # FILTRO PRINCIPAL POR INTERVALO
 # ============================================================
-if (
-    not df.empty
-    and periodo_valido
-):
+if not df.empty and periodo_valido:
 
     df["DataObjFiltro"] = pd.to_datetime(
         df["Data"],
@@ -2311,16 +2058,12 @@ if (
 
     df_filtrado = df[
         (
-            df[
-                "DataObjFiltro"
-            ].dt.date
+            df["DataObjFiltro"].dt.date
             >= data_inicial
         )
         &
         (
-            df[
-                "DataObjFiltro"
-            ].dt.date
+            df["DataObjFiltro"].dt.date
             <= data_final
         )
     ].copy()
@@ -2340,9 +2083,7 @@ else:
 if matricula_sel != "Todas":
 
     df_filtrado = df_filtrado[
-        df_filtrado[
-            "Matricula"
-        ]
+        df_filtrado["Matricula"]
         .astype(str)
         .str.strip()
         == matricula_sel
@@ -2355,9 +2096,7 @@ if matricula_sel != "Todas":
 if mun_sel != "Todos":
 
     df_filtrado = df_filtrado[
-        df_filtrado[
-            "Municipio"
-        ]
+        df_filtrado["Municipio"]
         == mun_sel
     ]
 
@@ -2368,9 +2107,7 @@ if mun_sel != "Todos":
 if bairro_sel != "Todos":
 
     df_filtrado = df_filtrado[
-        df_filtrado[
-            "Bairro"
-        ]
+        df_filtrado["Bairro"]
         == bairro_sel
     ]
 
@@ -2381,24 +2118,18 @@ if bairro_sel != "Todos":
 if faixa_sel == "Sem Pressão (0 MCA)":
 
     df_filtrado = df_filtrado[
-        df_filtrado[
-            "Pressao_MCA"
-        ] == 0
+        df_filtrado["Pressao_MCA"] == 0
     ]
 
 elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
 
     df_filtrado = df_filtrado[
         (
-            df_filtrado[
-                "Pressao_MCA"
-            ] > 0
+            df_filtrado["Pressao_MCA"] > 0
         )
         &
         (
-            df_filtrado[
-                "Pressao_MCA"
-            ] <= 5
+            df_filtrado["Pressao_MCA"] <= 5
         )
     ]
 
@@ -2406,24 +2137,18 @@ elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
     df_filtrado = df_filtrado[
         (
-            df_filtrado[
-                "Pressao_MCA"
-            ] > 5
+            df_filtrado["Pressao_MCA"] > 5
         )
         &
         (
-            df_filtrado[
-                "Pressao_MCA"
-            ] <= 15
+            df_filtrado["Pressao_MCA"] <= 15
         )
     ]
 
 elif faixa_sel == "Alta Pressão (> 15 MCA)":
 
     df_filtrado = df_filtrado[
-        df_filtrado[
-            "Pressao_MCA"
-        ] > 15
+        df_filtrado["Pressao_MCA"] > 15
     ]
 
 
@@ -2438,24 +2163,18 @@ if not df_filtrado.empty:
 
     sem_pressao = len(
         df_filtrado[
-            df_filtrado[
-                "Pressao_MCA"
-            ] == 0
+            df_filtrado["Pressao_MCA"] == 0
         ]
     )
 
     baixa_pressao = len(
         df_filtrado[
             (
-                df_filtrado[
-                    "Pressao_MCA"
-                ] > 0
+                df_filtrado["Pressao_MCA"] > 0
             )
             &
             (
-                df_filtrado[
-                    "Pressao_MCA"
-                ] <= 5
+                df_filtrado["Pressao_MCA"] <= 5
             )
         ]
     )
@@ -2463,24 +2182,18 @@ if not df_filtrado.empty:
     em_atencao = len(
         df_filtrado[
             (
-                df_filtrado[
-                    "Pressao_MCA"
-                ] > 5
+                df_filtrado["Pressao_MCA"] > 5
             )
             &
             (
-                df_filtrado[
-                    "Pressao_MCA"
-                ] <= 15
+                df_filtrado["Pressao_MCA"] <= 15
             )
         ]
     )
 
     alta_pressao = len(
         df_filtrado[
-            df_filtrado[
-                "Pressao_MCA"
-            ] > 15
+            df_filtrado["Pressao_MCA"] > 15
         ]
     )
 
@@ -2556,34 +2269,23 @@ with c_map2:
 
 with c_map3:
 
-    st.session_state.modo_adicionar_mapa = (
-        st.checkbox(
-            "📍 Modo adicionar ponto",
-            value=(
-                st.session_state
-                .modo_adicionar_mapa
-            )
-        )
+    st.session_state.modo_adicionar_mapa = st.checkbox(
+        "📍 Modo adicionar ponto",
+        value=st.session_state.modo_adicionar_mapa
     )
 
 
 if (
     not df_filtrado.empty
-    and df_filtrado[
-        "Latitude"
-    ].notna().any()
+    and df_filtrado["Latitude"].notna().any()
 ):
 
     centro_lat = float(
-        df_filtrado[
-            "Latitude"
-        ].mean()
+        df_filtrado["Latitude"].mean()
     )
 
     centro_lon = float(
-        df_filtrado[
-            "Longitude"
-        ].mean()
+        df_filtrado["Longitude"].mean()
     )
 
     zoom = 13
@@ -2642,60 +2344,36 @@ else:
 cluster_icon_function = """
 function(cluster) {
 
-    /*
-     * Cada elemento retornado aqui representa uma
-     * MEDIÇÃO INDIVIDUAL pertencente ao agrupamento.
-     *
-     * O MarkerCluster pode formar subclusters internamente,
-     * mas getAllChildMarkers() retorna os marcadores
-     * individuais contidos naquele agrupamento.
-     */
     var markers = cluster.getAllChildMarkers();
 
-    var somaPressao = 0;
-    var numeroMedicoes = 0;
+    var soma = 0;
+    var quantidade = 0;
 
     markers.forEach(function(marker) {
 
-        /*
-         * A pressão é gravada diretamente no marcador
-         * individual através de:
-         *
-         * marker.options.pressao_mca
-         */
-        var valor = marker.options.pressao_mca;
+        var pressao = Number(
+            marker.options.pressao_mca
+        );
 
         if (
-            valor !== undefined &&
-            valor !== null &&
-            valor !== ""
+            Number.isFinite(pressao)
         ) {
 
-            var pressao = Number(valor);
-
-            if (Number.isFinite(pressao)) {
-
-                somaPressao += pressao;
-                numeroMedicoes += 1;
-
-            }
+            soma += pressao;
+            quantidade += 1;
 
         }
 
     });
 
-    /*
-     * Média SOMENTE das medições válidas.
-     */
-    var media = (
-        numeroMedicoes > 0
-            ? somaPressao / numeroMedicoes
-            : 0
-    );
+    var media = 0;
 
-    /*
-     * Classificação pela MÉDIA do agrupamento.
-     */
+    if (quantidade > 0) {
+
+        media = soma / quantidade;
+
+    }
+
     var cor;
 
     if (media === 0) {
@@ -2716,47 +2394,32 @@ function(cluster) {
 
     }
 
-    /*
-     * Uma casa decimal para facilitar
-     * a leitura no mapa.
-     */
     var mediaFormatada = media.toFixed(1);
 
     return L.divIcon({
 
         html:
             '<div style="' +
-
                 'width:78px;' +
                 'height:58px;' +
                 'border-radius:12px;' +
-
                 'background:' + cor + ';' +
-
                 'border:3px solid #ffffff;' +
-
-                'box-shadow:' +
-                    '0 2px 8px rgba(0,0,0,0.35);' +
-
+                'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
                 'display:flex;' +
                 'flex-direction:column;' +
                 'align-items:center;' +
                 'justify-content:center;' +
-
                 'font-family:Arial,sans-serif;' +
                 'color:#111827;' +
                 'line-height:1.1;' +
-
             '">' +
 
                 '<div style="' +
                     'font-size:16px;' +
                     'font-weight:700;' +
                 '">' +
-
-                    mediaFormatada +
-                    ' MCA' +
-
+                    mediaFormatada + ' MCA' +
                 '</div>' +
 
                 '<div style="' +
@@ -2764,10 +2427,7 @@ function(cluster) {
                     'font-weight:600;' +
                     'margin-top:3px;' +
                 '">' +
-
-                    numeroMedicoes +
-                    ' medições' +
-
+                    quantidade + ' medições' +
                 '</div>' +
 
             '</div>',
@@ -2787,29 +2447,15 @@ function(cluster) {
 
 cluster = MarkerCluster(
     name="Agrupamento de Pressão",
-    icon_create_function=(
-        cluster_icon_function
-    ),
+
+    icon_create_function=cluster_icon_function,
+
     options={
-
-        /*
-         * Distância máxima em pixels
-         * para formar um agrupamento.
-         */
         "maxClusterRadius": 55,
-
-        /*
-         * A partir deste zoom os pontos
-         * deixam de ser agrupados.
-         */
         "disableClusteringAtZoom": 16,
-
         "spiderfyOnMaxZoom": True,
-
         "showCoverageOnHover": False,
-
         "zoomToBoundsOnClick": True,
-
         "removeOutsideVisibleBounds": True
     }
 )
@@ -2831,18 +2477,16 @@ if not df_filtrado.empty:
 
     for _, row in validos.iterrows():
 
-        pressao = row[
-            "Pressao_MCA"
-        ]
+        pressao = float(
+            row["Pressao_MCA"]
+        )
 
         obs = str(
             row["Observacao"]
         ).strip()
 
-        classificacao, cor = (
-            classificar_pressao(
-                pressao
-            )
+        classificacao, cor = classificar_pressao(
+            pressao
         )
 
         obs_tooltip_text = (
@@ -2885,11 +2529,8 @@ if not df_filtrado.empty:
         if mostrar_rotulos:
 
             obs_rotulo_html = (
-                f"<br><span style='"
-                f"font-weight: normal; "
-                f"color: #4b5563;'>"
-                f"Obs: {obs}"
-                f"</span>"
+                f"<br><span style='font-weight: normal; "
+                f"color: #4b5563;'>Obs: {obs}</span>"
                 if obs
                 else ""
             )
@@ -2925,7 +2566,6 @@ if not df_filtrado.empty:
         else:
 
             rotulo_html = ""
-
 
         # ====================================================
         # MARCADOR INDIVIDUAL
@@ -2978,11 +2618,7 @@ if not df_filtrado.empty:
         </div>
         """
 
-        # ====================================================
-        # MARCADOR FOLIUM
-        # ====================================================
         marker = folium.map.Marker(
-
             location=[
                 row["Latitude"],
                 row["Longitude"]
@@ -2990,17 +2626,9 @@ if not df_filtrado.empty:
 
             icon=folium.DivIcon(
                 html=marker_html,
-                icon_size=(
-                    300,
-                    65
-                ),
-                icon_anchor=(
-                    16.5,
-                    42
-                ),
-                class_name=(
-                    "pressao-location-marker"
-                )
+                icon_size=(300, 65),
+                icon_anchor=(16.5, 42),
+                class_name="pressao-location-marker"
             ),
 
             popup=folium.Popup(
@@ -3008,22 +2636,17 @@ if not df_filtrado.empty:
                 max_width=250
             ),
 
-            tooltip=tooltip_str,
-
-            /*
-             * IMPORTANTE:
-             * este valor fica armazenado no marcador
-             * individual e é usado pelo JavaScript
-             * do MarkerCluster para calcular:
-             *
-             * 1. quantidade de medições
-             * 2. soma das pressões
-             * 3. média do agrupamento
-             */
-            pressao_mca=float(
-                pressao
-            )
+            tooltip=tooltip_str
         )
+
+        # ====================================================
+        # PRESSÃO DO MARCADOR
+        # ====================================================
+        # A pressão é armazenada diretamente nas opções
+        # JavaScript do marcador.
+        marker.options[
+            "pressao_mca"
+        ] = pressao
 
         marker.add_to(
             cluster
@@ -3168,12 +2791,9 @@ map_data = st_folium(
 
 
 if (
-    st.session_state
-    .modo_adicionar_mapa
+    st.session_state.modo_adicionar_mapa
     and map_data
-    and map_data.get(
-        "last_clicked"
-    )
+    and map_data.get("last_clicked")
 ):
 
     clicked = map_data[
@@ -3182,18 +2802,14 @@ if (
 
     if clicked:
 
-        st.session_state.clicked_lat = (
-            round(
-                clicked["lat"],
-                6
-            )
+        st.session_state.clicked_lat = round(
+            clicked["lat"],
+            6
         )
 
-        st.session_state.clicked_lon = (
-            round(
-                clicked["lng"],
-                6
-            )
+        st.session_state.clicked_lon = round(
+            clicked["lng"],
+            6
         )
 
         modal_novo_ponto()
@@ -3235,29 +2851,24 @@ if not df_filtrado.empty:
 
     linhas_selecionadas = (
         evento.selection.rows
-        if evento
-        and evento.selection
+        if evento and evento.selection
         else []
     )
 
     if linhas_selecionadas:
 
-        idx = (
-            linhas_selecionadas[0]
-        )
+        idx = linhas_selecionadas[0]
 
-        registro = (
-            df_show.iloc[idx]
-        )
+        registro = df_show.iloc[
+            idx
+        ]
 
         id_sel = str(
             registro["ID"]
         )
 
-        col_a, col_b, _ = (
-            st.columns(
-                [1, 1, 4]
-            )
+        col_a, col_b, _ = st.columns(
+            [1, 1, 4]
         )
 
         with col_a:
@@ -3305,70 +2916,54 @@ st.markdown(
 
 if not df_all.empty:
 
-    col_g1, col_g2, col_g3 = (
-        st.columns(
-            [2, 2, 2]
-        )
+    col_g1, col_g2, col_g3 = st.columns(
+        [2, 2, 2]
     )
 
     with col_g1:
 
         data_inicio_padrao = (
-            hoje
-            - timedelta(days=30)
+            hoje - timedelta(
+                days=30
+            )
         )
 
-        data_ini_analise = (
-            st.date_input(
-                "Data Inicial",
-                value=data_inicio_padrao,
-                format="DD/MM/YYYY",
-                key="analise_ini"
-            )
+        data_ini_analise = st.date_input(
+            "Data Inicial",
+            value=data_inicio_padrao,
+            format="DD/MM/YYYY",
+            key="analise_ini"
         )
 
     with col_g2:
 
-        data_fim_analise = (
-            st.date_input(
-                "Data Final",
-                value=hoje,
-                format="DD/MM/YYYY",
-                key="analise_fim"
-            )
+        data_fim_analise = st.date_input(
+            "Data Final",
+            value=hoje,
+            format="DD/MM/YYYY",
+            key="analise_fim"
         )
 
     with col_g3:
 
         bairros_disponiveis = sorted(
-            df_all[
-                "Bairro"
-            ]
+            df_all["Bairro"]
             .dropna()
             .unique()
             .tolist()
         )
 
-        bairro_analise = (
-            st.selectbox(
-                "Selecione o Bairro",
-                options=[
-                    "Selecione..."
-                ]
-                + bairros_disponiveis,
-                key="analise_bairro"
-            )
+        bairro_analise = st.selectbox(
+            "Selecione o Bairro",
+            options=[
+                "Selecione..."
+            ] + bairros_disponiveis,
+            key="analise_bairro"
         )
 
-    if (
-        bairro_analise
-        != "Selecione..."
-    ):
+    if bairro_analise != "Selecione...":
 
-        if (
-            data_ini_analise
-            > data_fim_analise
-        ):
+        if data_ini_analise > data_fim_analise:
 
             st.error(
                 "A data inicial não pode ser maior "
@@ -3378,20 +2973,14 @@ if not df_all.empty:
         else:
 
             df_tendencia = df_all[
-                df_all[
-                    "Bairro"
-                ]
+                df_all["Bairro"]
                 == bairro_analise
             ].copy()
 
             if not df_tendencia.empty:
 
-                df_tendencia[
-                    "DataObj"
-                ] = pd.to_datetime(
-                    df_tendencia[
-                        "Data"
-                    ],
+                df_tendencia["DataObj"] = pd.to_datetime(
+                    df_tendencia["Data"],
                     format="%d/%m/%Y",
                     errors="coerce"
                 )
@@ -3449,43 +3038,31 @@ if not df_all.empty:
                     fig.add_hline(
                         y=5,
                         line_dash="dash",
-                        line_color=(
-                            COR_BAIXA_PRESSAO
-                        ),
+                        line_color=COR_BAIXA_PRESSAO,
                         annotation_text=(
                             "Limite: Baixa Pressão (5 MCA)"
                         ),
-                        annotation_position=(
-                            "top left"
-                        )
+                        annotation_position="top left"
                     )
 
                     fig.add_hline(
                         y=15,
                         line_dash="dash",
-                        line_color=(
-                            COR_ALTA_PRESSAO
-                        ),
+                        line_color=COR_ALTA_PRESSAO,
                         annotation_text=(
                             "Limite: Alta Pressão (15 MCA)"
                         ),
-                        annotation_position=(
-                            "top left"
-                        )
+                        annotation_position="top left"
                     )
 
                     fig.add_hline(
                         y=0,
                         line_dash="solid",
-                        line_color=(
-                            COR_SEM_PRESSAO
-                        ),
+                        line_color=COR_SEM_PRESSAO,
                         annotation_text=(
                             "Sem Pressão (0 MCA)"
                         ),
-                        annotation_position=(
-                            "bottom left"
-                        )
+                        annotation_position="bottom left"
                     )
 
                     fig.update_traces(
