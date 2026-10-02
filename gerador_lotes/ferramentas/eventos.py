@@ -21,12 +21,15 @@ NOME_ARQUIVO_THE = "Eventos THE.xlsx"
 TIPO_ENCERRAMENTO = 6
 
 COLUNAS_LOTE = [
-    "Matricula",
-    "Zona Ligacao",
-    "Numero Do Pedido",
-    "Ano Do Pedido",
-    "Tipo Encerramento",
-    "Observações",
+    "Quant. de O.S",
+    "Cidade",
+    "Bairro",
+    "Ano",
+    "Mês",
+    "Dia",
+    "Hora Inicial",
+    "Hora Final",
+    "Observação",
 ]
 
 
@@ -337,8 +340,6 @@ def eh_todo_municipio(valor) -> bool:
 
     return texto in PADROES_TODO_MUNICIPIO
 
-    return False
-
 
 # ============================================================
 # ÁREAS / BAIRROS
@@ -387,14 +388,12 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     # --------------------------------------------------------
     # MUNICÍPIO INTEIRO
     # --------------------------------------------------------
+
     if eh_todo_municipio(texto_area_original):
         return True
 
     # --------------------------------------------------------
     # SEPARAÇÃO DE MÚLTIPLAS ÁREAS
-    #
-    # A célula de Áreas Impactadas pode conter vários bairros.
-    # Cada área deve ser comparada individualmente.
     # --------------------------------------------------------
 
     partes = re.split(
@@ -425,9 +424,6 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
 
     # --------------------------------------------------------
     # SINÔNIMOS EXPLÍCITOS
-    #
-    # Só permitem equivalência quando os dois nomes pertencem
-    # ao mesmo grupo cadastrado.
     # --------------------------------------------------------
 
     for grupo, sinonimos in SINONIMOS_AREAS.items():
@@ -695,7 +691,7 @@ def cruzar_eventos_com_backlog(
 
     avisos = []
 
-    if df_backlog is None or df_backlog.empty:
+    if eventos is None or eventos.empty:
         return (
             pd.DataFrame(columns=COLUNAS_LOTE),
             0,
@@ -703,10 +699,10 @@ def cruzar_eventos_com_backlog(
             0,
         )
 
-    if eventos is None or eventos.empty:
+    if df_backlog is None or df_backlog.empty:
         return (
             pd.DataFrame(columns=COLUNAS_LOTE),
-            len(df_backlog),
+            0,
             avisos,
             0,
         )
@@ -724,13 +720,6 @@ def cruzar_eventos_com_backlog(
         "BAIRRO",
         "Bairro",
     )
-
-    # ========================================================
-    # REGRA INVIOLÁVEL:
-    # SOMENTE INÍCIO DO SLA É UTILIZADO.
-    #
-    # A coluna "Data" NÃO É UTILIZADA.
-    # ========================================================
 
     coluna_inicio_sla = encontrar_coluna(
         df,
@@ -786,6 +775,10 @@ def cruzar_eventos_com_backlog(
             0,
         )
 
+    # --------------------------------------------------------
+    # PREPARAÇÃO DO BACKLOG
+    # --------------------------------------------------------
+
     df["_cidade_evento"] = df[coluna_cidade].apply(
         normalizar_texto
     )
@@ -794,130 +787,206 @@ def cruzar_eventos_com_backlog(
         normalizar_texto
     )
 
-    # Exclusivamente INÍCIO DO SLA.
     df["_inicio_sla_evento"] = df[
         coluna_inicio_sla
     ].apply(
         converter_datetime_evento
     )
 
-    protocolos_invalidos = 0
-    cidades_sem_zona = 0
-    inicio_sla_invalido = 0
+    df["_matricula_evento"] = df[
+        coluna_matricula
+    ].apply(
+        normalizar_matricula
+    )
+
+    df["_protocolo_numero"] = df[
+        coluna_protocolo
+    ].apply(
+        lambda valor: parse_protocolo(valor)[0]
+    )
+
+    df["_protocolo_ano"] = df[
+        coluna_protocolo
+    ].apply(
+        lambda valor: parse_protocolo(valor)[1]
+    )
+
+    # --------------------------------------------------------
+    # ESTATÍSTICAS
+    # --------------------------------------------------------
+
+    inicio_sla_invalido = int(
+        df["_inicio_sla_evento"].isna().sum()
+    )
+
+    protocolos_invalidos = int(
+        (
+            df["_protocolo_numero"].isna()
+            | df["_protocolo_ano"].isna()
+        ).sum()
+    )
 
     resultados = []
 
-    os_processadas = set()
+    # --------------------------------------------------------
+    # EVENTO → ÁREA → O.S.
+    # --------------------------------------------------------
 
-    for _, linha in df.iterrows():
+    for _, evento in eventos.iterrows():
 
-        inicio_sla = linha["_inicio_sla_evento"]
-
-        if pd.isna(inicio_sla):
-            inicio_sla_invalido += 1
-            continue
-
-        numero, ano = parse_protocolo(
-            linha[coluna_protocolo]
+        cidade = normalizar_texto(
+            evento.get("cidade", "")
         )
-
-        if numero is None or ano is None:
-            protocolos_invalidos += 1
-            continue
-
-        matricula = normalizar_matricula(
-            linha[coluna_matricula]
-        )
-
-        if not matricula:
-            continue
-
-        chave_os = (
-            matricula,
-            numero,
-            ano,
-        )
-
-        if chave_os in os_processadas:
-            continue
-
-        cidade = linha["_cidade_evento"]
-        bairro = linha["_bairro_evento"]
 
         if not cidade:
             continue
 
-        eventos_cidade = eventos[
-            eventos["cidade"] == cidade
-        ]
+        inicio_evento = evento.get("inicio")
+        fim_previsto = evento.get("fim_previsto")
+        fim_efetivo = evento.get("fim_efetivo")
 
-        if eventos_cidade.empty:
+        if pd.isna(inicio_evento) or pd.isna(fim_efetivo):
             continue
 
-        evento_correspondente = None
+        areas_original = str(
+            evento.get("areas", "")
+        ).strip()
 
-        for _, evento in eventos_cidade.iterrows():
-
-            inicio_evento = evento["inicio"]
-            fim_evento = evento["fim_efetivo"]
-
-            if pd.isna(inicio_evento):
-                continue
-
-            if pd.isna(fim_evento):
-                continue
-
-            if not (
-                inicio_evento
-                <= inicio_sla
-                <= fim_evento
-            ):
-                continue
-
-            if evento["todo_municipio"]:
-                evento_correspondente = evento
-                break
-
-            if areas_evento_correspondem(
-                evento["areas"],
-                bairro,
-            ):
-                evento_correspondente = evento
-                break
-
-        if evento_correspondente is None:
+        if not areas_original:
             continue
 
-        # THE utiliza zona 1.
-        # API utiliza o cadastro oficial de zonas.
-        if modo == "THE":
-            zona = 1
+        descricao = evento.get(
+            "descricao",
+            "",
+        )
+
+        # ----------------------------------------------------
+        # SEPARAÇÃO DAS ÁREAS
+        # ----------------------------------------------------
+
+        if eh_todo_municipio(areas_original):
+
+            areas_evento = [
+                "TODA A CIDADE"
+            ]
+
         else:
-            zona = obter_zona(cidade)
 
-        if zona is None:
-            cidades_sem_zona += 1
-            continue
-
-        observacao = montar_observacao(
-            evento_correspondente.get(
-                "descricao",
-                "",
+            partes = re.split(
+                r"[;,|\n]+|\s+E\s+",
+                areas_original,
+                flags=re.IGNORECASE,
             )
-        )
 
-        resultados.append(
-            {
-                "Matricula": matricula,
-                "Zona Ligacao": zona,
-                "Numero Do Pedido": numero,
-                "Ano Do Pedido": ano,
-                "Tipo Encerramento": TIPO_ENCERRAMENTO,
-                "Observações": observacao,
-            }
-        )
+            areas_evento = []
 
-        os_processadas.add(chave_os)
+            for parte in partes:
+
+                area = normalizar_texto(parte)
+
+                if area and area not in areas_evento:
+                    areas_evento.append(area)
+
+        # ----------------------------------------------------
+        # CADA ÁREA DO EVENTO
+        # ----------------------------------------------------
+
+        for area in areas_evento:
+
+            chaves_os_evento = set()
+
+            for _, os in df.iterrows():
+
+                if os["_cidade_evento"] != cidade:
+                    continue
+
+                inicio_sla = os["_inicio_sla_evento"]
+
+                if pd.isna(inicio_sla):
+                    continue
+
+                numero = os["_protocolo_numero"]
+                ano = os["_protocolo_ano"]
+                matricula = os["_matricula_evento"]
+
+                if (
+                    numero is None
+                    or pd.isna(numero)
+                    or ano is None
+                    or pd.isna(ano)
+                    or not matricula
+                ):
+                    continue
+
+                chave_os = (
+                    matricula,
+                    int(numero),
+                    int(ano),
+                )
+
+                if chave_os in chaves_os_evento:
+                    continue
+
+                # ------------------------------------------------
+                # PERÍODO DO EVENTO
+                # ------------------------------------------------
+
+                if not (
+                    inicio_evento
+                    <= inicio_sla
+                    <= fim_efetivo
+                ):
+                    continue
+
+                # ------------------------------------------------
+                # ÁREA
+                # ------------------------------------------------
+
+                if area == "TODA A CIDADE":
+
+                    corresponde_area = True
+
+                else:
+
+                    corresponde_area = (
+                        areas_evento_correspondem(
+                            area,
+                            os["_bairro_evento"],
+                        )
+                    )
+
+                if not corresponde_area:
+                    continue
+
+                chaves_os_evento.add(chave_os)
+
+            # ----------------------------------------------------
+            # RESULTADO DA ÁREA
+            # ----------------------------------------------------
+
+            resultados.append(
+                {
+                    "Quant. de O.S": len(chaves_os_evento),
+                    "Cidade": cidade,
+                    "Bairro": area,
+                    "Ano": int(inicio_evento.year),
+                    "Mês": int(inicio_evento.month),
+                    "Dia": int(inicio_evento.day),
+                    "Hora Inicial": inicio_evento.strftime(
+                        "%H:%M"
+                    ),
+                    "Hora Final": fim_previsto.strftime(
+                        "%H:%M"
+                    ),
+                    "Observação": montar_observacao(
+                        descricao
+                    ),
+                }
+            )
+
+    # --------------------------------------------------------
+    # AVISOS
+    # --------------------------------------------------------
 
     if protocolos_invalidos:
         avisos.append(
@@ -925,17 +994,15 @@ def cruzar_eventos_com_backlog(
             "foram ignoradas."
         )
 
-    if cidades_sem_zona:
-        avisos.append(
-            f"{cidades_sem_zona} O.S. não foram incluídas porque "
-            "a cidade não possui zona cadastrada."
-        )
-
     if inicio_sla_invalido:
         avisos.append(
             f"{inicio_sla_invalido} O.S. com INÍCIO DO SLA inválido "
             "foram ignoradas."
         )
+
+    # --------------------------------------------------------
+    # RESULTADO FINAL
+    # --------------------------------------------------------
 
     resultado = pd.DataFrame(
         resultados,
@@ -976,34 +1043,6 @@ def limpar_estado_eventos():
 # ============================================================
 
 def render_eventos():
-
-    # --------------------------------------------------------
-    # CONTROLE DE ACESSO DURANTE MANUTENÇÃO
-    # --------------------------------------------------------
-    perfil = str(st.session_state.get("perfil", "")).strip().lower()
-
-    if perfil not in {"admin", "administrador", "administrators", "administrator"}:
-        aplicar_modo_visual()
-
-        st.title("📋 Análise de Eventos")
-        st.warning("🛠️ Ferramenta em manutenção")
-        st.info(
-            "Esta ferramenta está temporariamente indisponível "
-            "para usuários durante o período de manutenção."
-        )
-
-        st.divider()
-
-        if st.button(
-            "⬅️ Voltar ao Hub",
-            use_container_width=True,
-            key="btn_voltar_hub_eventos_manutencao",
-        ):
-            st.session_state["ferramenta_atual"] = None
-            limpar_resultado()
-            st.rerun()
-
-        st.stop()
 
     aplicar_modo_visual()
 
@@ -1160,7 +1199,7 @@ def render_eventos():
     ):
         st.markdown(
             """
-            **Critérios para cancelamento:**
+            **Critérios para identificação das O.S.:**
 
             - A cidade da O.S. deve ser a mesma do evento.
             - O **INÍCIO DO SLA** da O.S. deve estar entre o
@@ -1170,9 +1209,9 @@ def render_eventos():
               automática.
             - Nos demais eventos, o bairro é comparado com as
               **Áreas Impactadas**.
-            - A mesma O.S. é incluída uma única vez.
+            - A mesma O.S. é contabilizada uma única vez por área do evento.
             - A coluna **Data** não é utilizada.
-            - O tipo de encerramento utilizado é **6**.
+            - O resultado é consolidado por evento e área impactada.
             """
         )
 
@@ -1300,7 +1339,7 @@ def render_eventos():
                 f"""
                 <div class="coi-metric">
                     <div class="coi-metric-label">
-                        O.S. para cancelamento
+                        Linhas geradas
                     </div>
                     <div class="coi-metric-value">
                         {estatisticas.get("os_cancelamento", 0):,}
@@ -1317,13 +1356,13 @@ def render_eventos():
                 0,
             )
 
-            cancelamento = estatisticas.get(
+            linhas = estatisticas.get(
                 "os_cancelamento",
                 0,
             )
 
             percentual = (
-                cancelamento / analisadas * 100
+                linhas / analisadas * 100
                 if analisadas
                 else 0
             )
@@ -1362,9 +1401,8 @@ def render_eventos():
         if resultado is None or resultado.empty:
 
             st.info(
-                "Nenhuma O.S. foi identificada para "
-                "cancelamento de acordo com as regras "
-                "dos eventos."
+                "Nenhum evento/área foi identificado para "
+                "composição do resultado."
             )
 
         else:
