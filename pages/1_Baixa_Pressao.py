@@ -4,6 +4,7 @@ from google.oauth2.service_account import Credentials
 import json
 import pandas as pd
 import folium
+from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 import os
 import simplekml
@@ -2247,6 +2248,125 @@ else:
 
 
 # ============================================================
+# AGRUPAMENTO DINÂMICO DAS MEDIÇÕES
+# ============================================================
+cluster_icon_function = """
+function(cluster) {
+
+    var markers = cluster.getAllChildMarkers();
+
+    var soma = 0;
+    var quantidade = 0;
+
+    markers.forEach(function(marker) {
+
+        var pressao = parseFloat(
+            marker.options.pressao_mca
+        );
+
+        if (!isNaN(pressao)) {
+
+            soma += pressao;
+            quantidade += 1;
+
+        }
+
+    });
+
+    var media = quantidade > 0
+        ? soma / quantidade
+        : 0;
+
+    var cor;
+
+    /*
+     * IMPORTANTE:
+     * A lógica de classificação permanece
+     * exatamente igual à utilizada nos pontos.
+     */
+    if (media === 0) {
+
+        cor = "#FF5C60";
+
+    } else if (media <= 5) {
+
+        cor = "#F8DC00";
+
+    } else if (media <= 15) {
+
+        cor = "#FF8FE1";
+
+    } else {
+
+        cor = "#A11FFF";
+
+    }
+
+    var mediaFormatada = media.toFixed(1);
+
+    return L.divIcon({
+
+        html:
+            '<div style="' +
+                'width:78px;' +
+                'height:58px;' +
+                'border-radius:12px;' +
+                'background:' + cor + ';' +
+                'border:3px solid #ffffff;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
+                'display:flex;' +
+                'flex-direction:column;' +
+                'align-items:center;' +
+                'justify-content:center;' +
+                'font-family:Arial,sans-serif;' +
+                'color:#111827;' +
+                'line-height:1.1;' +
+            '">' +
+
+                '<div style="' +
+                    'font-size:16px;' +
+                    'font-weight:700;' +
+                '">' +
+                    mediaFormatada + ' MCA' +
+                '</div>' +
+
+                '<div style="' +
+                    'font-size:10px;' +
+                    'font-weight:600;' +
+                    'margin-top:3px;' +
+                '">' +
+                    quantidade + ' medições' +
+                '</div>' +
+
+            '</div>',
+
+        className: "pressao-cluster",
+
+        iconSize: new L.Point(78, 58)
+
+    });
+
+}
+"""
+
+
+cluster = MarkerCluster(
+    name="Agrupamento de Pressão",
+    icon_create_function=cluster_icon_function,
+    options={
+        "maxClusterRadius": 55,
+        "disableClusteringAtZoom": 16,
+        "spiderfyOnMaxZoom": True,
+        "showCoverageOnHover": False,
+        "zoomToBoundsOnClick": True,
+        "removeOutsideVisibleBounds": True
+    }
+)
+
+cluster.add_to(m)
+
+
+# ============================================================
 # MARCADORES DO PERÍODO SELECIONADO
 # ============================================================
 if not df_filtrado.empty:
@@ -2306,36 +2426,9 @@ if not df_filtrado.empty:
             f"{classificacao}"
         )
 
-        marker_html = f"""
-<div style="width:33px;height:42px;display:flex;align-items:flex-start;justify-content:center;">
-    <svg width="33" height="42" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 29C12 29 22 19.5 22 11.5C22 5.7 17.5 1 12 1C6.5 1 2 5.7 2 11.5C2 19.5 12 29 12 29Z"
-              fill="{cor}" stroke="#FFFFFF" stroke-width="1.5"/>
-        <circle cx="12" cy="11" r="3.4" fill="#FFFFFF"/>
-    </svg>
-</div>
-"""
-
-        folium.map.Marker(
-            location=[
-                row["Latitude"],
-                row["Longitude"]
-            ],
-            icon=folium.DivIcon(
-                html=marker_html,
-                icon_size=(33, 42),
-                icon_anchor=(16.5, 42),
-                class_name="pressao-location-marker"
-            ),
-            popup=folium.Popup(
-                popup,
-                max_width=250
-            ),
-            tooltip=tooltip_str
-        ).add_to(m)
-
-        # IMPORTANTE:
-        # Matrícula NÃO é adicionada ao rótulo do mapa.
+        # ====================================================
+        # RÓTULO INDIVIDUAL
+        # ====================================================
         if mostrar_rotulos:
 
             obs_rotulo_html = (
@@ -2350,34 +2443,108 @@ if not df_filtrado.empty:
                 f"{pressao} MCA"
             )
 
-            folium.map.Marker(
-                [
-                    row["Latitude"],
-                    row["Longitude"]
-                ],
-                icon=folium.DivIcon(
-                    icon_size=(220, 50),
-                    icon_anchor=(-12, 18),
-                    html=f"""
-                    <div style="
-                        font-family: sans-serif;
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: #1f2937;
-                        background-color: rgba(255, 255, 255, 0.95);
-                        padding: 5px 9px;
-                        border-radius: 6px;
-                        border: 1px solid #cbd5e1;
-                        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                        width: max-content;
-                        white-space: nowrap;
-                    ">
-                        📍 {texto_rotulo}
-                        {obs_rotulo_html}
-                    </div>
-                    """
-                )
-            ).add_to(m)
+            rotulo_html = f"""
+                <div style="
+                    position:absolute;
+                    left:27px;
+                    top:0px;
+                    font-family:sans-serif;
+                    font-size:11px;
+                    font-weight:600;
+                    color:#1f2937;
+                    background-color:rgba(255,255,255,0.95);
+                    padding:5px 9px;
+                    border-radius:6px;
+                    border:1px solid #cbd5e1;
+                    box-shadow:0 2px 4px rgba(0,0,0,0.1);
+                    width:max-content;
+                    white-space:nowrap;
+                    z-index:999;
+                ">
+                    📍 {texto_rotulo}
+                    {obs_rotulo_html}
+                </div>
+            """
+
+        else:
+
+            rotulo_html = ""
+
+
+        # ====================================================
+        # MARCADOR INDIVIDUAL
+        # ====================================================
+        marker_html = f"""
+        <div style="
+            position:relative;
+            width:300px;
+            height:65px;
+        ">
+
+            <div style="
+                position:absolute;
+                left:0px;
+                top:0px;
+                width:33px;
+                height:42px;
+                display:flex;
+                align-items:flex-start;
+                justify-content:center;
+            ">
+
+                <svg
+                    width="33"
+                    height="42"
+                    viewBox="0 0 24 30"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+
+                    <path
+                        d="M12 29C12 29 22 19.5 22 11.5C22 5.7 17.5 1 12 1C6.5 1 2 5.7 2 11.5C2 19.5 12 29 12 29Z"
+                        fill="{cor}"
+                        stroke="#FFFFFF"
+                        stroke-width="1.5"
+                    />
+
+                    <circle
+                        cx="12"
+                        cy="11"
+                        r="3.4"
+                        fill="#FFFFFF"
+                    />
+
+                </svg>
+
+            </div>
+
+            {rotulo_html}
+
+        </div>
+        """
+
+        marker = folium.map.Marker(
+            location=[
+                row["Latitude"],
+                row["Longitude"]
+            ],
+            icon=folium.DivIcon(
+                html=marker_html,
+                icon_size=(300, 65),
+                icon_anchor=(16.5, 42),
+                class_name="pressao-location-marker"
+            ),
+            popup=folium.Popup(
+                popup,
+                max_width=250
+            ),
+            tooltip=tooltip_str,
+
+            # Valor utilizado pelo JavaScript
+            # para calcular a média do agrupamento.
+            pressao_mca=float(pressao)
+        )
+
+        marker.add_to(cluster)
 
 
 # ============================================================
@@ -2488,6 +2655,10 @@ m.get_root().html.add_child(
     Element(legend_html)
 )
 
+
+# ============================================================
+# EXIBIÇÃO DO MAPA
+# ============================================================
 map_data = st_folium(
     m,
     width="100%",
@@ -2522,9 +2693,6 @@ if (
         )
 
         modal_novo_ponto()
-
-
-st.divider()
 
 # ============================================================
 # TABELA
