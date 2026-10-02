@@ -683,304 +683,155 @@ def montar_observacao(descricao):
 # CRUZAMENTO EVENTOS x BACKLOG
 # ============================================================
 
-def cruzar_eventos_com_backlog(
-    df_backlog: pd.DataFrame,
-    eventos: pd.DataFrame,
-    modo: str,
-):
+def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
+    colunas_obrigatorias = [
+        "CIDADE",
+        "BAIRRO",
+        "INÍCIO DO SLA",
+        "COD. PROTOCOLO ORIGEM",
+        "MATRICULA",
+    ]
 
-    avisos = []
+    faltantes = [
+        coluna
+        for coluna in colunas_obrigatorias
+        if coluna not in df_backlog.columns
+    ]
 
-    if eventos is None or eventos.empty:
-        return (
-            pd.DataFrame(columns=COLUNAS_LOTE),
-            0,
-            avisos,
-            0,
-        )
-
-    if df_backlog is None or df_backlog.empty:
-        return (
-            pd.DataFrame(columns=COLUNAS_LOTE),
-            0,
-            avisos,
-            0,
+    if faltantes:
+        raise ValueError(
+            "Colunas obrigatórias ausentes no backlog: "
+            + ", ".join(faltantes)
         )
 
     df = df_backlog.copy()
 
-    coluna_cidade = encontrar_coluna(
-        df,
-        "CIDADE",
-        "Cidade",
+    df["cidade_normalizada"] = (
+        df["CIDADE"]
+        .fillna("")
+        .astype(str)
+        .map(normalizar_texto)
     )
 
-    coluna_bairro = encontrar_coluna(
-        df,
-        "BAIRRO",
-        "Bairro",
+    df["bairro_normalizado"] = (
+        df["BAIRRO"]
+        .fillna("")
+        .astype(str)
+        .map(normalizar_texto)
     )
 
-    coluna_inicio_sla = encontrar_coluna(
-        df,
-        "INÍCIO DO SLA",
-        "INICIO DO SLA",
-        "Início do SLA",
-        "Inicio do SLA",
+    df["inicio_sla"] = pd.to_datetime(
+        df["INÍCIO DO SLA"],
+        errors="coerce",
+        dayfirst=True,
     )
 
-    coluna_protocolo = encontrar_coluna(
-        df,
-        "COD. PROTOCOLO ORIGEM",
-        "COD PROTOCOLO ORIGEM",
-        "Código do Protocolo Origem",
-        "Codigo do Protocolo Origem",
-    )
-
-    coluna_matricula = encontrar_coluna(
-        df,
-        "MATRICULA",
-        "MATRÍCULA",
-        "Matricula",
-    )
-
-    faltantes = []
-
-    if coluna_cidade is None:
-        faltantes.append("CIDADE")
-
-    if coluna_bairro is None:
-        faltantes.append("BAIRRO")
-
-    if coluna_inicio_sla is None:
-        faltantes.append("INÍCIO DO SLA")
-
-    if coluna_protocolo is None:
-        faltantes.append("COD. PROTOCOLO ORIGEM")
-
-    if coluna_matricula is None:
-        faltantes.append("MATRICULA")
-
-    if faltantes:
-        avisos.append(
-            "Colunas obrigatórias ausentes no backlog: "
-            + ", ".join(faltantes)
-            + "."
+    df["chave_os"] = list(
+        zip(
+            df["MATRICULA"].map(normalizar_matricula),
+            df["COD. PROTOCOLO ORIGEM"].fillna("").astype(str),
         )
-
-        return (
-            pd.DataFrame(columns=COLUNAS_LOTE),
-            0,
-            avisos,
-            0,
-        )
-
-    # --------------------------------------------------------
-    # PREPARAÇÃO DO BACKLOG
-    # --------------------------------------------------------
-
-    df["_cidade_evento"] = df[coluna_cidade].apply(
-        normalizar_texto
     )
 
-    df["_bairro_evento"] = df[coluna_bairro].apply(
-        normalizar_texto
-    )
+    df = df[
+        (df["cidade_normalizada"] != "")
+        & df["inicio_sla"].notna()
+    ].copy()
 
-    df["_inicio_sla_evento"] = df[
-        coluna_inicio_sla
-    ].apply(
-        converter_datetime_evento
-    )
+    resultado = []
+    avisos = []
 
-    df["_matricula_evento"] = df[
-        coluna_matricula
-    ].apply(
-        normalizar_matricula
-    )
+    for _, evento in df_eventos.iterrows():
+        cidade = normalizar_texto(evento.get("cidade", ""))
 
-    df["_protocolo_numero"] = df[
-        coluna_protocolo
-    ].apply(
-        lambda valor: parse_protocolo(valor)[0]
-    )
-
-    df["_protocolo_ano"] = df[
-        coluna_protocolo
-    ].apply(
-        lambda valor: parse_protocolo(valor)[1]
-    )
-
-    # --------------------------------------------------------
-    # ESTATÍSTICAS
-    # --------------------------------------------------------
-
-    inicio_sla_invalido = int(
-        df["_inicio_sla_evento"].isna().sum()
-    )
-
-    protocolos_invalidos = int(
-        (
-            df["_protocolo_numero"].isna()
-            | df["_protocolo_ano"].isna()
-        ).sum()
-    )
-
-    resultados = []
-
-    # --------------------------------------------------------
-    # EVENTO → ÁREA → O.S.
-    # --------------------------------------------------------
-
-    for _, evento in eventos.iterrows():
-
-        cidade = normalizar_texto(
-            evento.get("cidade", "")
-        )
-
-        if not cidade:
-            continue
+        areas = str(evento.get("areas", "") or "").strip()
 
         inicio_evento = evento.get("inicio")
         fim_previsto = evento.get("fim_previsto")
         fim_efetivo = evento.get("fim_efetivo")
+        descricao = str(evento.get("descricao", "") or "").strip()
 
-        if pd.isna(inicio_evento) or pd.isna(fim_efetivo):
+        if (
+            not cidade
+            or pd.isna(inicio_evento)
+            or pd.isna(fim_previsto)
+            or pd.isna(fim_efetivo)
+        ):
             continue
 
-        areas_original = str(
-            evento.get("areas", "")
-        ).strip()
-
-        if not areas_original:
-            continue
-
-        descricao = evento.get(
-            "descricao",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # SEPARAÇÃO DAS ÁREAS
-        # ----------------------------------------------------
-
-        if eh_todo_municipio(areas_original):
-
-            areas_evento = [
-                "TODA A CIDADE"
-            ]
-
+        # Evento que abrange todo o município
+        if bool(evento.get("todo_municipio", False)):
+            areas_evento = ["TODA A CIDADE"]
         else:
-
             partes = re.split(
                 r"[;,|\n]+|\s+E\s+",
-                areas_original,
-                flags=re.IGNORECASE,
+                areas,
             )
 
-            areas_evento = []
+            areas_evento = [
+                normalizar_texto(parte)
+                for parte in partes
+                if normalizar_texto(parte)
+            ]
 
-            for parte in partes:
+        for area_evento in areas_evento:
 
-                area = normalizar_texto(parte)
+            candidatos = df[
+                df["cidade_normalizada"] == cidade
+            ].copy()
 
-                if area and area not in areas_evento:
-                    areas_evento.append(area)
-
-        # ----------------------------------------------------
-        # CADA ÁREA DO EVENTO
-        # ----------------------------------------------------
-
-        for area in areas_evento:
+            candidatos = candidatos[
+                (candidatos["inicio_sla"] >= inicio_evento)
+                & (candidatos["inicio_sla"] <= fim_efetivo)
+            ]
 
             chaves_os_evento = set()
 
-            for _, os in df.iterrows():
+            for _, os_row in candidatos.iterrows():
 
-                if os["_cidade_evento"] != cidade:
-                    continue
+                if area_evento != "TODA A CIDADE":
+                    if not areas_evento_correspondem(
+                        area_evento,
+                        os_row["bairro_normalizado"],
+                    ):
+                        continue
 
-                inicio_sla = os["_inicio_sla_evento"]
-
-                if pd.isna(inicio_sla):
-                    continue
-
-                numero = os["_protocolo_numero"]
-                ano = os["_protocolo_ano"]
-                matricula = os["_matricula_evento"]
-
-                if (
-                    numero is None
-                    or pd.isna(numero)
-                    or ano is None
-                    or pd.isna(ano)
-                    or not matricula
-                ):
-                    continue
-
-                chave_os = (
-                    matricula,
-                    int(numero),
-                    int(ano),
-                )
+                chave_os = os_row["chave_os"]
 
                 if chave_os in chaves_os_evento:
                     continue
 
-                # ------------------------------------------------
-                # PERÍODO DO EVENTO
-                # ------------------------------------------------
-
-                if not (
-                    inicio_evento
-                    <= inicio_sla
-                    <= fim_efetivo
-                ):
-                    continue
-
-                # ------------------------------------------------
-                # ÁREA
-                # ------------------------------------------------
-
-                if area == "TODA A CIDADE":
-
-                    corresponde_area = True
-
-                else:
-
-                    corresponde_area = (
-                        areas_evento_correspondem(
-                            area,
-                            os["_bairro_evento"],
-                        )
-                    )
-
-                if not corresponde_area:
-                    continue
-
                 chaves_os_evento.add(chave_os)
 
-            # ----------------------------------------------------
-            # RESULTADO DA ÁREA
-            # ----------------------------------------------------
+            quantidade_os = len(chaves_os_evento)
 
-        quantidade_os = len(chaves_os_evento)
+            # Só gera a linha quando existir pelo menos 1 O.S.
+            if quantidade_os > 0:
+                resultado.append(
+                    {
+                        "Quant. de O.S": quantidade_os,
+                        "Cidade": cidade,
+                        "Bairro": area_evento,
+                        "Ano": inicio_evento.year,
+                        "Mês": inicio_evento.month,
+                        "Dia": inicio_evento.day,
+                        "Hora Inicial": inicio_evento.strftime("%H:%M"),
+                        "Hora Final": fim_previsto.strftime("%H:%M"),
+                        "Observação": montar_observacao(descricao),
+                    }
+                )
 
-if quantidade_os > 0:
-    resultado.append(
-        {
-            "Quant. de O.S": quantidade_os,
-            "Cidade": cidade,
-            "Bairro": area_saida,
-            "Ano": inicio_evento.year,
-            "Mês": inicio_evento.month,
-            "Dia": inicio_evento.day,
-            "Hora Inicial": inicio_evento.strftime("%H:%M"),
-            "Hora Final": fim_previsto.strftime("%H:%M"),
-            "Observação": montar_observacao(descricao),
-        }
+    df_resultado = pd.DataFrame(
+        resultado,
+        columns=COLUNAS_LOTE,
     )
 
+    return (
+        df_resultado,
+        len(df),
+        len(df_resultado),
+        avisos,
+    )
     # --------------------------------------------------------
     # AVISOS
     # --------------------------------------------------------
