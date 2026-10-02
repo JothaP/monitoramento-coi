@@ -954,12 +954,6 @@ def cruzar_eventos_com_backlog(
     else 0
 )
 
-total_os = (
-    int(resultado["Quant. de O.S"].sum())
-    if not resultado.empty
-    else 0
-)
-
 return (
     resultado,
     len(df),
