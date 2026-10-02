@@ -2689,10 +2689,34 @@ if not df_filtrado.empty:
         # Os valores serão inseridos diretamente no objeto
         # JavaScript do marcador.
         #
-        marker.options["pressao_mca"] = float(pressao)
-marker.options["is_pressure_measurement"] = True
+        marker_id = (
+            "pressao_marker_"
+            + uuid.uuid4().hex
+        )
 
-marker.add_to(cluster)
+        marker.add_to(
+            cluster
+        )
+
+        marker_script = f"""
+        <script>
+        document.addEventListener("DOMContentLoaded", function() {{
+
+            var marker = {marker.get_name()};
+
+            marker._pressao_mca = {pressao};
+            marker._medicao_pressao = true;
+            marker._id_medicao = "{str(row['ID'])}";
+
+        }});
+        </script>
+        """
+
+        m.get_root().html.add_child(
+            Element(
+                marker_script
+            )
+        )
 
 
 # ============================================================
