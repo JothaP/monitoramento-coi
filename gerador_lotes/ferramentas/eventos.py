@@ -649,6 +649,42 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
 
 # ============================================================
+# FORMATAÇÃO DO PERÍODO DO EVENTO
+# ============================================================
+
+def formatar_periodo_evento(inicio_evento, fim_previsto):
+
+    if inicio_evento.date() == fim_previsto.date():
+        return str(inicio_evento.day)
+
+    if (
+        inicio_evento.year == fim_previsto.year
+        and inicio_evento.month == fim_previsto.month
+    ):
+        return (
+            f"{inicio_evento.day} a "
+            f"{fim_previsto.day}"
+        )
+
+    if inicio_evento.year == fim_previsto.year:
+        return (
+            f"{inicio_evento.day:02d}/"
+            f"{inicio_evento.month:02d} a "
+            f"{fim_previsto.day:02d}/"
+            f"{fim_previsto.month:02d}"
+        )
+
+    return (
+        f"{inicio_evento.day:02d}/"
+        f"{inicio_evento.month:02d}/"
+        f"{inicio_evento.year} a "
+        f"{fim_previsto.day:02d}/"
+        f"{fim_previsto.month:02d}/"
+        f"{fim_previsto.year}"
+    )
+
+
+# ============================================================
 # OBSERVAÇÃO
 # ============================================================
 
@@ -666,17 +702,7 @@ def montar_observacao(descricao):
         descricao,
     )
 
-    prefixo = (
-        "Abertura indevida - OS aberta durante evento "
-        "de falta de água"
-    )
-
-    if descricao:
-        texto = f"{prefixo} ({descricao})"
-    else:
-        texto = prefixo
-
-    return texto[:280]
+    return descricao[:280]
 
 
 # ============================================================
@@ -927,7 +953,10 @@ def cruzar_eventos_com_backlog(
                         "Bairro": area_evento,
                         "Ano": inicio_evento.year,
                         "Mês": inicio_evento.month,
-                        "Dia": inicio_evento.day,
+                        "Dia": formatar_periodo_evento(
+                            inicio_evento,
+                            fim_previsto,
+                        ),
                         "Hora Inicial": (
                             inicio_evento.strftime("%H:%M")
                         ),
