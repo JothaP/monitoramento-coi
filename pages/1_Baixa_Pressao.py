@@ -17,6 +17,7 @@ import time
 import plotly.express as px
 from branca.element import Element
 
+
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
 # ============================================================
@@ -43,18 +44,23 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # ============================================================
 # TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
 from auth import verificar_autenticacao
 
 if not verificar_autenticacao():
-    st.warning("Sessão não iniciada ou expirada.")
+
+    st.warning(
+        "Sessão não iniciada ou expirada."
+    )
 
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
 
     st.stop()
+
 
 # ============================================================
 # CONSTANTES
@@ -62,7 +68,9 @@ if not verificar_autenticacao():
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 
-SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+SPREADSHEET_ID = (
+    "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+)
 
 COLUNAS_PADRAO = [
     "ID",
@@ -76,6 +84,7 @@ COLUNAS_PADRAO = [
     "Matricula"
 ]
 
+
 # ============================================================
 # CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
 # ============================================================
@@ -86,25 +95,42 @@ COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
-    """Retorna a classificação e a cor correspondente à pressão."""
 
     try:
+
         valor = float(pressao)
 
     except (TypeError, ValueError):
+
         valor = 0.0
 
     if valor == 0:
-        return "Sem Pressão", COR_SEM_PRESSAO
+
+        return (
+            "Sem Pressão",
+            COR_SEM_PRESSAO
+        )
 
     elif valor <= 5:
-        return "Baixa Pressão", COR_BAIXA_PRESSAO
+
+        return (
+            "Baixa Pressão",
+            COR_BAIXA_PRESSAO
+        )
 
     elif valor <= 15:
-        return "Em Atenção", COR_EM_ATENCAO
+
+        return (
+            "Em Atenção",
+            COR_EM_ATENCAO
+        )
 
     else:
-        return "Alta Pressão", COR_ALTA_PRESSAO
+
+        return (
+            "Alta Pressão",
+            COR_ALTA_PRESSAO
+        )
 
 
 # ============================================================
@@ -284,12 +310,14 @@ def parse_float(
         isinstance(valor, float)
         and pd.isna(valor)
     ):
+
         return default
 
     if isinstance(
         valor,
         (int, float)
     ):
+
         return float(valor)
 
     try:
@@ -304,6 +332,7 @@ def parse_float(
             "nat",
             ""
         ):
+
             return default
 
         texto = (
@@ -338,11 +367,13 @@ def normalizar_coordenada(
     if tipo == "lat" and not (
         -90.0 <= num <= 90.0
     ):
+
         return None
 
     if tipo == "lon" and not (
         -180.0 <= num <= 180.0
     ):
+
         return None
 
     if num == 0.0:
@@ -362,6 +393,7 @@ def normalizar_data(
         isinstance(valor, float)
         and pd.isna(valor)
     ):
+
         return ""
 
     if isinstance(
@@ -383,6 +415,7 @@ def normalizar_data(
         "nat",
         ""
     ):
+
         return ""
 
     formatos = [
@@ -448,6 +481,7 @@ def carregar_dados() -> pd.DataFrame:
             str(c).strip()
             for c in linha
         ):
+
             continue
 
         reg = {}
@@ -479,6 +513,7 @@ def carregar_dados() -> pd.DataFrame:
     for col in COLUNAS_PADRAO:
 
         if col not in df.columns:
+
             df[col] = ""
 
     def limpar_id(v):
@@ -2349,22 +2384,29 @@ function(cluster) {
     var soma = 0;
     var quantidade = 0;
 
-    markers.forEach(function(marker) {
+    for (var i = 0; i < markers.length; i++) {
 
-        var pressao = Number(
-            marker.options.pressao_mca
-        );
+        var marker = markers[i];
 
         if (
-            Number.isFinite(pressao)
+            marker &&
+            marker._medicao_pressao === true
         ) {
 
-            soma += pressao;
-            quantidade += 1;
+            var pressao = Number(
+                marker._pressao_mca
+            );
+
+            if (Number.isFinite(pressao)) {
+
+                soma += pressao;
+                quantidade += 1;
+
+            }
 
         }
 
-    });
+    }
 
     var media = 0;
 
@@ -2394,8 +2436,6 @@ function(cluster) {
 
     }
 
-    var mediaFormatada = media.toFixed(1);
-
     return L.divIcon({
 
         html:
@@ -2419,7 +2459,7 @@ function(cluster) {
                     'font-size:16px;' +
                     'font-weight:700;' +
                 '">' +
-                    mediaFormatada + ' MCA' +
+                    media.toFixed(1) + ' MCA' +
                 '</div>' +
 
                 '<div style="' +
@@ -2451,7 +2491,7 @@ cluster = MarkerCluster(
     icon_create_function=cluster_icon_function,
 
     options={
-        "maxClusterRadius": 55,
+        "maxClusterRadius": 70,
         "disableClusteringAtZoom": 16,
         "spiderfyOnMaxZoom": True,
         "showCoverageOnHover": False,
@@ -2640,16 +2680,42 @@ if not df_filtrado.empty:
         )
 
         # ====================================================
-        # PRESSÃO DO MARCADOR
+        # DADOS INTERNOS DO MARCADOR
         # ====================================================
-        # A pressão é armazenada diretamente nas opções
+        #
+        # Não dependemos de marker.options para o cálculo
+        # do cluster.
+        #
+        # Os valores serão inseridos diretamente no objeto
         # JavaScript do marcador.
-        marker.options[
-            "pressao_mca"
-        ] = pressao
+        #
+        marker_id = (
+            "pressao_marker_"
+            + uuid.uuid4().hex
+        )
 
         marker.add_to(
             cluster
+        )
+
+        marker_script = f"""
+        <script>
+        document.addEventListener("DOMContentLoaded", function() {{
+
+            var marker = {marker.get_name()};
+
+            marker._pressao_mca = {pressao};
+            marker._medicao_pressao = true;
+            marker._id_medicao = "{str(row['ID'])}";
+
+        }});
+        </script>
+        """
+
+        m.get_root().html.add_child(
+            Element(
+                marker_script
+            )
         )
 
 
