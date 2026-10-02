@@ -964,7 +964,7 @@ def cruzar_eventos_com_backlog(
             # RESULTADO DA ÁREA
             # ----------------------------------------------------
 
-quantidade_os = len(chaves_os_evento)
+        quantidade_os = len(chaves_os_evento)
 
 if quantidade_os > 0:
     resultado.append(
