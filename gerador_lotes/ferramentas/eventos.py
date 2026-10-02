@@ -688,19 +688,60 @@ def cruzar_eventos_com_backlog(
     df_backlog,
     modo=None,
 ):
-    colunas_obrigatorias = [
-        "CIDADE",
-        "BAIRRO",
-        "INÍCIO DO SLA",
-        "COD. PROTOCOLO ORIGEM",
-        "MATRICULA",
-    ]
+    # ========================================================
+    # LOCALIZAÇÃO DAS COLUNAS DO BACKLOG
+    # ========================================================
 
-    faltantes = [
-        coluna
-        for coluna in colunas_obrigatorias
-        if coluna not in df_backlog.columns
-    ]
+    coluna_cidade = encontrar_coluna(
+        df_backlog,
+        "CIDADE",
+        "Cidade",
+    )
+
+    coluna_bairro = encontrar_coluna(
+        df_backlog,
+        "BAIRRO",
+        "Bairro",
+    )
+
+    coluna_inicio_sla = encontrar_coluna(
+        df_backlog,
+        "INÍCIO DO SLA",
+        "Inicio do SLA",
+        "INICIO DO SLA",
+    )
+
+    coluna_protocolo = encontrar_coluna(
+        df_backlog,
+        "COD. PROTOCOLO ORIGEM",
+        "Cod. Protocolo Origem",
+        "COD PROTOCOLO ORIGEM",
+        "Código Protocolo Origem",
+        "Codigo Protocolo Origem",
+    )
+
+    coluna_matricula = encontrar_coluna(
+        df_backlog,
+        "MATRICULA",
+        "Matrícula",
+    )
+
+    faltantes = []
+
+    if coluna_cidade is None:
+        faltantes.append("CIDADE")
+
+    if coluna_bairro is None:
+        faltantes.append("BAIRRO")
+
+    if coluna_inicio_sla is None:
+        faltantes.append("INÍCIO DO SLA")
+
+    if coluna_protocolo is None:
+        faltantes.append("COD. PROTOCOLO ORIGEM")
+
+    if coluna_matricula is None:
+        faltantes.append("MATRICULA")
 
     if faltantes:
         raise ValueError(
@@ -710,42 +751,49 @@ def cruzar_eventos_com_backlog(
 
     df = df_backlog.copy()
 
-    # --------------------------------------------------------
+    # ========================================================
     # NORMALIZAÇÃO DO BACKLOG
-    # --------------------------------------------------------
+    # ========================================================
 
     df["cidade_normalizada"] = (
-        df["CIDADE"]
+        df[coluna_cidade]
         .fillna("")
         .astype(str)
         .map(normalizar_texto)
     )
 
     df["bairro_normalizado"] = (
-        df["BAIRRO"]
+        df[coluna_bairro]
         .fillna("")
         .astype(str)
         .map(normalizar_texto)
     )
 
     df["inicio_sla"] = pd.to_datetime(
-        df["INÍCIO DO SLA"],
+        df[coluna_inicio_sla],
         errors="coerce",
         dayfirst=True,
     )
 
-    # Chave usada somente para evitar contar a mesma O.S.
-    # mais de uma vez dentro do mesmo evento/área.
+    # ========================================================
+    # CHAVE DA O.S.
+    # ========================================================
+
     df["chave_os"] = list(
         zip(
-            df["MATRICULA"].map(normalizar_matricula),
-            df["COD. PROTOCOLO ORIGEM"]
+            df[coluna_matricula].map(
+                normalizar_matricula
+            ),
+            df[coluna_protocolo]
             .fillna("")
             .astype(str),
         )
     )
 
-    # Mantém apenas registros utilizáveis
+    # ========================================================
+    # FILTRO DE REGISTROS UTILIZÁVEIS
+    # ========================================================
+
     df = df[
         (df["cidade_normalizada"] != "")
         & df["inicio_sla"].notna()
@@ -754,9 +802,9 @@ def cruzar_eventos_com_backlog(
     resultado = []
     avisos = []
 
-    # --------------------------------------------------------
-    # EVENTOS
-    # --------------------------------------------------------
+    # ========================================================
+    # CRUZAMENTO EVENTO x ÁREA x O.S.
+    # ========================================================
 
     for _, evento in df_eventos.iterrows():
 
@@ -809,7 +857,7 @@ def cruzar_eventos_com_backlog(
             ]
 
         # ----------------------------------------------------
-        # CADA ÁREA DO EVENTO
+        # CADA ÁREA
         # ----------------------------------------------------
 
         for area_evento in areas_evento:
@@ -823,15 +871,7 @@ def cruzar_eventos_com_backlog(
             ].copy()
 
             # ------------------------------------------------
-            # FILTRO POR INTERVALO DE TEMPO
-            #
-            # Início do SLA da O.S. precisa estar:
-            #
-            # Início do evento
-            #        <=
-            # Início do SLA
-            #        <=
-            # Prev. Término + 3h
+            # FILTRO POR PERÍODO
             # ------------------------------------------------
 
             candidatos = candidatos[
@@ -845,7 +885,7 @@ def cruzar_eventos_com_backlog(
             chaves_os_evento = set()
 
             # ------------------------------------------------
-            # COMPARAÇÃO DE BAIRROS
+            # FILTRO POR BAIRRO
             # ------------------------------------------------
 
             for _, os_row in candidatos.iterrows():
@@ -866,7 +906,7 @@ def cruzar_eventos_com_backlog(
                 chaves_os_evento.add(chave_os)
 
             # ------------------------------------------------
-            # QUANTIDADE DE O.S.
+            # QUANTIDADE
             # ------------------------------------------------
 
             quantidade_os = len(
@@ -874,7 +914,7 @@ def cruzar_eventos_com_backlog(
             )
 
             # ------------------------------------------------
-            # SOMENTE GERA LINHA COM PELO MENOS 1 O.S.
+            # SÓ GERA SE TIVER O.S.
             # ------------------------------------------------
 
             if quantidade_os > 0:
@@ -899,9 +939,9 @@ def cruzar_eventos_com_backlog(
                     }
                 )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RESULTADO FINAL
-    # --------------------------------------------------------
+    # ========================================================
 
     resultado = pd.DataFrame(
         resultado,
@@ -914,7 +954,6 @@ def cruzar_eventos_com_backlog(
         avisos,
         len(resultado),
     )
-
 
 # ============================================================
 # LIMPEZA EXCLUSIVA DA ANÁLISE DE EVENTOS
