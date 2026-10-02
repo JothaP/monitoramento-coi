@@ -977,6 +977,34 @@ def limpar_estado_eventos():
 
 def render_eventos():
 
+    # --------------------------------------------------------
+    # CONTROLE DE ACESSO DURANTE MANUTENÇÃO
+    # --------------------------------------------------------
+    perfil = str(st.session_state.get("perfil", "")).strip().lower()
+
+    if perfil not in {"admin", "administrador", "administrators", "administrator"}:
+        aplicar_modo_visual()
+
+        st.title("📋 Análise de Eventos")
+        st.warning("🛠️ Ferramenta em manutenção")
+        st.info(
+            "Esta ferramenta está temporariamente indisponível "
+            "para usuários durante o período de manutenção."
+        )
+
+        st.divider()
+
+        if st.button(
+            "⬅️ Voltar ao Hub",
+            use_container_width=True,
+            key="btn_voltar_hub_eventos_manutencao",
+        ):
+            st.session_state["ferramenta_atual"] = None
+            limpar_resultado()
+            st.rerun()
+
+        st.stop()
+
     aplicar_modo_visual()
 
     # --------------------------------------------------------
