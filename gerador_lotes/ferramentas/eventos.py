@@ -964,25 +964,22 @@ def cruzar_eventos_com_backlog(
             # RESULTADO DA ÁREA
             # ----------------------------------------------------
 
-            resultados.append(
-                {
-                    "Quant. de O.S": len(chaves_os_evento),
-                    "Cidade": cidade,
-                    "Bairro": area,
-                    "Ano": int(inicio_evento.year),
-                    "Mês": int(inicio_evento.month),
-                    "Dia": int(inicio_evento.day),
-                    "Hora Inicial": inicio_evento.strftime(
-                        "%H:%M"
-                    ),
-                    "Hora Final": fim_previsto.strftime(
-                        "%H:%M"
-                    ),
-                    "Observação": montar_observacao(
-                        descricao
-                    ),
-                }
-            )
+quantidade_os = len(chaves_os_evento)
+
+if quantidade_os > 0:
+    resultado.append(
+        {
+            "Quant. de O.S": quantidade_os,
+            "Cidade": cidade,
+            "Bairro": area_saida,
+            "Ano": inicio_evento.year,
+            "Mês": inicio_evento.month,
+            "Dia": inicio_evento.day,
+            "Hora Inicial": inicio_evento.strftime("%H:%M"),
+            "Hora Final": fim_previsto.strftime("%H:%M"),
+            "Observação": montar_observacao(descricao),
+        }
+    )
 
     # --------------------------------------------------------
     # AVISOS
