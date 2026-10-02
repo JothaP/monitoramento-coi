@@ -683,7 +683,11 @@ def montar_observacao(descricao):
 # CRUZAMENTO EVENTOS x BACKLOG
 # ============================================================
 
-def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
+def cruzar_eventos_com_backlog(
+    df_eventos,
+    df_backlog,
+    modo=None,
+):
     colunas_obrigatorias = [
         "CIDADE",
         "BAIRRO",
@@ -706,6 +710,10 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
 
     df = df_backlog.copy()
 
+    # --------------------------------------------------------
+    # NORMALIZAÇÃO DO BACKLOG
+    # --------------------------------------------------------
+
     df["cidade_normalizada"] = (
         df["CIDADE"]
         .fillna("")
@@ -726,13 +734,18 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
         dayfirst=True,
     )
 
+    # Chave usada somente para evitar contar a mesma O.S.
+    # mais de uma vez dentro do mesmo evento/área.
     df["chave_os"] = list(
         zip(
             df["MATRICULA"].map(normalizar_matricula),
-            df["COD. PROTOCOLO ORIGEM"].fillna("").astype(str),
+            df["COD. PROTOCOLO ORIGEM"]
+            .fillna("")
+            .astype(str),
         )
     )
 
+    # Mantém apenas registros utilizáveis
     df = df[
         (df["cidade_normalizada"] != "")
         & df["inicio_sla"].notna()
@@ -741,15 +754,27 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
     resultado = []
     avisos = []
 
-    for _, evento in df_eventos.iterrows():
-        cidade = normalizar_texto(evento.get("cidade", ""))
+    # --------------------------------------------------------
+    # EVENTOS
+    # --------------------------------------------------------
 
-        areas = str(evento.get("areas", "") or "").strip()
+    for _, evento in df_eventos.iterrows():
+
+        cidade = normalizar_texto(
+            evento.get("cidade", "")
+        )
+
+        areas = str(
+            evento.get("areas", "") or ""
+        ).strip()
 
         inicio_evento = evento.get("inicio")
         fim_previsto = evento.get("fim_previsto")
         fim_efetivo = evento.get("fim_efetivo")
-        descricao = str(evento.get("descricao", "") or "").strip()
+
+        descricao = str(
+            evento.get("descricao", "") or ""
+        ).strip()
 
         if (
             not cidade
@@ -759,13 +784,22 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
         ):
             continue
 
-        # Evento que abrange todo o município
+        # ----------------------------------------------------
+        # ÁREAS IMPACTADAS
+        # ----------------------------------------------------
+
         if bool(evento.get("todo_municipio", False)):
-            areas_evento = ["TODA A CIDADE"]
+
+            areas_evento = [
+                "TODA A CIDADE"
+            ]
+
         else:
+
             partes = re.split(
                 r"[;,|\n]+|\s+E\s+",
                 areas,
+                flags=re.IGNORECASE,
             )
 
             areas_evento = [
@@ -774,22 +808,50 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
                 if normalizar_texto(parte)
             ]
 
+        # ----------------------------------------------------
+        # CADA ÁREA DO EVENTO
+        # ----------------------------------------------------
+
         for area_evento in areas_evento:
+
+            # ------------------------------------------------
+            # FILTRO POR CIDADE
+            # ------------------------------------------------
 
             candidatos = df[
                 df["cidade_normalizada"] == cidade
             ].copy()
 
+            # ------------------------------------------------
+            # FILTRO POR INTERVALO DE TEMPO
+            #
+            # Início do SLA da O.S. precisa estar:
+            #
+            # Início do evento
+            #        <=
+            # Início do SLA
+            #        <=
+            # Prev. Término + 3h
+            # ------------------------------------------------
+
             candidatos = candidatos[
                 (candidatos["inicio_sla"] >= inicio_evento)
-                & (candidatos["inicio_sla"] <= fim_efetivo)
+                & (
+                    candidatos["inicio_sla"]
+                    <= fim_efetivo
+                )
             ]
 
             chaves_os_evento = set()
 
+            # ------------------------------------------------
+            # COMPARAÇÃO DE BAIRROS
+            # ------------------------------------------------
+
             for _, os_row in candidatos.iterrows():
 
                 if area_evento != "TODA A CIDADE":
+
                     if not areas_evento_correspondem(
                         area_evento,
                         os_row["bairro_normalizado"],
@@ -803,10 +865,20 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
 
                 chaves_os_evento.add(chave_os)
 
-            quantidade_os = len(chaves_os_evento)
+            # ------------------------------------------------
+            # QUANTIDADE DE O.S.
+            # ------------------------------------------------
 
-            # Só gera a linha quando existir pelo menos 1 O.S.
+            quantidade_os = len(
+                chaves_os_evento
+            )
+
+            # ------------------------------------------------
+            # SOMENTE GERA LINHA COM PELO MENOS 1 O.S.
+            # ------------------------------------------------
+
             if quantidade_os > 0:
+
                 resultado.append(
                     {
                         "Quant. de O.S": quantidade_os,
@@ -815,45 +887,24 @@ def cruzar_eventos_com_backlog(df_eventos, df_backlog, modo=None):
                         "Ano": inicio_evento.year,
                         "Mês": inicio_evento.month,
                         "Dia": inicio_evento.day,
-                        "Hora Inicial": inicio_evento.strftime("%H:%M"),
-                        "Hora Final": fim_previsto.strftime("%H:%M"),
-                        "Observação": montar_observacao(descricao),
+                        "Hora Inicial": (
+                            inicio_evento.strftime("%H:%M")
+                        ),
+                        "Hora Final": (
+                            fim_previsto.strftime("%H:%M")
+                        ),
+                        "Observação": montar_observacao(
+                            descricao
+                        ),
                     }
                 )
-
-    df_resultado = pd.DataFrame(
-        resultado,
-        columns=COLUNAS_LOTE,
-    )
-
-    return (
-        df_resultado,
-        len(df),
-        len(df_resultado),
-        avisos,
-    )
-    # --------------------------------------------------------
-    # AVISOS
-    # --------------------------------------------------------
-
-    if protocolos_invalidos:
-        avisos.append(
-            f"{protocolos_invalidos} O.S. com protocolo inválido "
-            "foram ignoradas."
-        )
-
-    if inicio_sla_invalido:
-        avisos.append(
-            f"{inicio_sla_invalido} O.S. com INÍCIO DO SLA inválido "
-            "foram ignoradas."
-        )
 
     # --------------------------------------------------------
     # RESULTADO FINAL
     # --------------------------------------------------------
 
     resultado = pd.DataFrame(
-        resultados,
+        resultado,
         columns=COLUNAS_LOTE,
     )
 
@@ -1060,6 +1111,7 @@ def render_eventos():
             - A mesma O.S. é contabilizada uma única vez por área do evento.
             - A coluna **Data** não é utilizada.
             - O resultado é consolidado por evento e área impactada.
+            - Áreas sem nenhuma O.S. não são incluídas no resultado.
             """
         )
 
@@ -1094,8 +1146,8 @@ def render_eventos():
                 avisos_cruzamento,
                 total_resultado,
             ) = cruzar_eventos_com_backlog(
+                df_eventos=eventos_preparados,
                 df_backlog=df_backlog,
-                eventos=eventos_preparados,
                 modo=modo,
             )
 
