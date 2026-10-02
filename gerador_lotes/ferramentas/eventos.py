@@ -954,6 +954,12 @@ def cruzar_eventos_com_backlog(
     else 0
 )
 
+total_os = (
+    int(resultado["Quant. de O.S"].sum())
+    if not resultado.empty
+    else 0
+)
+
 return (
     resultado,
     len(df),
@@ -1279,7 +1285,7 @@ def render_eventos():
                 unsafe_allow_html=True,
             )
 
-        with col3:
+       with col3:
     st.markdown(
         f"""
         <div class="coi-metric">
