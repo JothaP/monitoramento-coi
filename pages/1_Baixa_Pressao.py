@@ -1625,7 +1625,7 @@ if not df_filtrado.empty:
     )
 
     k4.metric(
-        "Em Atenção (> 5 e ≤ 15 MCA)",
+        "Em Atenção (> 5 e ≤ 10 MCA)",
         em_atencao
     )
 
