@@ -58,6 +58,7 @@ if not verificar_autenticacao():
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+
 COLUNAS_PADRAO = [
     "ID",
     "Data",
@@ -66,16 +67,17 @@ COLUNAS_PADRAO = [
     "Latitude",
     "Longitude",
     "Pressao_MCA",
-    "Observacao"
+    "Observacao",
+    "Matricula"
 ]
 
 # ============================================================
 # CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
 # ============================================================
-COR_SEM_PRESSAO = "#FF5C60"       # RGB 255, 92, 96
-COR_BAIXA_PRESSAO = "#F8DC00"     # RGB 248, 220, 0
-COR_EM_ATENCAO = "#FF8FE1"        # RGB 255, 143, 225
-COR_ALTA_PRESSAO = "#A11FFF"      # RGB 161, 31, 255
+COR_SEM_PRESSAO = "#FF5C60"
+COR_BAIXA_PRESSAO = "#F8DC00"
+COR_EM_ATENCAO = "#FF8FE1"
+COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
@@ -93,6 +95,7 @@ def classificar_pressao(pressao):
         return "Em Atenção", COR_EM_ATENCAO
     else:
         return "Alta Pressão", COR_ALTA_PRESSAO
+
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -137,18 +140,36 @@ def conectar_google_sheets():
                 "Latitude",
                 "Longitude",
                 "Pressao_MCA",
-                "Observacao"
+                "Observacao",
+                "Matricula"
             ])
-        else:
-            cabecalho_atual = dados_iniciais[0]
 
-            if (
-                len(cabecalho_atual) >= 7
-                and "Observacao" not in [
-                    str(c).strip() for c in cabecalho_atual
-                ]
-            ):
-                ws.update("H1", [["Observacao"]])
+        else:
+            cabecalho_atual = [
+                str(c).strip()
+                for c in dados_iniciais[0]
+            ]
+
+            # Mantém compatibilidade com planilhas existentes.
+            # A nova coluna é adicionada ao final para não deslocar
+            # ou sobrescrever nenhum dado existente.
+            if "Observacao" not in cabecalho_atual:
+                ws.update(
+                    "H1",
+                    [["Observacao"]]
+                )
+
+                cabecalho_atual.append("Observacao")
+
+            if "Matricula" not in cabecalho_atual:
+                proxima_coluna = chr(
+                    ord("A") + len(cabecalho_atual)
+                )
+
+                ws.update(
+                    f"{proxima_coluna}1",
+                    [["Matricula"]]
+                )
 
     except Exception:
         pass
@@ -161,6 +182,7 @@ try:
 except Exception as e:
     st.error(f"❌ Erro ao conectar com o Google Sheets: {e}")
     st.stop()
+
 
 # ============================================================
 # FUNÇÕES DE DADOS E EXPORTAÇÃO
@@ -190,7 +212,9 @@ def normalizar_coluna(nome: str) -> str:
         "mca": "Pressao_MCA",
         "observacao": "Observacao",
         "observação": "Observacao",
-        "obs": "Observacao"
+        "obs": "Observacao",
+        "matricula": "Matricula",
+        "matrícula": "Matricula"
     }
 
     return mapeamento.get(nome, nome.title())
@@ -360,6 +384,16 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
+    df["Matricula"] = (
+        df["Matricula"]
+        .astype(str)
+        .str.strip()
+        .replace({
+            "nan": "",
+            "None": ""
+        })
+    )
+
     df["Latitude"] = df["Latitude"].apply(
         lambda x: normalizar_coordenada(x, "lat")
     )
@@ -394,6 +428,7 @@ def limpar_cache():
 
 
 def adicionar_ponto(
+    matricula: str,
     municipio: str,
     bairro: str,
     lat: float,
@@ -412,7 +447,8 @@ def adicionar_ponto(
         float(lat),
         float(lon),
         float(pressao),
-        str(observacao)
+        str(observacao),
+        str(matricula)
     ])
 
     time.sleep(0.3)
@@ -465,7 +501,8 @@ def adicionar_lote_seguro(linhas_dados: list):
             lat_val,
             lon_val,
             pres_val,
-            obs_val
+            obs_val,
+            matricula_val
         ) = linha
 
         lat_f = f"{float(lat_val):.6f}"
@@ -484,6 +521,7 @@ def adicionar_lote_seguro(linhas_dados: list):
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
+
         dados_formatados = [
             [
                 str(i),
@@ -493,7 +531,8 @@ def adicionar_lote_seguro(linhas_dados: list):
                 float(lat),
                 float(lon),
                 float(p),
-                str(o)
+                str(o),
+                str(matricula)
             ]
             for (
                 i,
@@ -503,7 +542,8 @@ def adicionar_lote_seguro(linhas_dados: list):
                 lat,
                 lon,
                 p,
-                o
+                o,
+                matricula
             ) in linhas_novas
         ]
 
@@ -522,6 +562,7 @@ def adicionar_lote_seguro(linhas_dados: list):
 
 def atualizar_ponto(
     id_registro: str,
+    matricula: str,
     municipio: str,
     bairro: str,
     lat: float,
@@ -539,8 +580,10 @@ def atualizar_ponto(
 
         linha = celula.row
 
+        # Mantém a estrutura atual da planilha e atualiza
+        # a matrícula na coluna I.
         worksheet.update(
-            f"A{linha}:H{linha}",
+            f"A{linha}:I{linha}",
             [[
                 str(id_registro),
                 str(data_str),
@@ -549,7 +592,8 @@ def atualizar_ponto(
                 float(lat),
                 float(lon),
                 float(pressao),
-                str(observacao)
+                str(observacao),
+                str(matricula)
             ]]
         )
 
@@ -601,12 +645,23 @@ def gerar_kml(df):
                     else ""
                 )
 
+                matricula_text = (
+                    f"Matrícula: {row.get('Matricula', '')}\n"
+                    if str(row.get("Matricula", "")).strip()
+                    else ""
+                )
+
                 kml.newpoint(
                     name=str(row.get("ID", "Ponto")),
                     description=(
-                        f"Município: {row.get('Municipio', '')}\n"
-                        f"Bairro: {row.get('Bairro', '')}\n"
-                        f"Pressão: {row.get('Pressao_MCA', '')} MCA"
+                        f"Matrícula: "
+                        f"{row.get('Matricula', '')}\n"
+                        f"Município: "
+                        f"{row.get('Municipio', '')}\n"
+                        f"Bairro: "
+                        f"{row.get('Bairro', '')}\n"
+                        f"Pressão: "
+                        f"{row.get('Pressao_MCA', '')} MCA"
                         f"{obs_text}"
                     ),
                     coords=[
@@ -649,6 +704,7 @@ if "nome_arquivo_pendente_bp" not in st.session_state:
 if "file_uploader_key_bp" not in st.session_state:
     st.session_state.file_uploader_key_bp = 0
 
+
 # ============================================================
 # DIALOGS
 # ============================================================
@@ -676,6 +732,11 @@ def modal_novo_ponto():
             "Data do Registro",
             value=st.session_state.data_final_selecionada,
             format="DD/MM/YYYY"
+        )
+
+        matricula = st.text_input(
+            "Matrícula *",
+            placeholder="Ex: 123456789"
         )
 
         municipio = st.text_input(
@@ -726,7 +787,12 @@ def modal_novo_ponto():
             lat_n = normalizar_coordenada(lat, "lat")
             lon_n = normalizar_coordenada(lon, "lon")
 
-            if not municipio.strip() or not bairro.strip():
+            if not matricula.strip():
+                st.error(
+                    "A Matrícula é obrigatória."
+                )
+
+            elif not municipio.strip() or not bairro.strip():
                 st.error(
                     "Município e Bairro são obrigatórios."
                 )
@@ -738,6 +804,7 @@ def modal_novo_ponto():
 
             else:
                 novo_id = adicionar_ponto(
+                    matricula.strip(),
                     municipio.strip(),
                     bairro.strip(),
                     lat_n,
@@ -785,6 +852,11 @@ def modal_editar_ponto(id_registro: str):
                 "Data do Registro",
                 value=data_parsed,
                 format="DD/MM/YYYY"
+            )
+
+            matricula_e = st.text_input(
+                "Matrícula *",
+                value=str(reg_edit["Matricula"])
             )
 
             municipio_e = st.text_input(
@@ -857,7 +929,12 @@ def modal_editar_ponto(id_registro: str):
                     "lon"
                 )
 
-                if not municipio_e.strip() or not bairro_e.strip():
+                if not matricula_e.strip():
+                    st.error(
+                        "A Matrícula é obrigatória."
+                    )
+
+                elif not municipio_e.strip() or not bairro_e.strip():
                     st.error(
                         "Município e Bairro são obrigatórios."
                     )
@@ -871,6 +948,7 @@ def modal_editar_ponto(id_registro: str):
 
                     if atualizar_ponto(
                         id_registro,
+                        matricula_e.strip(),
                         municipio_e.strip(),
                         bairro_e.strip(),
                         lat_n,
@@ -908,7 +986,8 @@ def modal_previa_upload():
             "Latitude",
             "Longitude",
             "Pressao_MCA",
-            "Observacao"
+            "Observacao",
+            "Matricula"
         ]
     )
 
@@ -916,6 +995,7 @@ def modal_previa_upload():
         df_preview[
             [
                 "Data",
+                "Matricula",
                 "Municipio",
                 "Bairro",
                 "Latitude",
@@ -1139,6 +1219,7 @@ with st.sidebar:
     df_modelo = pd.DataFrame(
         [{
             "Data": datetime.now().strftime("%d/%m/%Y"),
+            "Matricula": "123456789",
             "Municipio": "Teresina",
             "Bairro": "Centro",
             "Latitude": -5.0892,
@@ -1146,7 +1227,16 @@ with st.sidebar:
             "Pressao_MCA": 2.5,
             "Observacao": "Exemplo de observação"
         }],
-        columns=COLUNAS_PADRAO[1:]
+        columns=[
+            "Data",
+            "Matricula",
+            "Municipio",
+            "Bairro",
+            "Latitude",
+            "Longitude",
+            "Pressao_MCA",
+            "Observacao"
+        ]
     )
 
     output_modelo = io.BytesIO()
@@ -1198,6 +1288,19 @@ with st.sidebar:
                         data_val = data_para_str(
                             st.session_state.data_final_selecionada
                         )
+
+                    matricula = str(
+                        row.get(
+                            "Matricula",
+                            row.get(
+                                "Matrícula",
+                                row.get(
+                                    "matricula",
+                                    ""
+                                )
+                            )
+                        )
+                    ).strip()
 
                     muni = str(
                         row.get(
@@ -1257,7 +1360,8 @@ with st.sidebar:
                     ).strip()
 
                     if (
-                        bair
+                        matricula
+                        and bair
                         and lat_val is not None
                         and lon_val is not None
                     ):
@@ -1269,7 +1373,8 @@ with st.sidebar:
                             float(lat_val),
                             float(lon_val),
                             float(pres_val),
-                            obs_val
+                            obs_val,
+                            matricula
                         ])
 
                 if lote_para_enviar:
@@ -1286,8 +1391,9 @@ with st.sidebar:
                     st.warning(
                         "⚠️ Nenhum registro válido encontrado. "
                         "Verifique se os nomes das colunas são: "
-                        "Data, Municipio, Bairro, Latitude, Longitude, "
-                        "Pressao_MCA, Observacao."
+                        "Data, Matricula, Municipio, Bairro, Latitude, "
+                        "Longitude, Pressao_MCA, Observacao e se a Matrícula "
+                        "está preenchida."
                     )
 
             except Exception as e:
@@ -1780,6 +1886,7 @@ if not df_filtrado.empty:
 
         popup = (
             f"<b>ID:</b> {row['ID']}<br>"
+            f"<b>Matrícula:</b> {row['Matricula']}<br>"
             f"<b>Data:</b> {row['Data']}<br>"
             f"<b>Município:</b> {row['Municipio']}<br>"
             f"<b>Bairro:</b> {row['Bairro']}<br>"
@@ -1972,6 +2079,7 @@ legend_html = f"""
 m.get_root().html.add_child(
     Element(legend_html)
 )
+
 map_data = st_folium(
     m,
     width="100%",
@@ -2016,6 +2124,7 @@ if not df_filtrado.empty:
     df_show = df_filtrado[
         [
             "ID",
+            "Matricula",
             "Data",
             "Municipio",
             "Bairro",
