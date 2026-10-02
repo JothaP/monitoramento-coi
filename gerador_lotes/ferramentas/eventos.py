@@ -1255,37 +1255,37 @@ def render_eventos():
 
         col1, col2, col3, col4 = st.columns(4)
 
-        with col1:
-            st.markdown(
-                f"""
-                <div class="coi-metric">
-                    <div class="coi-metric-label">
-                        Eventos válidos
-                    </div>
-                    <div class="coi-metric-value">
-                        {estatisticas.get("eventos_validos", 0):,}
-                    </div>
-                </div>
-                """.replace(",", "."),
-                unsafe_allow_html=True,
-            )
+with col1:
+    st.markdown(
+        f"""
+        <div class="coi-metric">
+            <div class="coi-metric-label">
+                O.S analisadas
+            </div>
+            <div class="coi-metric-value">
+                {estatisticas.get("registros_analisados", 0):,}
+            </div>
+        </div>
+        """.replace(",", "."),
+        unsafe_allow_html=True,
+    )
 
-        with col2:
-            st.markdown(
-                f"""
-                <div class="coi-metric">
-                    <div class="coi-metric-label">
-                        O.S. analisadas
-                    </div>
-                    <div class="coi-metric-value">
-                        {estatisticas.get("registros_analisados", 0):,}
-                    </div>
-                </div>
-                """.replace(",", "."),
-                unsafe_allow_html=True,
-            )
+with col2:
+    st.markdown(
+        f"""
+        <div class="coi-metric">
+            <div class="coi-metric-label">
+                Eventos analisados
+            </div>
+            <div class="coi-metric-value">
+                {estatisticas.get("eventos_analisados", 0):,}
+            </div>
+        </div>
+        """.replace(",", "."),
+        unsafe_allow_html=True,
+    )
 
-       with col3:
+with col3:
     st.markdown(
         f"""
         <div class="coi-metric">
@@ -1300,37 +1300,20 @@ def render_eventos():
         unsafe_allow_html=True,
     )
 
-        with col4:
-
-            analisadas = estatisticas.get(
-                "registros_analisados",
-                0,
-            )
-
-            linhas = estatisticas.get(
-                "os_cancelamento",
-                0,
-            )
-
-            percentual = (
-                linhas / analisadas * 100
-                if analisadas
-                else 0
-            )
-
-            st.markdown(
-                f"""
-                <div class="coi-metric">
-                    <div class="coi-metric-label">
-                        Percentual
-                    </div>
-                    <div class="coi-metric-value">
-                        {percentual:.1f}%
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+with col4:
+    st.markdown(
+        f"""
+        <div class="coi-metric">
+            <div class="coi-metric-label">
+                Percentual
+            </div>
+            <div class="coi-metric-value">
+                {percentual:.1f}%
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
         # ----------------------------------------------------
         # AVISOS
