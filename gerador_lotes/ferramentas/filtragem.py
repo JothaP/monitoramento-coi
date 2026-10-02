@@ -108,15 +108,6 @@ def localizar_coluna(df, tipo):
 
     elif tipo == "data":
 
-        # ====================================================
-        # REGRA ESTRUTURAL:
-        #
-        # A única coluna utilizada para definir data e
-        # horário de abertura da O.S. é INÍCIO DO SLA.
-        #
-        # A coluna DATA não é utilizada.
-        # ====================================================
-
         for coluna in colunas:
 
             nome = normalizar_texto(coluna)
@@ -375,28 +366,6 @@ def aplicar_filtro_horario(
     hora_inicial=None,
     hora_final=None,
 ):
-    """
-    Aplica o filtro de horário utilizando exclusivamente o
-    horário existente em INÍCIO DO SLA.
-
-    Margens operacionais:
-
-    - 1 hora antes do horário inicial;
-    - 3 horas depois do horário final.
-
-    Exemplos:
-
-    09:00 -> 15:00
-    08:00 -> 18:00
-
-    22:00 -> 02:00
-    21:00 -> 05:00
-
-    00:30 -> 01:30
-    23:30 -> 04:30
-
-    Os limites são inclusivos.
-    """
 
     if (
         hora_inicial is None
@@ -413,10 +382,6 @@ def aplicar_filtro_horario(
     )
 
     horas = horas.astype("Float64")
-
-    # ========================================================
-    # SOMENTE HORA INICIAL
-    # ========================================================
 
     if (
         hora_inicial is not None
@@ -441,10 +406,6 @@ def aplicar_filtro_horario(
         return resultado.loc[
             mascara
         ]
-
-    # ========================================================
-    # SOMENTE HORA FINAL
-    # ========================================================
 
     if (
         hora_inicial is None
@@ -476,10 +437,6 @@ def aplicar_filtro_horario(
             mascara
         ]
 
-    # ========================================================
-    # INÍCIO E FIM INFORMADOS
-    # ========================================================
-
     inicio_minutos = hora_para_minutos(
         hora_inicial
     )
@@ -504,10 +461,6 @@ def aplicar_filtro_horario(
         fim_minutos + 180
     ) % 1440
 
-    # ========================================================
-    # JANELA EFETIVA COBRINDO 24 HORAS OU MAIS
-    # ========================================================
-
     if duracao_efetiva >= 1440:
 
         mascara = horas.notna()
@@ -515,10 +468,6 @@ def aplicar_filtro_horario(
         return resultado.loc[
             mascara
         ]
-
-    # ========================================================
-    # INTERVALO SEM CRUZAMENTO
-    # ========================================================
 
     if inicio_efetivo <= fim_efetivo:
 
@@ -531,10 +480,6 @@ def aplicar_filtro_horario(
                 horas <= fim_efetivo
             )
         )
-
-    # ========================================================
-    # INTERVALO CRUZANDO MEIA-NOITE
-    # ========================================================
 
     else:
 
@@ -601,8 +546,6 @@ def aplicar_filtros(
 
     # ========================================================
     # BAIRRO
-    #
-    # CORRESPONDÊNCIA EXATA NORMALIZADA.
     # ========================================================
 
     if coluna_bairro and bairros:
@@ -620,8 +563,6 @@ def aplicar_filtros(
 
     # ========================================================
     # DATA / HORÁRIO
-    #
-    # EXCLUSIVAMENTE INÍCIO DO SLA.
     # ========================================================
 
     if coluna_data:
@@ -640,10 +581,6 @@ def aplicar_filtros(
                 resultado[coluna_data]
             )
 
-            # =================================================
-            # ANO
-            # =================================================
-
             if anos:
 
                 mascara = datas.dt.year.isin(
@@ -657,10 +594,6 @@ def aplicar_filtros(
                 datas = datas.loc[
                     resultado.index
                 ]
-
-            # =================================================
-            # MÊS
-            # =================================================
 
             if meses:
 
@@ -676,10 +609,6 @@ def aplicar_filtros(
                     resultado.index
                 ]
 
-            # =================================================
-            # DIA
-            # =================================================
-
             if dias:
 
                 mascara = datas.dt.day.isin(
@@ -693,10 +622,6 @@ def aplicar_filtros(
                 datas = datas.loc[
                     resultado.index
                 ]
-
-            # =================================================
-            # HORÁRIO
-            # =================================================
 
             if (
                 hora_inicial is not None
@@ -713,6 +638,573 @@ def aplicar_filtros(
     return resultado.reset_index(
         drop=True
     )
+
+
+# ============================================================
+# FUNÇÕES DO ARQUIVO DE EVENTOS
+# ============================================================
+
+def localizar_coluna_eventos(df, nome):
+
+    if df is None or df.empty:
+        return None
+
+    normalizadas = {
+        normalizar_texto(coluna): coluna
+        for coluna in df.columns
+    }
+
+    alvo = normalizar_texto(nome)
+
+    return normalizadas.get(alvo)
+
+
+def converter_quantidade_os(valor):
+
+    if pd.isna(valor):
+        return 0
+
+    try:
+
+        texto = str(valor).strip()
+
+        texto = texto.replace(
+            ".",
+            "",
+        ).replace(
+            ",",
+            ".",
+        )
+
+        return int(float(texto))
+
+    except Exception:
+
+        return 0
+
+
+def extrair_dias_evento(valor):
+
+    if pd.isna(valor):
+        return []
+
+    texto = str(valor).strip()
+
+    if not texto:
+        return []
+
+    # --------------------------------------------------------
+    # Exemplo: 26
+    # --------------------------------------------------------
+
+    if re.fullmatch(
+        r"\d{1,2}",
+        texto,
+    ):
+
+        return [
+            int(texto)
+        ]
+
+    # --------------------------------------------------------
+    # Exemplo: 26 a 27
+    # --------------------------------------------------------
+
+    resultado = re.fullmatch(
+        r"(\d{1,2})\s*a\s*(\d{1,2})",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    if resultado:
+
+        inicio = int(
+            resultado.group(1)
+        )
+
+        fim = int(
+            resultado.group(2)
+        )
+
+        if inicio <= fim:
+
+            return list(
+                range(
+                    inicio,
+                    fim + 1,
+                )
+            )
+
+        return [
+            inicio,
+            fim,
+        ]
+
+    # --------------------------------------------------------
+    # Exemplo: 30/09 a 01/10
+    # --------------------------------------------------------
+
+    datas = re.findall(
+        r"\d{1,2}/\d{1,2}",
+        texto,
+    )
+
+    if datas:
+
+        dias = []
+
+        for data in datas:
+
+            partes = data.split("/")
+
+            try:
+
+                dias.append(
+                    int(partes[0])
+                )
+
+            except Exception:
+                continue
+
+        return dias
+
+    return []
+
+
+def obter_hora_evento(valor):
+
+    if pd.isna(valor):
+        return None
+
+    texto = str(valor).strip()
+
+    if not texto:
+        return None
+
+    texto = texto.replace(
+        " ",
+        "",
+    )
+
+    resultado = re.fullmatch(
+        r"(\d{1,2}):(\d{2})",
+        texto,
+    )
+
+    if not resultado:
+        return None
+
+    try:
+
+        hora = int(
+            resultado.group(1)
+        )
+
+        minuto = int(
+            resultado.group(2)
+        )
+
+        return time(
+            hour=hora,
+            minute=minuto,
+        )
+
+    except Exception:
+
+        return None
+
+
+def aplicar_filtros_arquivo_eventos(
+    df_base,
+    df_eventos,
+    coluna_cidade,
+    coluna_bairro,
+    coluna_data,
+):
+
+    if (
+        df_base is None
+        or df_base.empty
+        or df_eventos is None
+        or df_eventos.empty
+    ):
+        return (
+            pd.DataFrame(
+                columns=(
+                    df_base.columns
+                    if df_base is not None
+                    else []
+                )
+            ),
+            pd.DataFrame(),
+        )
+
+    coluna_evento_cidade = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Cidade",
+        )
+    )
+
+    coluna_evento_bairro = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Bairro",
+        )
+    )
+
+    coluna_evento_ano = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Ano",
+        )
+    )
+
+    coluna_evento_mes = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Mês",
+        )
+        or localizar_coluna_eventos(
+            df_eventos,
+            "Mes",
+        )
+    )
+
+    coluna_evento_dia = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Dia",
+        )
+    )
+
+    coluna_evento_hora_inicial = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Hora Inicial",
+        )
+    )
+
+    coluna_evento_hora_final = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Hora Final",
+        )
+    )
+
+    coluna_evento_quantidade = (
+        localizar_coluna_eventos(
+            df_eventos,
+            "Quant. de O.S",
+        )
+    )
+
+    colunas_obrigatorias = {
+        "Cidade": coluna_evento_cidade,
+        "Bairro": coluna_evento_bairro,
+        "Ano": coluna_evento_ano,
+        "Mês": coluna_evento_mes,
+        "Dia": coluna_evento_dia,
+        "Hora Inicial": coluna_evento_hora_inicial,
+        "Hora Final": coluna_evento_hora_final,
+        "Quant. de O.S": coluna_evento_quantidade,
+    }
+
+    faltantes = [
+        nome
+        for nome, coluna in colunas_obrigatorias.items()
+        if coluna is None
+    ]
+
+    if faltantes:
+
+        raise ValueError(
+            "O arquivo de Eventos não possui as colunas "
+            "necessárias: "
+            + ", ".join(faltantes)
+        )
+
+    resultados = []
+    comparacao = []
+
+    for _, evento in df_eventos.iterrows():
+
+        cidade = evento[
+            coluna_evento_cidade
+        ]
+
+        bairro = evento[
+            coluna_evento_bairro
+        ]
+
+        ano = evento[
+            coluna_evento_ano
+        ]
+
+        mes = evento[
+            coluna_evento_mes
+        ]
+
+        dia = evento[
+            coluna_evento_dia
+        ]
+
+        hora_inicial = obter_hora_evento(
+            evento[
+                coluna_evento_hora_inicial
+            ]
+        )
+
+        hora_final = obter_hora_evento(
+            evento[
+                coluna_evento_hora_final
+            ]
+        )
+
+        quantidade_indicada = (
+            converter_quantidade_os(
+                evento[
+                    coluna_evento_quantidade
+                ]
+            )
+        )
+
+        try:
+            ano = int(float(ano))
+        except Exception:
+            ano = None
+
+        try:
+            mes = int(float(mes))
+        except Exception:
+            mes = None
+
+        dias = extrair_dias_evento(
+            dia
+        )
+
+        if not dias:
+            dias = None
+
+        filtro = aplicar_filtros(
+            df=df_base,
+            coluna_cidade=coluna_cidade,
+            cidades=(
+                [cidade]
+                if cidade is not None
+                else []
+            ),
+            coluna_bairro=coluna_bairro,
+            bairros=(
+                [bairro]
+                if bairro is not None
+                and str(bairro).strip()
+                and normalizar_texto(bairro)
+                != "TODA A CIDADE"
+                else []
+            ),
+            coluna_data=coluna_data,
+            anos=(
+                [ano]
+                if ano is not None
+                else []
+            ),
+            meses=(
+                [mes]
+                if mes is not None
+                else []
+            ),
+            dias=dias,
+            hora_inicial=hora_inicial,
+            hora_final=hora_final,
+        )
+
+        quantidade_encontrada = len(
+            filtro
+        )
+
+        if not filtro.empty:
+
+            resultados.append(
+                filtro
+            )
+
+        diferenca = (
+            quantidade_encontrada
+            - quantidade_indicada
+        )
+
+        comparacao.append(
+            {
+                "Cidade": cidade,
+                "Bairro": bairro,
+                "Ano": ano,
+                "Mês": mes,
+                "Dia": dia,
+                "Hora Inicial": (
+                    evento[
+                        coluna_evento_hora_inicial
+                    ]
+                ),
+                "Hora Final": (
+                    evento[
+                        coluna_evento_hora_final
+                    ]
+                ),
+                "O.S indicada": (
+                    quantidade_indicada
+                ),
+                "O.S encontrada": (
+                    quantidade_encontrada
+                ),
+                "Diferença": diferenca,
+            }
+        )
+
+    if resultados:
+
+        resultado_final = pd.concat(
+            resultados,
+            ignore_index=True,
+        )
+
+        # Remove duplicidades quando a mesma O.S
+        # estiver abrangida por mais de um evento.
+        coluna_matricula = localizar_coluna(
+            resultado_final,
+            "matricula",
+        )
+
+        coluna_protocolo = localizar_coluna(
+            resultado_final,
+            "protocolo",
+        )
+
+        if (
+            coluna_matricula
+            and coluna_protocolo
+        ):
+
+            resultado_final = (
+                resultado_final.drop_duplicates(
+                    subset=[
+                        coluna_matricula,
+                        coluna_protocolo,
+                    ]
+                )
+            )
+
+        resultado_final = (
+            resultado_final.reset_index(
+                drop=True
+            )
+        )
+
+    else:
+
+        resultado_final = pd.DataFrame(
+            columns=df_base.columns
+        )
+
+    comparacao_df = pd.DataFrame(
+        comparacao
+    )
+
+    return (
+        resultado_final,
+        comparacao_df,
+    )
+
+
+# ============================================================
+# TEXTO COMPARATIVO
+# ============================================================
+
+def gerar_texto_comparacao_eventos(
+    comparacao_df,
+    quantidade_resultado,
+):
+
+    if (
+        comparacao_df is None
+        or comparacao_df.empty
+    ):
+
+        return (
+            "Não foi possível realizar a comparação "
+            "com o arquivo de Eventos."
+        )
+
+    quantidade_indicada_total = int(
+        comparacao_df[
+            "O.S indicada"
+        ].sum()
+    )
+
+    quantidade_encontrada_total = (
+        int(quantidade_resultado)
+    )
+
+    divergencias = comparacao_df[
+        comparacao_df["Diferença"] != 0
+    ]
+
+    if divergencias.empty:
+
+        return (
+            f"✅ A quantidade de O.S está de acordo "
+            f"com o arquivo de Eventos: "
+            f"**{quantidade_encontrada_total} O.S.** "
+            f"encontradas após o filtro, "
+            f"igual às **{quantidade_indicada_total} O.S.** "
+            f"indicadas no arquivo."
+        )
+
+    diferenca_total = (
+        quantidade_encontrada_total
+        - quantidade_indicada_total
+    )
+
+    texto = (
+        f"⚠️ Foi identificada divergência na quantidade "
+        f"de O.S. após o filtro. "
+        f"O arquivo de Eventos indica "
+        f"**{quantidade_indicada_total} O.S.**, "
+        f"enquanto o filtro encontrou "
+        f"**{quantidade_encontrada_total} O.S.** "
+        f"("
+        f"{'+' if diferenca_total > 0 else ''}"
+        f"{diferenca_total} de diferença)."
+    )
+
+    texto += (
+        "\n\n**Diferenças identificadas:**"
+    )
+
+    for _, linha in divergencias.iterrows():
+
+        diferenca = int(
+            linha["Diferença"]
+        )
+
+        sinal = (
+            "+"
+            if diferenca > 0
+            else ""
+        )
+
+        texto += (
+            f"\n- **{linha['Cidade']} / "
+            f"{linha['Bairro']}** — "
+            f"Dia {linha['Dia']}, "
+            f"{linha['Hora Inicial']} até "
+            f"{linha['Hora Final']}: "
+            f"arquivo = **{int(linha['O.S indicada'])}**, "
+            f"encontradas = **{int(linha['O.S encontrada'])}**, "
+            f"diferença = **{sinal}{diferenca}**."
+        )
+
+    return texto
 
 
 # ============================================================
@@ -769,10 +1261,6 @@ def gerar_lote_cancelamento(
 
     registros = []
     logs = []
-
-    # ========================================================
-    # NORMALIZA A OBSERVAÇÃO DO LOTE
-    # ========================================================
 
     observacao_lote = (
         str(observacao).strip()
@@ -926,6 +1414,27 @@ def render_filtragem():
         return
 
     # ========================================================
+    # UPLOAD DO ARQUIVO DE EVENTOS
+    # ========================================================
+
+    with st.sidebar:
+
+        st.markdown(
+            "### 📂 Arquivo de Eventos"
+        )
+
+        st.caption(
+            "Envie o arquivo gerado pela Ferramenta de Eventos "
+            "para aplicar automaticamente os filtros."
+        )
+
+        arquivo_eventos = st.file_uploader(
+            "Enviar arquivo de Eventos",
+            type=["xlsx"],
+            key="upload_arquivo_eventos",
+        )
+
+    # ========================================================
     # LOCALIZAÇÃO DAS COLUNAS
     # ========================================================
 
@@ -953,6 +1462,60 @@ def render_filtragem():
         df_base,
         "protocolo",
     )
+
+    # ========================================================
+    # APLICAÇÃO AUTOMÁTICA DO ARQUIVO DE EVENTOS
+    # ========================================================
+
+    if arquivo_eventos is not None:
+
+        nome_upload = arquivo_eventos.name
+
+        if (
+            st.session_state.get(
+                "arquivo_eventos_processado"
+            )
+            != nome_upload
+        ):
+
+            try:
+
+                df_eventos = pd.read_excel(
+                    arquivo_eventos
+                )
+
+                (
+                    df_resultado_eventos,
+                    comparacao_eventos,
+                ) = aplicar_filtros_arquivo_eventos(
+                    df_base=df_base,
+                    df_eventos=df_eventos,
+                    coluna_cidade=coluna_cidade,
+                    coluna_bairro=coluna_bairro,
+                    coluna_data=coluna_data,
+                )
+
+                st.session_state.df_resultado = (
+                    df_resultado_eventos
+                )
+
+                st.session_state.df_comparacao_eventos = (
+                    comparacao_eventos
+                )
+
+                st.session_state.arquivo_eventos_processado = (
+                    nome_upload
+                )
+
+                st.session_state.df_resultado_lote = None
+                st.session_state.df_log = None
+                st.session_state.nome_arquivo_resultado = None
+
+            except Exception as erro:
+
+                st.error(
+                    f"Erro ao processar o arquivo de Eventos: {erro}"
+                )
 
     # ========================================================
     # INFORMAÇÕES
@@ -1265,6 +1828,41 @@ def render_filtragem():
     )
 
     # ========================================================
+    # COMPARAÇÃO COM ARQUIVO DE EVENTOS
+    # ========================================================
+
+    comparacao_eventos = st.session_state.get(
+        "df_comparacao_eventos"
+    )
+
+    if (
+        arquivo_eventos is not None
+        and comparacao_eventos is not None
+    ):
+
+        st.divider()
+
+        st.subheader(
+            "📊 Comparação com o Arquivo de Eventos"
+        )
+
+        texto_comparacao = (
+            gerar_texto_comparacao_eventos(
+                comparacao_eventos,
+                len(
+                    st.session_state.get(
+                        "df_resultado",
+                        pd.DataFrame(),
+                    )
+                ),
+            )
+        )
+
+        st.info(
+            texto_comparacao
+        )
+
+    # ========================================================
     # BOTÕES
     # ========================================================
 
@@ -1299,6 +1897,9 @@ def render_filtragem():
             "filtragem_hora_inicial",
             "filtragem_hora_final",
             "filtragem_observacao_lote",
+            "upload_arquivo_eventos",
+            "arquivo_eventos_processado",
+            "df_comparacao_eventos",
         ]:
 
             st.session_state.pop(
@@ -1311,7 +1912,7 @@ def render_filtragem():
         st.rerun()
 
     # ========================================================
-    # APLICAÇÃO
+    # APLICAÇÃO MANUAL
     # ========================================================
 
     if aplicar:
