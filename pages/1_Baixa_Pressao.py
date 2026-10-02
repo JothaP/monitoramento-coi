@@ -1944,7 +1944,7 @@ legend_html = f"""
             vertical-align:middle;
         "></span>
         <span style="color:#1f2937 !important;">
-            Em Atenção (&gt; 5 e ≤ 15 MCA)
+            Em Atenção (&gt; 5 e ≤ 10 MCA)
         </span>
     </div>
 
