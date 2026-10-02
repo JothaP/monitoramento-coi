@@ -1545,7 +1545,7 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
         )
     ]
 
-elif faixa_sel == "Em Atenção (> 5 e ≤ 15 MCA)":
+elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
     df_filtrado = df_filtrado[
         (
