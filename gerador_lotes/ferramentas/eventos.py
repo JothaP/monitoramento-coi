@@ -688,6 +688,7 @@ def cruzar_eventos_com_backlog(
     df_backlog,
     modo=None,
 ):
+
     # ========================================================
     # LOCALIZAÇÃO DAS COLUNAS DO BACKLOG
     # ========================================================
@@ -949,17 +950,18 @@ def cruzar_eventos_com_backlog(
     )
 
     total_os = (
-    int(resultado["Quant. de O.S"].sum())
-    if not resultado.empty
-    else 0
-)
+        int(resultado["Quant. de O.S"].sum())
+        if not resultado.empty
+        else 0
+    )
 
-return (
-    resultado,
-    len(df),
-    avisos,
-    total_os,
-)
+    return (
+        resultado,
+        len(df),
+        avisos,
+        total_os,
+    )
+
 
 # ============================================================
 # LIMPEZA EXCLUSIVA DA ANÁLISE DE EVENTOS
@@ -1208,6 +1210,7 @@ def render_eventos():
         st.session_state["eventos_estatisticas"] = {
             "eventos_total": estatisticas_eventos["total"],
             "eventos_validos": estatisticas_eventos["validos"],
+            "eventos_analisados": estatisticas_eventos["validos"],
             "registros_analisados": total_analisado,
             "os_cancelamento": total_resultado,
             "modo": modo,
@@ -1243,71 +1246,91 @@ def render_eventos():
             modo,
         )
 
+        # ----------------------------------------------------
+        # PERCENTUAL
+        # ----------------------------------------------------
+
+        analisadas = estatisticas.get(
+            "registros_analisados",
+            0,
+        )
+
+        total_os = estatisticas.get(
+            "os_cancelamento",
+            0,
+        )
+
+        percentual = (
+            total_os / analisadas * 100
+            if analisadas
+            else 0
+        )
+
         st.divider()
 
         st.markdown("### 📋 Resultado da análise")
 
         col1, col2, col3, col4 = st.columns(4)
 
-with col1:
-    st.markdown(
-        f"""
-        <div class="coi-metric">
-            <div class="coi-metric-label">
-                O.S analisadas
-            </div>
-            <div class="coi-metric-value">
-                {estatisticas.get("registros_analisados", 0):,}
-            </div>
-        </div>
-        """.replace(",", "."),
-        unsafe_allow_html=True,
-    )
+        with col1:
+            st.markdown(
+                f"""
+                <div class="coi-metric">
+                    <div class="coi-metric-label">
+                        O.S analisadas
+                    </div>
+                    <div class="coi-metric-value">
+                        {estatisticas.get("registros_analisados", 0):,}
+                    </div>
+                </div>
+                """.replace(",", "."),
+                unsafe_allow_html=True,
+            )
 
-with col2:
-    st.markdown(
-        f"""
-        <div class="coi-metric">
-            <div class="coi-metric-label">
-                Eventos analisados
-            </div>
-            <div class="coi-metric-value">
-                {estatisticas.get("eventos_analisados", 0):,}
-            </div>
-        </div>
-        """.replace(",", "."),
-        unsafe_allow_html=True,
-    )
+        with col2:
+            st.markdown(
+                f"""
+                <div class="coi-metric">
+                    <div class="coi-metric-label">
+                        Eventos analisados
+                    </div>
+                    <div class="coi-metric-value">
+                        {estatisticas.get("eventos_analisados", 0):,}
+                    </div>
+                </div>
+                """.replace(",", "."),
+                unsafe_allow_html=True,
+            )
 
-with col3:
-    st.markdown(
-        f"""
-        <div class="coi-metric">
-            <div class="coi-metric-label">
-                Total de O.S
-            </div>
-            <div class="coi-metric-value">
-                {estatisticas.get("os_cancelamento", 0):,}
-            </div>
-        </div>
-        """.replace(",", "."),
-        unsafe_allow_html=True,
-    )
+        with col3:
+            st.markdown(
+                f"""
+                <div class="coi-metric">
+                    <div class="coi-metric-label">
+                        Total de O.S
+                    </div>
+                    <div class="coi-metric-value">
+                        {estatisticas.get("os_cancelamento", 0):,}
+                    </div>
+                </div>
+                """.replace(",", "."),
+                unsafe_allow_html=True,
+            )
 
-with col4:
-    st.markdown(
-        f"""
-        <div class="coi-metric">
-            <div class="coi-metric-label">
-                Percentual
-            </div>
-            <div class="coi-metric-value">
-                {percentual:.1f}%
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        with col4:
+            st.markdown(
+                f"""
+                <div class="coi-metric">
+                    <div class="coi-metric-label">
+                        Percentual
+                    </div>
+                    <div class="coi-metric-value">
+                        {percentual:.1f}%
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         # ----------------------------------------------------
         # AVISOS
