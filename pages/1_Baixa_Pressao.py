@@ -132,6 +132,7 @@ def conectar_google_sheets():
         dados_iniciais = ws.get_all_values()
 
         if not dados_iniciais or len(dados_iniciais) == 0:
+
             ws.append_row([
                 "ID",
                 "Data",
@@ -145,15 +146,14 @@ def conectar_google_sheets():
             ])
 
         else:
+
             cabecalho_atual = [
                 str(c).strip()
                 for c in dados_iniciais[0]
             ]
 
-            # Mantém compatibilidade com planilhas existentes.
-            # A nova coluna é adicionada ao final para não deslocar
-            # ou sobrescrever nenhum dado existente.
             if "Observacao" not in cabecalho_atual:
+
                 ws.update(
                     "H1",
                     [["Observacao"]]
@@ -162,6 +162,7 @@ def conectar_google_sheets():
                 cabecalho_atual.append("Observacao")
 
             if "Matricula" not in cabecalho_atual:
+
                 proxima_coluna = chr(
                     ord("A") + len(cabecalho_atual)
                 )
@@ -179,8 +180,11 @@ def conectar_google_sheets():
 
 try:
     worksheet = conectar_google_sheets()
+
 except Exception as e:
-    st.error(f"❌ Erro ao conectar com o Google Sheets: {e}")
+    st.error(
+        f"❌ Erro ao conectar com o Google Sheets: {e}"
+    )
     st.stop()
 
 
@@ -192,6 +196,7 @@ def gerar_id() -> str:
 
 
 def normalizar_coluna(nome: str) -> str:
+
     nome = str(nome).strip().lower()
 
     mapeamento = {
@@ -217,12 +222,17 @@ def normalizar_coluna(nome: str) -> str:
         "matrícula": "Matricula"
     }
 
-    return mapeamento.get(nome, nome.title())
+    return mapeamento.get(
+        nome,
+        nome.title()
+    )
 
 
 def parse_float(valor, default=None):
+
     if valor is None or (
-        isinstance(valor, float) and pd.isna(valor)
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
         return default
 
@@ -230,6 +240,7 @@ def parse_float(valor, default=None):
         return float(valor)
 
     try:
+
         texto = str(valor).strip()
 
         if not texto or texto.lower() in (
@@ -240,7 +251,12 @@ def parse_float(valor, default=None):
         ):
             return default
 
-        texto = texto.replace(",", ".").replace(" ", "")
+        texto = (
+            texto
+            .replace(",", ".")
+            .replace(" ", "")
+        )
+
         return float(texto)
 
     except (ValueError, TypeError):
@@ -252,31 +268,45 @@ def normalizar_coordenada(
     tipo: str = "lat"
 ) -> Optional[float]:
 
-    num = parse_float(valor, default=None)
+    num = parse_float(
+        valor,
+        default=None
+    )
 
     if num is None:
         return None
 
-    if tipo == "lat" and not (-90.0 <= num <= 90.0):
+    if tipo == "lat" and not (
+        -90.0 <= num <= 90.0
+    ):
         return None
 
-    if tipo == "lon" and not (-180.0 <= num <= 180.0):
+    if tipo == "lon" and not (
+        -180.0 <= num <= 180.0
+    ):
         return None
 
     if num == 0.0:
         return None
 
-    return round(float(num), 6)
+    return round(
+        float(num),
+        6
+    )
 
 
 def normalizar_data(valor) -> str:
+
     if valor is None or (
-        isinstance(valor, float) and pd.isna(valor)
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
         return ""
 
     if isinstance(valor, (datetime, date)):
-        return valor.strftime("%d/%m/%Y")
+        return valor.strftime(
+            "%d/%m/%Y"
+        )
 
     texto = str(valor).strip()
 
@@ -297,11 +327,14 @@ def normalizar_data(valor) -> str:
     ]
 
     for fmt in formatos:
+
         try:
+
             return datetime.strptime(
                 texto,
                 fmt
             ).strftime("%d/%m/%Y")
+
         except ValueError:
             continue
 
@@ -309,17 +342,29 @@ def normalizar_data(valor) -> str:
 
 
 def carregar_dados() -> pd.DataFrame:
+
     try:
+
         valores = worksheet.get_all_values()
 
     except Exception as e:
-        st.error(f"Erro ao ler planilha: {e}")
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+
+        st.error(
+            f"Erro ao ler planilha: {e}"
+        )
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
 
     if not valores or len(valores) < 2:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
 
     cabecalhos_raw = valores[0]
+
     cabecalhos = [
         normalizar_coluna(c)
         for c in cabecalhos_raw
@@ -328,26 +373,40 @@ def carregar_dados() -> pd.DataFrame:
     registros = []
 
     for linha in valores[1:]:
-        if not any(str(c).strip() for c in linha):
+
+        if not any(
+            str(c).strip()
+            for c in linha
+        ):
             continue
 
         reg = {}
 
         for i, col in enumerate(cabecalhos):
-            reg[col] = linha[i] if i < len(linha) else ""
+
+            reg[col] = (
+                linha[i]
+                if i < len(linha)
+                else ""
+            )
 
         registros.append(reg)
 
     if not registros:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
 
     df = pd.DataFrame(registros)
 
     for col in COLUNAS_PADRAO:
+
         if col not in df.columns:
             df[col] = ""
 
     def limpar_id(v):
+
         s = str(v).strip()
 
         if not s or s.lower() in (
@@ -359,9 +418,13 @@ def carregar_dados() -> pd.DataFrame:
 
         return s
 
-    df["ID"] = df["ID"].apply(limpar_id)
+    df["ID"] = df["ID"].apply(
+        limpar_id
+    )
 
-    df["Data"] = df["Data"].apply(normalizar_data)
+    df["Data"] = df["Data"].apply(
+        normalizar_data
+    )
 
     df["Municipio"] = (
         df["Municipio"]
@@ -394,16 +457,31 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
-    df["Latitude"] = df["Latitude"].apply(
-        lambda x: normalizar_coordenada(x, "lat")
+    df["Latitude"] = df[
+        "Latitude"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lat"
+        )
     )
 
-    df["Longitude"] = df["Longitude"].apply(
-        lambda x: normalizar_coordenada(x, "lon")
+    df["Longitude"] = df[
+        "Longitude"
+    ].apply(
+        lambda x: normalizar_coordenada(
+            x,
+            "lon"
+        )
     )
 
-    df["Pressao_MCA"] = df["Pressao_MCA"].apply(
-        lambda x: parse_float(x, 0.0) or 0.0
+    df["Pressao_MCA"] = df[
+        "Pressao_MCA"
+    ].apply(
+        lambda x: parse_float(
+            x,
+            0.0
+        ) or 0.0
     )
 
     df["Observacao"] = (
@@ -417,10 +495,15 @@ def carregar_dados() -> pd.DataFrame:
     )
 
     df = df[
-        df["Bairro"].astype(str).str.strip() != ""
+        df["Bairro"]
+        .astype(str)
+        .str.strip()
+        != ""
     ]
 
-    return df[COLUNAS_PADRAO].reset_index(drop=True)
+    return df[
+        COLUNAS_PADRAO
+    ].reset_index(drop=True)
 
 
 def limpar_cache():
@@ -437,6 +520,7 @@ def adicionar_ponto(
     data_str: str,
     observacao: str
 ):
+
     novo_id = gerar_id()
 
     worksheet.append_row([
@@ -452,42 +536,58 @@ def adicionar_ponto(
     ])
 
     time.sleep(0.3)
+
     limpar_cache()
 
     return novo_id
 
 
-def adicionar_lote_seguro(linhas_dados: list):
+def adicionar_lote_seguro(
+    linhas_dados: list
+):
+
     if not linhas_dados:
         return 0
 
     df_atual = carregar_dados()
+
     chaves_existentes = set()
 
     if not df_atual.empty:
+
         for _, r in df_atual.iterrows():
 
             lat_f = (
                 f"{float(r['Latitude']):.6f}"
-                if pd.notnull(r["Latitude"])
+                if pd.notnull(
+                    r["Latitude"]
+                )
                 else ""
             )
 
             lon_f = (
                 f"{float(r['Longitude']):.6f}"
-                if pd.notnull(r["Longitude"])
+                if pd.notnull(
+                    r["Longitude"]
+                )
                 else ""
             )
 
             chave = (
                 str(r["Data"]).strip(),
-                str(r["Municipio"]).strip().lower(),
-                str(r["Bairro"]).strip().lower(),
+                str(
+                    r["Municipio"]
+                ).strip().lower(),
+                str(
+                    r["Bairro"]
+                ).strip().lower(),
                 lat_f,
                 lon_f
             )
 
-            chaves_existentes.add(chave)
+            chaves_existentes.add(
+                chave
+            )
 
     linhas_novas = []
 
@@ -505,24 +605,40 @@ def adicionar_lote_seguro(linhas_dados: list):
             matricula_val
         ) = linha
 
-        lat_f = f"{float(lat_val):.6f}"
-        lon_f = f"{float(lon_val):.6f}"
+        lat_f = (
+            f"{float(lat_val):.6f}"
+        )
+
+        lon_f = (
+            f"{float(lon_val):.6f}"
+        )
 
         chave_nova = (
             str(d_val).strip(),
-            str(mun_val).strip().lower(),
-            str(bair_val).strip().lower(),
+            str(
+                mun_val
+            ).strip().lower(),
+            str(
+                bair_val
+            ).strip().lower(),
             lat_f,
             lon_f
         )
 
         if chave_nova not in chaves_existentes:
-            linhas_novas.append(linha)
-            chaves_existentes.add(chave_nova)
+
+            linhas_novas.append(
+                linha
+            )
+
+            chaves_existentes.add(
+                chave_nova
+            )
 
     if linhas_novas:
 
         dados_formatados = [
+
             [
                 str(i),
                 str(d),
@@ -534,6 +650,7 @@ def adicionar_lote_seguro(linhas_dados: list):
                 str(o),
                 str(matricula)
             ]
+
             for (
                 i,
                 d,
@@ -553,9 +670,12 @@ def adicionar_lote_seguro(linhas_dados: list):
         )
 
         time.sleep(0.3)
+
         limpar_cache()
 
-        return len(linhas_novas)
+        return len(
+            linhas_novas
+        )
 
     return 0
 
@@ -573,15 +693,16 @@ def atualizar_ponto(
 ) -> bool:
 
     try:
-        celula = worksheet.find(str(id_registro))
+
+        celula = worksheet.find(
+            str(id_registro)
+        )
 
         if celula is None:
             return False
 
         linha = celula.row
 
-        # Mantém a estrutura atual da planilha e atualiza
-        # a matrícula na coluna I.
         worksheet.update(
             f"A{linha}:I{linha}",
             [[
@@ -598,25 +719,39 @@ def atualizar_ponto(
         )
 
         time.sleep(0.3)
+
         limpar_cache()
 
         return True
 
     except Exception as e:
-        st.error(f"Erro ao atualizar: {e}")
+
+        st.error(
+            f"Erro ao atualizar: {e}"
+        )
+
         return False
 
 
-def excluir_ponto(id_registro: str) -> bool:
+def excluir_ponto(
+    id_registro: str
+) -> bool:
+
     try:
-        celula = worksheet.find(str(id_registro))
+
+        celula = worksheet.find(
+            str(id_registro)
+        )
 
         if celula is None:
             return False
 
-        worksheet.delete_rows(celula.row)
+        worksheet.delete_rows(
+            celula.row
+        )
 
         time.sleep(0.3)
+
         limpar_cache()
 
         return True
@@ -625,34 +760,52 @@ def excluir_ponto(id_registro: str) -> bool:
         return False
 
 
-def data_para_str(d: date) -> str:
-    return d.strftime("%d/%m/%Y")
+def data_para_str(
+    d: date
+) -> str:
+
+    return d.strftime(
+        "%d/%m/%Y"
+    )
 
 
 def gerar_kml(df):
+
     kml = simplekml.Kml()
 
     for _, row in df.iterrows():
 
-        lat = row.get("Latitude")
-        lon = row.get("Longitude")
+        lat = row.get(
+            "Latitude"
+        )
+
+        lon = row.get(
+            "Longitude"
+        )
 
         if pd.notnull(lat) and pd.notnull(lon):
-            try:
-                obs_text = (
-                    f"\nObservação: {row.get('Observacao', '')}"
-                    if str(row.get("Observacao", "")).strip()
-                    else ""
-                )
 
-                matricula_text = (
-                    f"Matrícula: {row.get('Matricula', '')}\n"
-                    if str(row.get("Matricula", "")).strip()
+            try:
+
+                obs_text = (
+                    f"\nObservação: "
+                    f"{row.get('Observacao', '')}"
+                    if str(
+                        row.get(
+                            "Observacao",
+                            ""
+                        )
+                    ).strip()
                     else ""
                 )
 
                 kml.newpoint(
-                    name=str(row.get("ID", "Ponto")),
+                    name=str(
+                        row.get(
+                            "ID",
+                            "Ponto"
+                        )
+                    ),
                     description=(
                         f"Matrícula: "
                         f"{row.get('Matricula', '')}\n"
@@ -665,11 +818,17 @@ def gerar_kml(df):
                         f"{obs_text}"
                     ),
                     coords=[
-                        (float(lon), float(lat))
+                        (
+                            float(lon),
+                            float(lat)
+                        )
                     ]
                 )
 
-            except (ValueError, TypeError):
+            except (
+                ValueError,
+                TypeError
+            ):
                 continue
 
     return kml.kml()
@@ -752,12 +911,14 @@ def modal_novo_ponto():
         c1, c2 = st.columns(2)
 
         with c1:
+
             lat = st.text_input(
                 "Latitude * (aceita vírgula ou ponto)",
                 value=str(lat_default)
             )
 
         with c2:
+
             lon = st.text_input(
                 "Longitude * (aceita vírgula ou ponto)",
                 value=str(lon_default)
@@ -784,25 +945,44 @@ def modal_novo_ponto():
 
         if enviado:
 
-            lat_n = normalizar_coordenada(lat, "lat")
-            lon_n = normalizar_coordenada(lon, "lon")
+            lat_n = normalizar_coordenada(
+                lat,
+                "lat"
+            )
+
+            lon_n = normalizar_coordenada(
+                lon,
+                "lon"
+            )
 
             if not matricula.strip():
+
                 st.error(
                     "A Matrícula é obrigatória."
                 )
 
-            elif not municipio.strip() or not bairro.strip():
+            elif (
+                not municipio.strip()
+                or not bairro.strip()
+            ):
+
                 st.error(
                     "Município e Bairro são obrigatórios."
                 )
 
-            elif lat_n is None or lon_n is None:
+            elif (
+                lat_n is None
+                or lon_n is None
+            ):
+
                 st.error(
-                    "Coordenadas inválidas. Verifique os valores de Latitude e Longitude."
+                    "Coordenadas inválidas. "
+                    "Verifique os valores de Latitude "
+                    "e Longitude."
                 )
 
             else:
+
                 novo_id = adicionar_ponto(
                     matricula.strip(),
                     municipio.strip(),
@@ -810,12 +990,15 @@ def modal_novo_ponto():
                     lat_n,
                     lon_n,
                     pressao,
-                    data_para_str(data_cadastro),
+                    data_para_str(
+                        data_cadastro
+                    ),
                     observacao.strip()
                 )
 
                 st.success(
-                    f"Ponto cadastrado com sucesso! ID: {novo_id}"
+                    f"Ponto cadastrado com sucesso! "
+                    f"ID: {novo_id}"
                 )
 
                 st.session_state.clicked_lat = None
@@ -825,7 +1008,9 @@ def modal_novo_ponto():
 
 
 @st.dialog("✏️ Editar Ponto")
-def modal_editar_ponto(id_registro: str):
+def modal_editar_ponto(
+    id_registro: str
+):
 
     df_all = carregar_dados()
 
@@ -838,15 +1023,19 @@ def modal_editar_ponto(id_registro: str):
         reg_edit = df_edit_busca.iloc[0]
 
         try:
+
             data_parsed = datetime.strptime(
                 str(reg_edit["Data"]),
                 "%d/%m/%Y"
             ).date()
 
         except ValueError:
+
             data_parsed = hoje
 
-        with st.form("form_edicao_modal"):
+        with st.form(
+            "form_edicao_modal"
+        ):
 
             data_e = st.date_input(
                 "Data do Registro",
@@ -856,34 +1045,44 @@ def modal_editar_ponto(id_registro: str):
 
             matricula_e = st.text_input(
                 "Matrícula *",
-                value=str(reg_edit["Matricula"])
+                value=str(
+                    reg_edit["Matricula"]
+                )
             )
 
             municipio_e = st.text_input(
                 "Município *",
-                value=str(reg_edit["Municipio"])
+                value=str(
+                    reg_edit["Municipio"]
+                )
             )
 
             bairro_e = st.text_input(
                 "Bairro *",
-                value=str(reg_edit["Bairro"])
+                value=str(
+                    reg_edit["Bairro"]
+                )
             )
 
             c1, c2 = st.columns(2)
 
             with c1:
+
                 lat_e = st.text_input(
                     "Latitude *",
                     value=str(
-                        reg_edit["Latitude"] or LAT_BASE
+                        reg_edit["Latitude"]
+                        or LAT_BASE
                     )
                 )
 
             with c2:
+
                 lon_e = st.text_input(
                     "Longitude *",
                     value=str(
-                        reg_edit["Longitude"] or LON_BASE
+                        reg_edit["Longitude"]
+                        or LON_BASE
                     )
                 )
 
@@ -891,7 +1090,9 @@ def modal_editar_ponto(id_registro: str):
                 "Pressão (MCA) *",
                 format="%.2f",
                 value=float(
-                    reg_edit["Pressao_MCA"] or 0.0
+                    reg_edit[
+                        "Pressao_MCA"
+                    ] or 0.0
                 ),
                 min_value=0.0,
                 step=0.1
@@ -899,12 +1100,15 @@ def modal_editar_ponto(id_registro: str):
 
             observacao_e = st.text_input(
                 "Observação",
-                value=str(reg_edit["Observacao"])
+                value=str(
+                    reg_edit["Observacao"]
+                )
             )
 
             col_salvar, col_canc = st.columns(2)
 
             with col_salvar:
+
                 salvar_edicao = st.form_submit_button(
                     "💾 Salvar",
                     type="primary",
@@ -912,6 +1116,7 @@ def modal_editar_ponto(id_registro: str):
                 )
 
             with col_canc:
+
                 cancelar_edicao = st.form_submit_button(
                     "❌ Cancelar",
                     use_container_width=True
@@ -930,16 +1135,25 @@ def modal_editar_ponto(id_registro: str):
                 )
 
                 if not matricula_e.strip():
+
                     st.error(
                         "A Matrícula é obrigatória."
                     )
 
-                elif not municipio_e.strip() or not bairro_e.strip():
+                elif (
+                    not municipio_e.strip()
+                    or not bairro_e.strip()
+                ):
+
                     st.error(
                         "Município e Bairro são obrigatórios."
                     )
 
-                elif lat_n is None or lon_n is None:
+                elif (
+                    lat_n is None
+                    or lon_n is None
+                ):
+
                     st.error(
                         "Coordenadas inválidas."
                     )
@@ -957,23 +1171,29 @@ def modal_editar_ponto(id_registro: str):
                         data_para_str(data_e),
                         observacao_e.strip()
                     ):
+
                         st.success(
                             "Atualizado com sucesso!"
                         )
+
                         st.rerun()
 
             if cancelar_edicao:
                 st.rerun()
 
     else:
-        st.warning("Registro não encontrado.")
+
+        st.warning(
+            "Registro não encontrado."
+        )
 
 
 @st.dialog("📋 Pré-visualização da Planilha")
 def modal_previa_upload():
 
     st.write(
-        f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente_bp}**"
+        f"Arquivo carregado: "
+        f"**{st.session_state.nome_arquivo_pendente_bp}**"
     )
 
     df_preview = pd.DataFrame(
@@ -1008,7 +1228,8 @@ def modal_previa_upload():
     )
 
     st.info(
-        f"Total de registros válidos prontos para envio: **{len(df_preview)}**"
+        f"Total de registros válidos "
+        f"prontos para envio: **{len(df_preview)}**"
     )
 
     col_btn1, col_btn2 = st.columns(2)
@@ -1022,8 +1243,10 @@ def modal_previa_upload():
         ):
 
             with st.spinner(
-                "Enviando registros com segurança para o Google Sheets..."
+                "Enviando registros com segurança "
+                "para o Google Sheets..."
             ):
+
                 qtd_inserida = adicionar_lote_seguro(
                     st.session_state.dados_upload_pendentes_bp
                 )
@@ -1033,12 +1256,18 @@ def modal_previa_upload():
             st.session_state.file_uploader_key_bp += 1
 
             if qtd_inserida > 0:
+
                 st.success(
-                    f"✅ {qtd_inserida} novos registros importados com sucesso!"
+                    f"✅ {qtd_inserida} novos registros "
+                    f"importados com sucesso!"
                 )
+
             else:
+
                 st.info(
-                    "ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita."
+                    "ℹ️ Todos os registros da planilha "
+                    "já existiam no sistema. "
+                    "Nenhuma duplicação foi feita."
                 )
 
             time.sleep(1)
@@ -1050,9 +1279,11 @@ def modal_previa_upload():
             "Cancelar",
             use_container_width=True
         ):
+
             st.session_state.dados_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
+
             st.rerun()
 
 
@@ -1061,17 +1292,25 @@ def modal_previa_upload():
 # ============================================================
 with st.sidebar:
 
-    st.markdown("### 💧 COI - Monitoramento")
-    st.caption("Baixa Pressão • Tempo Real")
+    st.markdown(
+        "### 💧 COI - Monitoramento"
+    )
+
+    st.caption(
+        "Baixa Pressão • Tempo Real"
+    )
 
     # ========================================================
     # NOVO FILTRO POR PERÍODO
     # ========================================================
-    st.markdown("#### 📅 Selecionar Período")
+    st.markdown(
+        "#### 📅 Selecionar Período"
+    )
 
     c_data_ini, c_data_fim = st.columns(2)
 
     with c_data_ini:
+
         data_inicial = st.date_input(
             "Data inicial",
             value=st.session_state.data_inicial_selecionada,
@@ -1080,6 +1319,7 @@ with st.sidebar:
         )
 
     with c_data_fim:
+
         data_final = st.date_input(
             "Data final",
             value=st.session_state.data_final_selecionada,
@@ -1091,20 +1331,30 @@ with st.sidebar:
     st.session_state.data_final_selecionada = data_final
 
     if data_inicial > data_final:
+
         st.error(
-            "A data inicial não pode ser maior que a data final."
+            "A data inicial não pode ser maior "
+            "que a data final."
         )
+
         periodo_valido = False
+
     else:
+
         periodo_valido = True
 
         if data_inicial == data_final:
+
             st.success(
-                f"Exibindo dados de **{data_para_str(data_inicial)}**"
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}**"
             )
+
         else:
+
             st.info(
-                f"Exibindo dados de **{data_para_str(data_inicial)}** "
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}** "
                 f"a **{data_para_str(data_final)}**"
             )
 
@@ -1113,7 +1363,9 @@ with st.sidebar:
     # ========================================================
     # FILTROS
     # ========================================================
-    st.markdown("#### 🔍 Filtros")
+    st.markdown(
+        "#### 🔍 Filtros"
+    )
 
     df_all = carregar_dados()
 
@@ -1127,21 +1379,53 @@ with st.sidebar:
 
         df_data = df_all[
             (
-                df_all["DataObjFiltro"].dt.date >= data_inicial
+                df_all["DataObjFiltro"].dt.date
+                >= data_inicial
             )
             &
             (
-                df_all["DataObjFiltro"].dt.date <= data_final
+                df_all["DataObjFiltro"].dt.date
+                <= data_final
             )
         ].copy()
 
     else:
+
         df_data = (
             df_all.copy()
             if not df_all.empty
             else df_all
         )
 
+    # ========================================================
+    # FILTRO POR MATRÍCULA
+    # ========================================================
+    matriculas_opts = (
+        ["Todas"]
+        + sorted(
+            [
+                str(v).strip()
+                for v in df_data[
+                    "Matricula"
+                ]
+                .dropna()
+                .unique()
+                if str(v).strip()
+            ]
+        )
+        if not df_data.empty
+        else ["Todas"]
+    )
+
+    matricula_sel = st.selectbox(
+        "Matrícula",
+        matriculas_opts,
+        key="filtro_matricula"
+    )
+
+    # ========================================================
+    # FILTRO POR MUNICÍPIO
+    # ========================================================
     municipios_opts = (
         ["Todos"]
         + sorted(
@@ -1160,9 +1444,17 @@ with st.sidebar:
         key="filtro_municipio"
     )
 
+    # ========================================================
+    # FILTRO POR BAIRRO
+    # ========================================================
     bairros_base = (
-        df_data[df_data["Municipio"] == mun_sel]
-        if mun_sel != "Todos" and not df_data.empty
+        df_data[
+            df_data["Municipio"] == mun_sel
+        ]
+        if (
+            mun_sel != "Todos"
+            and not df_data.empty
+        )
         else df_data
     )
 
@@ -1184,6 +1476,9 @@ with st.sidebar:
         key="filtro_bairro"
     )
 
+    # ========================================================
+    # FILTRO POR PRESSÃO
+    # ========================================================
     faixa_sel = st.selectbox(
         "Faixa de Pressão",
         [
@@ -1201,7 +1496,9 @@ with st.sidebar:
     # ========================================================
     # AÇÕES E DADOS
     # ========================================================
-    st.markdown("#### ➕ Ações e Dados")
+    st.markdown(
+        "#### ➕ Ações e Dados"
+    )
 
     if st.button(
         "Adicionar Novo Ponto",
@@ -1213,12 +1510,17 @@ with st.sidebar:
     arquivo_upload = st.file_uploader(
         "📂 Enviar Planilha (XLSX/CSV)",
         type=["xlsx", "csv"],
-        key=f"upload_baixa_pressao_{st.session_state.file_uploader_key_bp}"
+        key=(
+            f"upload_baixa_pressao_"
+            f"{st.session_state.file_uploader_key_bp}"
+        )
     )
 
     df_modelo = pd.DataFrame(
         [{
-            "Data": datetime.now().strftime("%d/%m/%Y"),
+            "Data": datetime.now().strftime(
+                "%d/%m/%Y"
+            ),
             "Matricula": "123456789",
             "Municipio": "Teresina",
             "Bairro": "Centro",
@@ -1245,6 +1547,7 @@ with st.sidebar:
         output_modelo,
         engine="openpyxl"
     ) as writer:
+
         df_modelo.to_excel(
             writer,
             index=False,
@@ -1254,8 +1557,14 @@ with st.sidebar:
     st.download_button(
         label="📥 Baixar Planilha Modelo",
         data=output_modelo.getvalue(),
-        file_name="modelo_importacao_baixa_pressao.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        file_name=(
+            "modelo_importacao_"
+            "baixa_pressao.xlsx"
+        ),
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
         use_container_width=True
     )
 
@@ -1268,10 +1577,19 @@ with st.sidebar:
 
             try:
 
-                if arquivo_upload.name.endswith(".csv"):
-                    df_up = pd.read_csv(arquivo_upload)
+                if arquivo_upload.name.endswith(
+                    ".csv"
+                ):
+
+                    df_up = pd.read_csv(
+                        arquivo_upload
+                    )
+
                 else:
-                    df_up = pd.read_excel(arquivo_upload)
+
+                    df_up = pd.read_excel(
+                        arquivo_upload
+                    )
 
                 lote_para_enviar = []
 
@@ -1279,14 +1597,21 @@ with st.sidebar:
 
                     raw_data = row.get(
                         "Data",
-                        row.get("date", "")
+                        row.get(
+                            "date",
+                            ""
+                        )
                     )
 
-                    data_val = normalizar_data(raw_data)
+                    data_val = normalizar_data(
+                        raw_data
+                    )
 
                     if not data_val:
+
                         data_val = data_para_str(
-                            st.session_state.data_final_selecionada
+                            st.session_state
+                            .data_final_selecionada
                         )
 
                     matricula = str(
@@ -1322,7 +1647,9 @@ with st.sidebar:
                     lat_val = normalizar_coordenada(
                         row.get(
                             "Latitude",
-                            row.get("Lat")
+                            row.get(
+                                "Lat"
+                            )
                         ),
                         "lat"
                     )
@@ -1330,7 +1657,9 @@ with st.sidebar:
                     lon_val = normalizar_coordenada(
                         row.get(
                             "Longitude",
-                            row.get("Lon")
+                            row.get(
+                                "Lon"
+                            )
                         ),
                         "lon"
                     )
@@ -1365,6 +1694,7 @@ with st.sidebar:
                         and lat_val is not None
                         and lon_val is not None
                     ):
+
                         lote_para_enviar.append([
                             gerar_id(),
                             data_val,
@@ -1388,20 +1718,27 @@ with st.sidebar:
                     )
 
                 else:
+
                     st.warning(
                         "⚠️ Nenhum registro válido encontrado. "
                         "Verifique se os nomes das colunas são: "
-                        "Data, Matricula, Municipio, Bairro, Latitude, "
-                        "Longitude, Pressao_MCA, Observacao e se a Matrícula "
-                        "está preenchida."
+                        "Data, Matricula, Municipio, Bairro, "
+                        "Latitude, Longitude, Pressao_MCA, "
+                        "Observacao e se a Matrícula está preenchida."
                     )
 
             except Exception as e:
+
                 st.error(
                     f"❌ Erro ao processar arquivo: {e}"
                 )
 
-    if st.session_state.dados_upload_pendentes_bp is not None:
+    if (
+        st.session_state
+        .dados_upload_pendentes_bp
+        is not None
+    ):
+
         modal_previa_upload()
 
     st.divider()
@@ -1409,7 +1746,9 @@ with st.sidebar:
     # ========================================================
     # EXPORTAÇÃO
     # ========================================================
-    st.markdown("#### 📥 Exportar Dados")
+    st.markdown(
+        "#### 📥 Exportar Dados"
+    )
 
     if not df_all.empty:
 
@@ -1419,6 +1758,7 @@ with st.sidebar:
             output,
             engine="openpyxl"
         ) as writer:
+
             df_all.to_excel(
                 writer,
                 index=False,
@@ -1441,7 +1781,9 @@ with st.sidebar:
             use_container_width=True
         )
 
-        kml_string = gerar_kml(df_all)
+        kml_string = gerar_kml(
+            df_all
+        )
 
         st.download_button(
             label="🗺️ Baixar Mapa (KML/KMZ)",
@@ -1459,15 +1801,24 @@ with st.sidebar:
     # ========================================================
     # ATUALIZAÇÃO
     # ========================================================
-    st.markdown("#### ⏱️ Atualização")
+    st.markdown(
+        "#### ⏱️ Atualização"
+    )
 
     intervalo = st.select_slider(
         "Intervalo (segundos)",
-        options=[0, 15, 30, 60, 120],
+        options=[
+            0,
+            15,
+            30,
+            60,
+            120
+        ],
         value=30
     )
 
     if intervalo > 0:
+
         st_autorefresh(
             interval=intervalo * 1000,
             key="autorefresh"
@@ -1484,7 +1835,10 @@ with st.sidebar:
         "🏠 Voltar ao Menu Principal",
         use_container_width=True
     ):
-        st.switch_page("app.py")
+
+        st.switch_page(
+            "app.py"
+        )
 
     st.divider()
 
@@ -1584,12 +1938,17 @@ st.title(
 if periodo_valido:
 
     if data_inicial == data_final:
+
         st.caption(
-            f"Visualizando: **{data_para_str(data_inicial)}**"
+            f"Visualizando: "
+            f"**{data_para_str(data_inicial)}**"
         )
+
     else:
+
         st.caption(
-            f"Visualizando de **{data_para_str(data_inicial)}** "
+            f"Visualizando de "
+            f"**{data_para_str(data_inicial)}** "
             f"a **{data_para_str(data_final)}**"
         )
 
@@ -1608,31 +1967,63 @@ if not df.empty and periodo_valido:
 
     df_filtrado = df[
         (
-            df["DataObjFiltro"].dt.date >= data_inicial
+            df["DataObjFiltro"].dt.date
+            >= data_inicial
         )
         &
         (
-            df["DataObjFiltro"].dt.date <= data_final
+            df["DataObjFiltro"].dt.date
+            <= data_final
         )
     ].copy()
 
 else:
+
     df_filtrado = (
         df.copy()
         if not df.empty
         else df.copy()
     )
 
+
+# ============================================================
+# FILTRO POR MATRÍCULA
+# ============================================================
+if matricula_sel != "Todas":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Matricula"]
+        .astype(str)
+        .str.strip()
+        == matricula_sel
+    ]
+
+
+# ============================================================
+# FILTRO POR MUNICÍPIO
+# ============================================================
 if mun_sel != "Todos":
+
     df_filtrado = df_filtrado[
-        df_filtrado["Municipio"] == mun_sel
+        df_filtrado["Municipio"]
+        == mun_sel
     ]
 
+
+# ============================================================
+# FILTRO POR BAIRRO
+# ============================================================
 if bairro_sel != "Todos":
+
     df_filtrado = df_filtrado[
-        df_filtrado["Bairro"] == bairro_sel
+        df_filtrado["Bairro"]
+        == bairro_sel
     ]
 
+
+# ============================================================
+# FILTRO POR PRESSÃO
+# ============================================================
 if faixa_sel == "Sem Pressão (0 MCA)":
 
     df_filtrado = df_filtrado[
@@ -1651,7 +2042,7 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
         )
     ]
 
-elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
+elif faixa_sel == "Em Atenção (> 5 e ≤ 15 MCA)":
 
     df_filtrado = df_filtrado[
         (
@@ -1675,7 +2066,9 @@ elif faixa_sel == "Alta Pressão (> 15 MCA)":
 # ============================================================
 if not df_filtrado.empty:
 
-    total = len(df_filtrado)
+    total = len(
+        df_filtrado
+    )
 
     sem_pressao = len(
         df_filtrado[
@@ -1731,7 +2124,7 @@ if not df_filtrado.empty:
     )
 
     k4.metric(
-        "Em Atenção (> 5 e ≤ 10 MCA)",
+        "Em Atenção (> 5 e ≤ 15 MCA)",
         em_atencao
     )
 
@@ -1743,8 +2136,10 @@ if not df_filtrado.empty:
 else:
 
     if periodo_valido:
+
         st.info(
-            "Nenhum ponto registrado no período e filtros selecionados."
+            "Nenhum ponto registrado no período "
+            "e filtros selecionados."
         )
 
 
@@ -1753,9 +2148,13 @@ st.divider()
 # ============================================================
 # MAPA
 # ============================================================
-st.subheader("🗺️ Mapa de Baixa Pressão")
+st.subheader(
+    "🗺️ Mapa de Baixa Pressão"
+)
 
-c_map1, c_map2, c_map3 = st.columns([2, 2, 2])
+c_map1, c_map2, c_map3 = st.columns(
+    [2, 2, 2]
+)
 
 with c_map1:
 
@@ -1853,17 +2252,25 @@ else:
 if not df_filtrado.empty:
 
     validos = df_filtrado.dropna(
-        subset=["Latitude", "Longitude"]
+        subset=[
+            "Latitude",
+            "Longitude"
+        ]
     )
 
     for _, row in validos.iterrows():
 
-        pressao = row["Pressao_MCA"]
+        pressao = row[
+            "Pressao_MCA"
+        ]
+
         obs = str(
             row["Observacao"]
         ).strip()
 
-        classificacao, cor = classificar_pressao(pressao)
+        classificacao, cor = classificar_pressao(
+            pressao
+        )
 
         obs_tooltip_text = (
             f" | Obs: {obs}"
@@ -1895,11 +2302,10 @@ if not df_filtrado.empty:
         )
 
         popup += (
-            f"<br><b>Classificação:</b> {classificacao}"
+            f"<br><b>Classificação:</b> "
+            f"{classificacao}"
         )
 
-        # Marcador em formato de "pin" de localização, mantendo
-        # as cores exatas definidas para cada faixa de pressão.
         marker_html = f"""
 <div style="width:33px;height:42px;display:flex;align-items:flex-start;justify-content:center;">
     <svg width="33" height="42" viewBox="0 0 24 30" xmlns="http://www.w3.org/2000/svg">
@@ -1928,6 +2334,8 @@ if not df_filtrado.empty:
             tooltip=tooltip_str
         ).add_to(m)
 
+        # IMPORTANTE:
+        # Matrícula NÃO é adicionada ao rótulo do mapa.
         if mostrar_rotulos:
 
             obs_rotulo_html = (
@@ -2084,7 +2492,9 @@ map_data = st_folium(
     m,
     width="100%",
     height=520,
-    returned_objects=["last_clicked"],
+    returned_objects=[
+        "last_clicked"
+    ],
     key="mapa_principal"
 )
 
@@ -2095,7 +2505,9 @@ if (
     and map_data.get("last_clicked")
 ):
 
-    clicked = map_data["last_clicked"]
+    clicked = map_data[
+        "last_clicked"
+    ]
 
     if clicked:
 
@@ -2117,7 +2529,9 @@ st.divider()
 # ============================================================
 # TABELA
 # ============================================================
-st.subheader("📋 Registro de Pontos")
+st.subheader(
+    "📋 Registro de Pontos"
+)
 
 if not df_filtrado.empty:
 
@@ -2153,10 +2567,16 @@ if not df_filtrado.empty:
     if linhas_selecionadas:
 
         idx = linhas_selecionadas[0]
-        registro = df_show.iloc[idx]
-        id_sel = str(registro["ID"])
 
-        col_a, col_b, _ = st.columns([1, 1, 4])
+        registro = df_show.iloc[idx]
+
+        id_sel = str(
+            registro["ID"]
+        )
+
+        col_a, col_b, _ = st.columns(
+            [1, 1, 4]
+        )
 
         with col_a:
 
@@ -2164,7 +2584,10 @@ if not df_filtrado.empty:
                 "✏️ Editar",
                 use_container_width=True
             ):
-                modal_editar_ponto(id_sel)
+
+                modal_editar_ponto(
+                    id_sel
+                )
 
         with col_b:
 
@@ -2173,7 +2596,9 @@ if not df_filtrado.empty:
                 use_container_width=True
             ):
 
-                if excluir_ponto(id_sel):
+                if excluir_ponto(
+                    id_sel
+                ):
 
                     st.success(
                         "Excluído com sucesso."
@@ -2198,7 +2623,9 @@ st.markdown(
 
 if not df_all.empty:
 
-    col_g1, col_g2, col_g3 = st.columns([2, 2, 2])
+    col_g1, col_g2, col_g3 = st.columns(
+        [2, 2, 2]
+    )
 
     with col_g1:
 
@@ -2244,13 +2671,15 @@ if not df_all.empty:
         if data_ini_analise > data_fim_analise:
 
             st.error(
-                "A data inicial não pode ser maior que a data final."
+                "A data inicial não pode ser maior "
+                "que a data final."
             )
 
         else:
 
             df_tendencia = df_all[
-                df_all["Bairro"] == bairro_analise
+                df_all["Bairro"]
+                == bairro_analise
             ].copy()
 
             if not df_tendencia.empty:
@@ -2261,18 +2690,25 @@ if not df_all.empty:
                     errors="coerce"
                 )
 
-                df_tendencia = df_tendencia.dropna(
-                    subset=["DataObj"]
+                df_tendencia = (
+                    df_tendencia
+                    .dropna(
+                        subset=["DataObj"]
+                    )
                 )
 
                 mask = (
                     (
-                        df_tendencia["DataObj"].dt.date
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
                         >= data_ini_analise
                     )
                     &
                     (
-                        df_tendencia["DataObj"].dt.date
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
                         <= data_fim_analise
                     )
                 )
@@ -2280,7 +2716,9 @@ if not df_all.empty:
                 df_tendencia = (
                     df_tendencia
                     .loc[mask]
-                    .sort_values("DataObj")
+                    .sort_values(
+                        "DataObj"
+                    )
                 )
 
                 if not df_tendencia.empty:
@@ -2324,7 +2762,9 @@ if not df_all.empty:
                         y=0,
                         line_dash="solid",
                         line_color=COR_SEM_PRESSAO,
-                        annotation_text="Sem Pressão (0 MCA)",
+                        annotation_text=(
+                            "Sem Pressão (0 MCA)"
+                        ),
                         annotation_position="bottom left"
                     )
 
@@ -2348,25 +2788,29 @@ if not df_all.empty:
                 else:
 
                     st.info(
-                        f"Nenhum registro encontrado para o bairro "
-                        f"**{bairro_analise}** no período selecionado."
+                        f"Nenhum registro encontrado "
+                        f"para o bairro "
+                        f"**{bairro_analise}** "
+                        f"no período selecionado."
                     )
 
             else:
 
                 st.warning(
-                    "Não há dados históricos suficientes para este bairro."
+                    "Não há dados históricos suficientes "
+                    "para este bairro."
                 )
 
     else:
 
         st.info(
-            "👆 Selecione um **Bairro** acima para carregar "
-            "a análise de tendência temporal."
+            "👆 Selecione um **Bairro** acima para "
+            "carregar a análise de tendência temporal."
         )
 
 else:
 
     st.info(
-        "Aguardando dados para gerar o gráfico de tendência."
+        "Aguardando dados para gerar o gráfico "
+        "de tendência."
     )
