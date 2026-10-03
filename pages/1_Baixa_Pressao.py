@@ -3474,12 +3474,26 @@ declutter_js = """
 
             if (posicao === "top") {
 
-                rotulo.style.left = "50%";
-                rotulo.style.top = "-80px";
-                rotulo.style.transform =
-                    "translate(-50%, -100%)";
+    rotulo.style.left = "50%";
 
-            }
+    if (
+        rotulo.classList.contains(
+            "bp-label-card-bairro"
+        )
+    ) {
+
+        rotulo.style.top = "-80px";
+
+    } else {
+
+        rotulo.style.top = "-80px";
+
+    }
+
+    rotulo.style.transform =
+        "translate(-50%, -100%)";
+
+}
 
             else if (posicao === "bottom") {
 
