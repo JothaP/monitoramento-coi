@@ -32,6 +32,7 @@ st.markdown(
         [data-testid="stSidebarNav"] {
             display: none !important;
         }
+
         [data-testid="stSidebar"] div.block-container {
             padding-top: 1.5rem;
             padding-bottom: 1rem;
@@ -48,8 +49,10 @@ from auth import verificar_autenticacao
 
 if not verificar_autenticacao():
     st.warning("Sessão não iniciada ou expirada.")
+
     if st.button("Ir para o Login"):
         st.switch_page("app.py")
+
     st.stop()
 
 # ============================================================
@@ -57,7 +60,11 @@ if not verificar_autenticacao():
 # ============================================================
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
-SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+
+SPREADSHEET_ID = (
+    "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+)
+
 COLUNAS_PADRAO = [
     "ID",
     "Data",
@@ -72,14 +79,21 @@ COLUNAS_PADRAO = [
 # ============================================================
 # CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
 # ============================================================
-COR_SEM_PRESSAO = "#FF5C60"       # RGB 255, 92, 96
-COR_BAIXA_PRESSAO = "#F8DC00"     # RGB 248, 220, 0
-COR_EM_ATENCAO = "#FF8FE1"        # RGB 255, 143, 225
-COR_ALTA_PRESSAO = "#A11FFF"      # RGB 161, 31, 255
+COR_SEM_PRESSAO = "#FF5C60"
+COR_BAIXA_PRESSAO = "#F8DC00"
+COR_EM_ATENCAO = "#FF8FE1"
+COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
-    """Retorna a classificação e a cor correspondente à pressão."""
+    """
+    Retorna a classificação e a cor correspondente à pressão.
+
+    IMPORTANTE:
+    A lógica de tratamento permanece em 15 MCA.
+    A alteração para 10 MCA solicitada pelo usuário é somente
+    visual na legenda da página.
+    """
     try:
         valor = float(pressao)
     except (TypeError, ValueError):
@@ -87,48 +101,69 @@ def classificar_pressao(pressao):
 
     if valor == 0:
         return "Sem Pressão", COR_SEM_PRESSAO
+
     elif valor <= 5:
         return "Baixa Pressão", COR_BAIXA_PRESSAO
+
     elif valor <= 15:
         return "Em Atenção", COR_EM_ATENCAO
+
     else:
         return "Alta Pressão", COR_ALTA_PRESSAO
+
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
 # ============================================================
 @st.cache_resource
 def conectar_google_sheets():
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
 
-    credentials_dict = json.loads(st.secrets["gcp_json"])
+    credentials_dict = json.loads(
+        st.secrets["gcp_json"]
+    )
+
     credentials = Credentials.from_service_account_info(
         credentials_dict,
         scopes=scopes
     )
 
     gc = gspread.authorize(credentials)
-    sh = gc.open_by_key(SPREADSHEET_ID)
+
+    sh = gc.open_by_key(
+        SPREADSHEET_ID
+    )
 
     try:
-        ws = sh.worksheet("baixa_pressao")
+
+        ws = sh.worksheet(
+            "baixa_pressao"
+        )
+
     except Exception:
+
         try:
+
             ws = sh.add_worksheet(
                 title="baixa_pressao",
                 rows="1000",
                 cols="20"
             )
+
         except Exception:
+
             ws = sh.sheet1
 
     try:
+
         dados_iniciais = ws.get_all_values()
 
         if not dados_iniciais or len(dados_iniciais) == 0:
+
             ws.append_row([
                 "ID",
                 "Data",
@@ -139,16 +174,23 @@ def conectar_google_sheets():
                 "Pressao_MCA",
                 "Observacao"
             ])
+
         else:
+
             cabecalho_atual = dados_iniciais[0]
 
             if (
                 len(cabecalho_atual) >= 7
                 and "Observacao" not in [
-                    str(c).strip() for c in cabecalho_atual
+                    str(c).strip()
+                    for c in cabecalho_atual
                 ]
             ):
-                ws.update("H1", [["Observacao"]])
+
+                ws.update(
+                    "H1",
+                    [["Observacao"]]
+                )
 
     except Exception:
         pass
@@ -157,56 +199,89 @@ def conectar_google_sheets():
 
 
 try:
+
     worksheet = conectar_google_sheets()
+
 except Exception as e:
-    st.error(f"❌ Erro ao conectar com o Google Sheets: {e}")
+
+    st.error(
+        f"❌ Erro ao conectar com o Google Sheets: {e}"
+    )
+
     st.stop()
+
 
 # ============================================================
 # FUNÇÕES DE DADOS E EXPORTAÇÃO
 # ============================================================
 def gerar_id() -> str:
-    return str(uuid.uuid4())[:8].upper()
+    return str(
+        uuid.uuid4()
+    )[:8].upper()
 
 
 def normalizar_coluna(nome: str) -> str:
-    nome = str(nome).strip().lower()
+
+    nome = str(
+        nome
+    ).strip().lower()
 
     mapeamento = {
+
         "id": "ID",
         "data": "Data",
+
         "municipio": "Municipio",
         "município": "Municipio",
+
         "bairro": "Bairro",
+
         "latitude": "Latitude",
         "lat": "Latitude",
+
         "longitude": "Longitude",
         "lon": "Longitude",
         "long": "Longitude",
+
         "pressao_mca": "Pressao_MCA",
         "pressão_mca": "Pressao_MCA",
         "pressao": "Pressao_MCA",
         "pressão": "Pressao_MCA",
         "mca": "Pressao_MCA",
+
         "observacao": "Observacao",
         "observação": "Observacao",
         "obs": "Observacao"
     }
 
-    return mapeamento.get(nome, nome.title())
+    return mapeamento.get(
+        nome,
+        nome.title()
+    )
 
 
-def parse_float(valor, default=None):
+def parse_float(
+    valor,
+    default=None
+):
+
     if valor is None or (
-        isinstance(valor, float) and pd.isna(valor)
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
         return default
 
-    if isinstance(valor, (int, float)):
+    if isinstance(
+        valor,
+        (int, float)
+    ):
         return float(valor)
 
     try:
-        texto = str(valor).strip()
+
+        texto = str(
+            valor
+        ).strip()
 
         if not texto or texto.lower() in (
             "nan",
@@ -216,10 +291,19 @@ def parse_float(valor, default=None):
         ):
             return default
 
-        texto = texto.replace(",", ".").replace(" ", "")
+        texto = (
+            texto
+            .replace(",", ".")
+            .replace(" ", "")
+        )
+
         return float(texto)
 
-    except (ValueError, TypeError):
+    except (
+        ValueError,
+        TypeError
+    ):
+
         return default
 
 
@@ -228,33 +312,52 @@ def normalizar_coordenada(
     tipo: str = "lat"
 ) -> Optional[float]:
 
-    num = parse_float(valor, default=None)
+    num = parse_float(
+        valor,
+        default=None
+    )
 
     if num is None:
         return None
 
-    if tipo == "lat" and not (-90.0 <= num <= 90.0):
+    if tipo == "lat" and not (
+        -90.0 <= num <= 90.0
+    ):
         return None
 
-    if tipo == "lon" and not (-180.0 <= num <= 180.0):
+    if tipo == "lon" and not (
+        -180.0 <= num <= 180.0
+    ):
         return None
 
     if num == 0.0:
         return None
 
-    return round(float(num), 6)
+    return round(
+        float(num),
+        6
+    )
 
 
 def normalizar_data(valor) -> str:
+
     if valor is None or (
-        isinstance(valor, float) and pd.isna(valor)
+        isinstance(valor, float)
+        and pd.isna(valor)
     ):
         return ""
 
-    if isinstance(valor, (datetime, date)):
-        return valor.strftime("%d/%m/%Y")
+    if isinstance(
+        valor,
+        (datetime, date)
+    ):
+        return valor.strftime(
+            "%d/%m/%Y"
+        )
 
-    texto = str(valor).strip()
+    texto = str(
+        valor
+    ).strip()
 
     if not texto or texto.lower() in (
         "nan",
@@ -273,29 +376,47 @@ def normalizar_data(valor) -> str:
     ]
 
     for fmt in formatos:
+
         try:
+
             return datetime.strptime(
                 texto,
                 fmt
-            ).strftime("%d/%m/%Y")
+            ).strftime(
+                "%d/%m/%Y"
+            )
+
         except ValueError:
+
             continue
 
     return texto
 
 
 def carregar_dados() -> pd.DataFrame:
+
     try:
+
         valores = worksheet.get_all_values()
 
     except Exception as e:
-        st.error(f"Erro ao ler planilha: {e}")
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+
+        st.error(
+            f"Erro ao ler planilha: {e}"
+        )
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
 
     if not valores or len(valores) < 2:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
 
     cabecalhos_raw = valores[0]
+
     cabecalhos = [
         normalizar_coluna(c)
         for c in cabecalhos_raw
@@ -304,26 +425,44 @@ def carregar_dados() -> pd.DataFrame:
     registros = []
 
     for linha in valores[1:]:
-        if not any(str(c).strip() for c in linha):
+
+        if not any(
+            str(c).strip()
+            for c in linha
+        ):
             continue
 
         reg = {}
 
-        for i, col in enumerate(cabecalhos):
-            reg[col] = linha[i] if i < len(linha) else ""
+        for i, col in enumerate(
+            cabecalhos
+        ):
+
+            reg[col] = (
+                linha[i]
+                if i < len(linha)
+                else ""
+            )
 
         registros.append(reg)
 
     if not registros:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
 
-    df = pd.DataFrame(registros)
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
+
+    df = pd.DataFrame(
+        registros
+    )
 
     for col in COLUNAS_PADRAO:
+
         if col not in df.columns:
             df[col] = ""
 
     def limpar_id(v):
+
         s = str(v).strip()
 
         if not s or s.lower() in (
@@ -331,13 +470,18 @@ def carregar_dados() -> pd.DataFrame:
             "none",
             ""
         ):
+
             return gerar_id()
 
         return s
 
-    df["ID"] = df["ID"].apply(limpar_id)
+    df["ID"] = df["ID"].apply(
+        limpar_id
+    )
 
-    df["Data"] = df["Data"].apply(normalizar_data)
+    df["Data"] = df["Data"].apply(
+        normalizar_data
+    )
 
     df["Municipio"] = (
         df["Municipio"]
@@ -360,16 +504,34 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
-    df["Latitude"] = df["Latitude"].apply(
-        lambda x: normalizar_coordenada(x, "lat")
+    df["Latitude"] = df[
+        "Latitude"
+    ].apply(
+        lambda x:
+        normalizar_coordenada(
+            x,
+            "lat"
+        )
     )
 
-    df["Longitude"] = df["Longitude"].apply(
-        lambda x: normalizar_coordenada(x, "lon")
+    df["Longitude"] = df[
+        "Longitude"
+    ].apply(
+        lambda x:
+        normalizar_coordenada(
+            x,
+            "lon"
+        )
     )
 
-    df["Pressao_MCA"] = df["Pressao_MCA"].apply(
-        lambda x: parse_float(x, 0.0) or 0.0
+    df["Pressao_MCA"] = df[
+        "Pressao_MCA"
+    ].apply(
+        lambda x:
+        parse_float(
+            x,
+            0.0
+        ) or 0.0
     )
 
     df["Observacao"] = (
@@ -383,10 +545,17 @@ def carregar_dados() -> pd.DataFrame:
     )
 
     df = df[
-        df["Bairro"].astype(str).str.strip() != ""
+        df["Bairro"]
+        .astype(str)
+        .str.strip()
+        != ""
     ]
 
-    return df[COLUNAS_PADRAO].reset_index(drop=True)
+    return df[
+        COLUNAS_PADRAO
+    ].reset_index(
+        drop=True
+    )
 
 
 def limpar_cache():
@@ -402,6 +571,7 @@ def adicionar_ponto(
     data_str: str,
     observacao: str
 ):
+
     novo_id = gerar_id()
 
     worksheet.append_row([
@@ -416,42 +586,58 @@ def adicionar_ponto(
     ])
 
     time.sleep(0.3)
+
     limpar_cache()
 
     return novo_id
 
 
-def adicionar_lote_seguro(linhas_dados: list):
+def adicionar_lote_seguro(
+    linhas_dados: list
+):
+
     if not linhas_dados:
         return 0
 
     df_atual = carregar_dados()
+
     chaves_existentes = set()
 
     if not df_atual.empty:
+
         for _, r in df_atual.iterrows():
 
             lat_f = (
                 f"{float(r['Latitude']):.6f}"
-                if pd.notnull(r["Latitude"])
+                if pd.notnull(
+                    r["Latitude"]
+                )
                 else ""
             )
 
             lon_f = (
                 f"{float(r['Longitude']):.6f}"
-                if pd.notnull(r["Longitude"])
+                if pd.notnull(
+                    r["Longitude"]
+                )
                 else ""
             )
 
             chave = (
                 str(r["Data"]).strip(),
-                str(r["Municipio"]).strip().lower(),
-                str(r["Bairro"]).strip().lower(),
+                str(
+                    r["Municipio"]
+                ).strip().lower(),
+                str(
+                    r["Bairro"]
+                ).strip().lower(),
                 lat_f,
                 lon_f
             )
 
-            chaves_existentes.add(chave)
+            chaves_existentes.add(
+                chave
+            )
 
     linhas_novas = []
 
@@ -468,23 +654,40 @@ def adicionar_lote_seguro(linhas_dados: list):
             obs_val
         ) = linha
 
-        lat_f = f"{float(lat_val):.6f}"
-        lon_f = f"{float(lon_val):.6f}"
+        lat_f = (
+            f"{float(lat_val):.6f}"
+        )
+
+        lon_f = (
+            f"{float(lon_val):.6f}"
+        )
 
         chave_nova = (
             str(d_val).strip(),
-            str(mun_val).strip().lower(),
-            str(bair_val).strip().lower(),
+            str(
+                mun_val
+            ).strip().lower(),
+            str(
+                bair_val
+            ).strip().lower(),
             lat_f,
             lon_f
         )
 
         if chave_nova not in chaves_existentes:
-            linhas_novas.append(linha)
-            chaves_existentes.add(chave_nova)
+
+            linhas_novas.append(
+                linha
+            )
+
+            chaves_existentes.add(
+                chave_nova
+            )
 
     if linhas_novas:
+
         dados_formatados = [
+
             [
                 str(i),
                 str(d),
@@ -495,6 +698,7 @@ def adicionar_lote_seguro(linhas_dados: list):
                 float(p),
                 str(o)
             ]
+
             for (
                 i,
                 d,
@@ -513,9 +717,12 @@ def adicionar_lote_seguro(linhas_dados: list):
         )
 
         time.sleep(0.3)
+
         limpar_cache()
 
-        return len(linhas_novas)
+        return len(
+            linhas_novas
+        )
 
     return 0
 
@@ -532,7 +739,10 @@ def atualizar_ponto(
 ) -> bool:
 
     try:
-        celula = worksheet.find(str(id_registro))
+
+        celula = worksheet.find(
+            str(id_registro)
+        )
 
         if celula is None:
             return False
@@ -554,67 +764,116 @@ def atualizar_ponto(
         )
 
         time.sleep(0.3)
+
         limpar_cache()
 
         return True
 
     except Exception as e:
-        st.error(f"Erro ao atualizar: {e}")
+
+        st.error(
+            f"Erro ao atualizar: {e}"
+        )
+
         return False
 
 
-def excluir_ponto(id_registro: str) -> bool:
+def excluir_ponto(
+    id_registro: str
+) -> bool:
+
     try:
-        celula = worksheet.find(str(id_registro))
+
+        celula = worksheet.find(
+            str(id_registro)
+        )
 
         if celula is None:
             return False
 
-        worksheet.delete_rows(celula.row)
+        worksheet.delete_rows(
+            celula.row
+        )
 
         time.sleep(0.3)
+
         limpar_cache()
 
         return True
 
     except Exception:
+
         return False
 
 
-def data_para_str(d: date) -> str:
-    return d.strftime("%d/%m/%Y")
+def data_para_str(
+    d: date
+) -> str:
+
+    return d.strftime(
+        "%d/%m/%Y"
+    )
 
 
 def gerar_kml(df):
+
     kml = simplekml.Kml()
 
     for _, row in df.iterrows():
 
-        lat = row.get("Latitude")
-        lon = row.get("Longitude")
+        lat = row.get(
+            "Latitude"
+        )
+
+        lon = row.get(
+            "Longitude"
+        )
 
         if pd.notnull(lat) and pd.notnull(lon):
+
             try:
+
                 obs_text = (
-                    f"\nObservação: {row.get('Observacao', '')}"
-                    if str(row.get("Observacao", "")).strip()
+                    f"\nObservação: "
+                    f"{row.get('Observacao', '')}"
+                    if str(
+                        row.get(
+                            "Observacao",
+                            ""
+                        )
+                    ).strip()
                     else ""
                 )
 
                 kml.newpoint(
-                    name=str(row.get("ID", "Ponto")),
+                    name=str(
+                        row.get(
+                            "ID",
+                            "Ponto"
+                        )
+                    ),
                     description=(
-                        f"Município: {row.get('Municipio', '')}\n"
-                        f"Bairro: {row.get('Bairro', '')}\n"
-                        f"Pressão: {row.get('Pressao_MCA', '')} MCA"
+                        f"Município: "
+                        f"{row.get('Municipio', '')}\n"
+                        f"Bairro: "
+                        f"{row.get('Bairro', '')}\n"
+                        f"Pressão: "
+                        f"{row.get('Pressao_MCA', '')} MCA"
                         f"{obs_text}"
                     ),
                     coords=[
-                        (float(lon), float(lat))
+                        (
+                            float(lon),
+                            float(lat)
+                        )
                     ]
                 )
 
-            except (ValueError, TypeError):
+            except (
+                ValueError,
+                TypeError
+            ):
+
                 continue
 
     return kml.kml()
@@ -648,6 +907,7 @@ if "nome_arquivo_pendente_bp" not in st.session_state:
 
 if "file_uploader_key_bp" not in st.session_state:
     st.session_state.file_uploader_key_bp = 0
+
 
 # ============================================================
 # DIALOGS
@@ -691,12 +951,14 @@ def modal_novo_ponto():
         c1, c2 = st.columns(2)
 
         with c1:
+
             lat = st.text_input(
                 "Latitude * (aceita vírgula ou ponto)",
                 value=str(lat_default)
             )
 
         with c2:
+
             lon = st.text_input(
                 "Longitude * (aceita vírgula ou ponto)",
                 value=str(lon_default)
@@ -723,27 +985,40 @@ def modal_novo_ponto():
 
         if enviado:
 
-            lat_n = normalizar_coordenada(lat, "lat")
-            lon_n = normalizar_coordenada(lon, "lon")
+            lat_n = normalizar_coordenada(
+                lat,
+                "lat"
+            )
+
+            lon_n = normalizar_coordenada(
+                lon,
+                "lon"
+            )
 
             if not municipio.strip() or not bairro.strip():
+
                 st.error(
                     "Município e Bairro são obrigatórios."
                 )
 
             elif lat_n is None or lon_n is None:
+
                 st.error(
-                    "Coordenadas inválidas. Verifique os valores de Latitude e Longitude."
+                    "Coordenadas inválidas. "
+                    "Verifique os valores de Latitude e Longitude."
                 )
 
             else:
+
                 novo_id = adicionar_ponto(
                     municipio.strip(),
                     bairro.strip(),
                     lat_n,
                     lon_n,
                     pressao,
-                    data_para_str(data_cadastro),
+                    data_para_str(
+                        data_cadastro
+                    ),
                     observacao.strip()
                 )
 
@@ -758,7 +1033,9 @@ def modal_novo_ponto():
 
 
 @st.dialog("✏️ Editar Ponto")
-def modal_editar_ponto(id_registro: str):
+def modal_editar_ponto(
+    id_registro: str
+):
 
     df_all = carregar_dados()
 
@@ -771,15 +1048,19 @@ def modal_editar_ponto(id_registro: str):
         reg_edit = df_edit_busca.iloc[0]
 
         try:
+
             data_parsed = datetime.strptime(
                 str(reg_edit["Data"]),
                 "%d/%m/%Y"
             ).date()
 
         except ValueError:
+
             data_parsed = hoje
 
-        with st.form("form_edicao_modal"):
+        with st.form(
+            "form_edicao_modal"
+        ):
 
             data_e = st.date_input(
                 "Data do Registro",
@@ -789,29 +1070,37 @@ def modal_editar_ponto(id_registro: str):
 
             municipio_e = st.text_input(
                 "Município *",
-                value=str(reg_edit["Municipio"])
+                value=str(
+                    reg_edit["Municipio"]
+                )
             )
 
             bairro_e = st.text_input(
                 "Bairro *",
-                value=str(reg_edit["Bairro"])
+                value=str(
+                    reg_edit["Bairro"]
+                )
             )
 
             c1, c2 = st.columns(2)
 
             with c1:
+
                 lat_e = st.text_input(
                     "Latitude *",
                     value=str(
-                        reg_edit["Latitude"] or LAT_BASE
+                        reg_edit["Latitude"]
+                        or LAT_BASE
                     )
                 )
 
             with c2:
+
                 lon_e = st.text_input(
                     "Longitude *",
                     value=str(
-                        reg_edit["Longitude"] or LON_BASE
+                        reg_edit["Longitude"]
+                        or LON_BASE
                     )
                 )
 
@@ -819,7 +1108,8 @@ def modal_editar_ponto(id_registro: str):
                 "Pressão (MCA) *",
                 format="%.2f",
                 value=float(
-                    reg_edit["Pressao_MCA"] or 0.0
+                    reg_edit["Pressao_MCA"]
+                    or 0.0
                 ),
                 min_value=0.0,
                 step=0.1
@@ -827,12 +1117,15 @@ def modal_editar_ponto(id_registro: str):
 
             observacao_e = st.text_input(
                 "Observação",
-                value=str(reg_edit["Observacao"])
+                value=str(
+                    reg_edit["Observacao"]
+                )
             )
 
             col_salvar, col_canc = st.columns(2)
 
             with col_salvar:
+
                 salvar_edicao = st.form_submit_button(
                     "💾 Salvar",
                     type="primary",
@@ -840,6 +1133,7 @@ def modal_editar_ponto(id_registro: str):
                 )
 
             with col_canc:
+
                 cancelar_edicao = st.form_submit_button(
                     "❌ Cancelar",
                     use_container_width=True
@@ -857,12 +1151,17 @@ def modal_editar_ponto(id_registro: str):
                     "lon"
                 )
 
-                if not municipio_e.strip() or not bairro_e.strip():
+                if (
+                    not municipio_e.strip()
+                    or not bairro_e.strip()
+                ):
+
                     st.error(
                         "Município e Bairro são obrigatórios."
                     )
 
                 elif lat_n is None or lon_n is None:
+
                     st.error(
                         "Coordenadas inválidas."
                     )
@@ -876,26 +1175,34 @@ def modal_editar_ponto(id_registro: str):
                         lat_n,
                         lon_n,
                         pressao_e,
-                        data_para_str(data_e),
+                        data_para_str(
+                            data_e
+                        ),
                         observacao_e.strip()
                     ):
+
                         st.success(
                             "Atualizado com sucesso!"
                         )
+
                         st.rerun()
 
             if cancelar_edicao:
                 st.rerun()
 
     else:
-        st.warning("Registro não encontrado.")
+
+        st.warning(
+            "Registro não encontrado."
+        )
 
 
 @st.dialog("📋 Pré-visualização da Planilha")
 def modal_previa_upload():
 
     st.write(
-        f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente_bp}**"
+        f"Arquivo carregado: "
+        f"**{st.session_state.nome_arquivo_pendente_bp}**"
     )
 
     df_preview = pd.DataFrame(
@@ -928,7 +1235,8 @@ def modal_previa_upload():
     )
 
     st.info(
-        f"Total de registros válidos prontos para envio: **{len(df_preview)}**"
+        f"Total de registros válidos prontos para envio: "
+        f"**{len(df_preview)}**"
     )
 
     col_btn1, col_btn2 = st.columns(2)
@@ -944,6 +1252,7 @@ def modal_previa_upload():
             with st.spinner(
                 "Enviando registros com segurança para o Google Sheets..."
             ):
+
                 qtd_inserida = adicionar_lote_seguro(
                     st.session_state.dados_upload_pendentes_bp
                 )
@@ -953,15 +1262,20 @@ def modal_previa_upload():
             st.session_state.file_uploader_key_bp += 1
 
             if qtd_inserida > 0:
+
                 st.success(
                     f"✅ {qtd_inserida} novos registros importados com sucesso!"
                 )
+
             else:
+
                 st.info(
-                    "ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita."
+                    "ℹ️ Todos os registros da planilha já existiam "
+                    "no sistema. Nenhuma duplicação foi feita."
                 )
 
             time.sleep(1)
+
             st.rerun()
 
     with col_btn2:
@@ -970,9 +1284,11 @@ def modal_previa_upload():
             "Cancelar",
             use_container_width=True
         ):
+
             st.session_state.dados_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
+
             st.rerun()
 
 
@@ -981,17 +1297,25 @@ def modal_previa_upload():
 # ============================================================
 with st.sidebar:
 
-    st.markdown("### 💧 COI - Monitoramento")
-    st.caption("Baixa Pressão • Tempo Real")
+    st.markdown(
+        "### 💧 COI - Monitoramento"
+    )
+
+    st.caption(
+        "Baixa Pressão • Tempo Real"
+    )
 
     # ========================================================
     # NOVO FILTRO POR PERÍODO
     # ========================================================
-    st.markdown("#### 📅 Selecionar Período")
+    st.markdown(
+        "#### 📅 Selecionar Período"
+    )
 
     c_data_ini, c_data_fim = st.columns(2)
 
     with c_data_ini:
+
         data_inicial = st.date_input(
             "Data inicial",
             value=st.session_state.data_inicial_selecionada,
@@ -1000,6 +1324,7 @@ with st.sidebar:
         )
 
     with c_data_fim:
+
         data_final = st.date_input(
             "Data final",
             value=st.session_state.data_final_selecionada,
@@ -1011,20 +1336,29 @@ with st.sidebar:
     st.session_state.data_final_selecionada = data_final
 
     if data_inicial > data_final:
+
         st.error(
             "A data inicial não pode ser maior que a data final."
         )
+
         periodo_valido = False
+
     else:
+
         periodo_valido = True
 
         if data_inicial == data_final:
+
             st.success(
-                f"Exibindo dados de **{data_para_str(data_inicial)}**"
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}**"
             )
+
         else:
+
             st.info(
-                f"Exibindo dados de **{data_para_str(data_inicial)}** "
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}** "
                 f"a **{data_para_str(data_final)}**"
             )
 
@@ -1033,7 +1367,9 @@ with st.sidebar:
     # ========================================================
     # FILTROS
     # ========================================================
-    st.markdown("#### 🔍 Filtros")
+    st.markdown(
+        "#### 🔍 Filtros"
+    )
 
     df_all = carregar_dados()
 
@@ -1047,15 +1383,18 @@ with st.sidebar:
 
         df_data = df_all[
             (
-                df_all["DataObjFiltro"].dt.date >= data_inicial
+                df_all["DataObjFiltro"].dt.date
+                >= data_inicial
             )
             &
             (
-                df_all["DataObjFiltro"].dt.date <= data_final
+                df_all["DataObjFiltro"].dt.date
+                <= data_final
             )
         ].copy()
 
     else:
+
         df_data = (
             df_all.copy()
             if not df_all.empty
@@ -1064,7 +1403,8 @@ with st.sidebar:
 
     municipios_opts = (
         ["Todos"]
-        + sorted(
+        +
+        sorted(
             df_data["Municipio"]
             .dropna()
             .unique()
@@ -1081,14 +1421,20 @@ with st.sidebar:
     )
 
     bairros_base = (
-        df_data[df_data["Municipio"] == mun_sel]
-        if mun_sel != "Todos" and not df_data.empty
+        df_data[
+            df_data["Municipio"] == mun_sel
+        ]
+        if (
+            mun_sel != "Todos"
+            and not df_data.empty
+        )
         else df_data
     )
 
     bairros_opts = (
         ["Todos"]
-        + sorted(
+        +
+        sorted(
             bairros_base["Bairro"]
             .dropna()
             .unique()
@@ -1121,24 +1467,35 @@ with st.sidebar:
     # ========================================================
     # AÇÕES E DADOS
     # ========================================================
-    st.markdown("#### ➕ Ações e Dados")
+    st.markdown(
+        "#### ➕ Ações e Dados"
+    )
 
     if st.button(
         "Adicionar Novo Ponto",
         type="primary",
         use_container_width=True
     ):
+
         modal_novo_ponto()
 
     arquivo_upload = st.file_uploader(
         "📂 Enviar Planilha (XLSX/CSV)",
-        type=["xlsx", "csv"],
-        key=f"upload_baixa_pressao_{st.session_state.file_uploader_key_bp}"
+        type=[
+            "xlsx",
+            "csv"
+        ],
+        key=(
+            f"upload_baixa_pressao_"
+            f"{st.session_state.file_uploader_key_bp}"
+        )
     )
 
     df_modelo = pd.DataFrame(
         [{
-            "Data": datetime.now().strftime("%d/%m/%Y"),
+            "Data": datetime.now().strftime(
+                "%d/%m/%Y"
+            ),
             "Municipio": "Teresina",
             "Bairro": "Centro",
             "Latitude": -5.0892,
@@ -1155,6 +1512,7 @@ with st.sidebar:
         output_modelo,
         engine="openpyxl"
     ) as writer:
+
         df_modelo.to_excel(
             writer,
             index=False,
@@ -1164,8 +1522,14 @@ with st.sidebar:
     st.download_button(
         label="📥 Baixar Planilha Modelo",
         data=output_modelo.getvalue(),
-        file_name="modelo_importacao_baixa_pressao.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        file_name=(
+            "modelo_importacao_"
+            "baixa_pressao.xlsx"
+        ),
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
         use_container_width=True
     )
 
@@ -1178,10 +1542,19 @@ with st.sidebar:
 
             try:
 
-                if arquivo_upload.name.endswith(".csv"):
-                    df_up = pd.read_csv(arquivo_upload)
+                if arquivo_upload.name.endswith(
+                    ".csv"
+                ):
+
+                    df_up = pd.read_csv(
+                        arquivo_upload
+                    )
+
                 else:
-                    df_up = pd.read_excel(arquivo_upload)
+
+                    df_up = pd.read_excel(
+                        arquivo_upload
+                    )
 
                 lote_para_enviar = []
 
@@ -1189,14 +1562,21 @@ with st.sidebar:
 
                     raw_data = row.get(
                         "Data",
-                        row.get("date", "")
+                        row.get(
+                            "date",
+                            ""
+                        )
                     )
 
-                    data_val = normalizar_data(raw_data)
+                    data_val = normalizar_data(
+                        raw_data
+                    )
 
                     if not data_val:
+
                         data_val = data_para_str(
-                            st.session_state.data_final_selecionada
+                            st.session_state
+                            .data_final_selecionada
                         )
 
                     muni = str(
@@ -1261,6 +1641,7 @@ with st.sidebar:
                         and lat_val is not None
                         and lon_val is not None
                     ):
+
                         lote_para_enviar.append([
                             gerar_id(),
                             data_val,
@@ -1283,6 +1664,7 @@ with st.sidebar:
                     )
 
                 else:
+
                     st.warning(
                         "⚠️ Nenhum registro válido encontrado. "
                         "Verifique se os nomes das colunas são: "
@@ -1291,11 +1673,16 @@ with st.sidebar:
                     )
 
             except Exception as e:
+
                 st.error(
                     f"❌ Erro ao processar arquivo: {e}"
                 )
 
-    if st.session_state.dados_upload_pendentes_bp is not None:
+    if (
+        st.session_state.dados_upload_pendentes_bp
+        is not None
+    ):
+
         modal_previa_upload()
 
     st.divider()
@@ -1303,7 +1690,9 @@ with st.sidebar:
     # ========================================================
     # EXPORTAÇÃO
     # ========================================================
-    st.markdown("#### 📥 Exportar Dados")
+    st.markdown(
+        "#### 📥 Exportar Dados"
+    )
 
     if not df_all.empty:
 
@@ -1313,6 +1702,7 @@ with st.sidebar:
             output,
             engine="openpyxl"
         ) as writer:
+
             df_all.to_excel(
                 writer,
                 index=False,
@@ -1335,7 +1725,9 @@ with st.sidebar:
             use_container_width=True
         )
 
-        kml_string = gerar_kml(df_all)
+        kml_string = gerar_kml(
+            df_all
+        )
 
         st.download_button(
             label="🗺️ Baixar Mapa (KML/KMZ)",
@@ -1353,15 +1745,24 @@ with st.sidebar:
     # ========================================================
     # ATUALIZAÇÃO
     # ========================================================
-    st.markdown("#### ⏱️ Atualização")
+    st.markdown(
+        "#### ⏱️ Atualização"
+    )
 
     intervalo = st.select_slider(
         "Intervalo (segundos)",
-        options=[0, 15, 30, 60, 120],
+        options=[
+            0,
+            15,
+            30,
+            60,
+            120
+        ],
         value=30
     )
 
     if intervalo > 0:
+
         st_autorefresh(
             interval=intervalo * 1000,
             key="autorefresh"
@@ -1378,11 +1779,15 @@ with st.sidebar:
         "🏠 Voltar ao Menu Principal",
         use_container_width=True
     ):
-        st.switch_page("app.py")
+
+        st.switch_page(
+            "app.py"
+        )
 
     st.divider()
 
     if "modo_escuro_bp" not in st.session_state:
+
         st.session_state.modo_escuro_bp = False
 
     modo_escuro_bp = st.toggle(
@@ -1391,7 +1796,9 @@ with st.sidebar:
         key="toggle_modo_escuro_bp",
     )
 
-    st.session_state.modo_escuro_bp = modo_escuro_bp
+    st.session_state.modo_escuro_bp = (
+        modo_escuro_bp
+    )
 
     if modo_escuro_bp:
 
@@ -1478,16 +1885,22 @@ st.title(
 if periodo_valido:
 
     if data_inicial == data_final:
+
         st.caption(
-            f"Visualizando: **{data_para_str(data_inicial)}**"
+            f"Visualizando: "
+            f"**{data_para_str(data_inicial)}**"
         )
+
     else:
+
         st.caption(
-            f"Visualizando de **{data_para_str(data_inicial)}** "
+            f"Visualizando de "
+            f"**{data_para_str(data_inicial)}** "
             f"a **{data_para_str(data_final)}**"
         )
 
 df = carregar_dados()
+
 
 # ============================================================
 # FILTRO PRINCIPAL POR INTERVALO
@@ -1502,30 +1915,38 @@ if not df.empty and periodo_valido:
 
     df_filtrado = df[
         (
-            df["DataObjFiltro"].dt.date >= data_inicial
+            df["DataObjFiltro"].dt.date
+            >= data_inicial
         )
         &
         (
-            df["DataObjFiltro"].dt.date <= data_final
+            df["DataObjFiltro"].dt.date
+            <= data_final
         )
     ].copy()
 
 else:
+
     df_filtrado = (
         df.copy()
         if not df.empty
         else df.copy()
     )
 
+
 if mun_sel != "Todos":
+
     df_filtrado = df_filtrado[
         df_filtrado["Municipio"] == mun_sel
     ]
 
+
 if bairro_sel != "Todos":
+
     df_filtrado = df_filtrado[
         df_filtrado["Bairro"] == bairro_sel
     ]
+
 
 if faixa_sel == "Sem Pressão (0 MCA)":
 
@@ -1569,7 +1990,9 @@ elif faixa_sel == "Alta Pressão (> 15 MCA)":
 # ============================================================
 if not df_filtrado.empty:
 
-    total = len(df_filtrado)
+    total = len(
+        df_filtrado
+    )
 
     sem_pressao = len(
         df_filtrado[
@@ -1637,19 +2060,27 @@ if not df_filtrado.empty:
 else:
 
     if periodo_valido:
+
         st.info(
-            "Nenhum ponto registrado no período e filtros selecionados."
+            "Nenhum ponto registrado no período "
+            "e filtros selecionados."
         )
 
 
 st.divider()
 
+
 # ============================================================
 # MAPA
 # ============================================================
-st.subheader("🗺️ Mapa de Baixa Pressão")
+st.subheader(
+    "🗺️ Mapa de Baixa Pressão"
+)
 
-c_map1, c_map2, c_map3, c_map4 = st.columns([2, 2.2, 2, 2])
+c_map1, c_map2, c_map3, c_map4 = st.columns(
+    [2, 2.2, 2, 2]
+)
+
 
 with c_map1:
 
@@ -1662,6 +2093,7 @@ with c_map1:
         ],
         key="seletor_tipo_mapa_bp"
     )
+
 
 with c_map2:
 
@@ -1678,17 +2110,22 @@ with c_map2:
         )
     )
 
+
 with c_map3:
 
-    # Os rótulos são aplicados somente à visão consolidada por bairro.
     mostrar_rotulos = st.checkbox(
         "Exibir rótulos dos bairros",
         value=True,
-        disabled=(modo_visualizacao != "Por bairro"),
+        disabled=(
+            modo_visualizacao
+            != "Por bairro"
+        ),
         help=(
-            "Mostra o bairro, a pressão média e a quantidade de medições."
+            "Mostra o bairro, a pressão média "
+            "e a quantidade de medições."
         )
     )
+
 
 with c_map4:
 
@@ -1765,24 +2202,13 @@ else:
 # ============================================================
 # VISUALIZAÇÃO DOS MARCADORES
 # ============================================================
-#
-# O usuário pode alternar entre duas leituras do mapa:
-#
-# 1) Por bairro:
-#    visão gerencial, com um pin maior representando o conjunto de
-#    medições de cada bairro dentro dos filtros selecionados.
-#
-# 2) Medições individuais:
-#    visão operacional, com um marcador menor para cada medição.
-#
-# O agrupamento por bairro utiliza Município + Bairro para evitar que
-# bairros com o mesmo nome em municípios diferentes sejam misturados.
-# ============================================================
-
 if not df_filtrado.empty:
 
     validos = df_filtrado.dropna(
-        subset=["Latitude", "Longitude"]
+        subset=[
+            "Latitude",
+            "Longitude"
+        ]
     ).copy()
 
     if not validos.empty:
@@ -1806,29 +2232,58 @@ if not df_filtrado.empty:
             errors="coerce"
         ).fillna(0.0)
 
+        # ====================================================
+        # MEDIÇÕES INDIVIDUAIS
+        # ====================================================
         if modo_visualizacao == "Medições individuais":
 
-            # ----------------------------------------------------
-            # VISÃO OPERACIONAL — MEDIÇÕES INDIVIDUAIS
-            # ----------------------------------------------------
             for _, registro in validos.iterrows():
 
-                pressao = float(registro["Pressao_MCA"])
-                classificacao, cor = classificar_pressao(pressao)
-
-                pressao_formatada = (
-                    f"{pressao:.2f}".replace(".", ",")
+                pressao = float(
+                    registro["Pressao_MCA"]
                 )
 
-                bairro = str(registro["Bairro"])
-                municipio = str(registro["Municipio"])
-                data_registro = str(registro["Data"])
-                observacao = str(registro.get("Observacao", ""))
+                classificacao, cor = classificar_pressao(
+                    pressao
+                )
+
+                pressao_formatada = (
+                    f"{pressao:.2f}"
+                    .replace(".", ",")
+                )
+
+                bairro = str(
+                    registro["Bairro"]
+                )
+
+                municipio = str(
+                    registro["Municipio"]
+                )
+
+                data_registro = str(
+                    registro["Data"]
+                )
+
+                observacao = str(
+                    registro.get(
+                        "Observacao",
+                        ""
+                    )
+                )
 
                 observacao_html = ""
-                if observacao and observacao.lower() != "nan":
+
+                if (
+                    observacao
+                    and observacao.lower() != "nan"
+                ):
+
                     observacao_html = f"""
-                    <div style="margin-top:9px;font-size:11px;color:#475569;">
+                    <div style="
+                        margin-top:9px;
+                        font-size:11px;
+                        color:#475569;
+                    ">
                         <b>Observação:</b> {observacao}
                     </div>
                     """
@@ -1839,6 +2294,7 @@ if not df_filtrado.empty:
                     font-family:Arial,sans-serif;
                     color:#111827;
                 ">
+
                     <div style="
                         font-size:16px;
                         font-weight:800;
@@ -1862,12 +2318,21 @@ if not df_filtrado.empty:
                         border-left:4px solid {cor};
                         margin-bottom:10px;
                     ">
-                        <div style="font-size:10px;color:#64748b;">
+
+                        <div style="
+                            font-size:10px;
+                            color:#64748b;
+                        ">
                             PRESSÃO MEDIDA
                         </div>
-                        <div style="font-size:20px;font-weight:800;">
+
+                        <div style="
+                            font-size:20px;
+                            font-weight:800;
+                        ">
                             {pressao_formatada} MCA
                         </div>
+
                     </div>
 
                     <div style="
@@ -1881,6 +2346,7 @@ if not df_filtrado.empty:
                     </div>
 
                     {observacao_html}
+
                 </div>
                 """
 
@@ -1889,7 +2355,7 @@ if not df_filtrado.empty:
                         float(registro["Latitude"]),
                         float(registro["Longitude"])
                     ],
-                    radius=6,
+                    radius=5,
                     color="#FFFFFF",
                     weight=2,
                     fill=True,
@@ -1906,30 +2372,49 @@ if not df_filtrado.empty:
                     )
                 ).add_to(m)
 
+        # ====================================================
+        # POR BAIRRO
+        # ====================================================
         else:
 
-            # ----------------------------------------------------
-            # VISÃO GERENCIAL — AGRUPAMENTO POR BAIRRO
-            # ----------------------------------------------------
             grupos_bairro = validos.groupby(
-                ["Municipio", "Bairro"],
+                [
+                    "Municipio",
+                    "Bairro"
+                ],
                 dropna=False,
                 sort=True
             )
 
-            for (municipio, bairro), grupo in grupos_bairro:
+            for (
+                municipio,
+                bairro
+            ), grupo in grupos_bairro:
 
-                quantidade = int(len(grupo))
-                media = float(grupo["Pressao_MCA"].mean())
+                quantidade = int(
+                    len(grupo)
+                )
 
-                # O ponto do bairro é posicionado no centro médio das
-                # coordenadas das medições pertencentes ao grupo.
-                lat_bairro = float(grupo["Latitude"].mean())
-                lon_bairro = float(grupo["Longitude"].mean())
+                media = float(
+                    grupo["Pressao_MCA"].mean()
+                )
 
-                classificacao, cor = classificar_pressao(media)
+                lat_bairro = float(
+                    grupo["Latitude"].mean()
+                )
 
-                media_formatada = f"{media:.2f}".replace(".", ",")
+                lon_bairro = float(
+                    grupo["Longitude"].mean()
+                )
+
+                classificacao, cor = classificar_pressao(
+                    media
+                )
+
+                media_formatada = (
+                    f"{media:.2f}"
+                    .replace(".", ",")
+                )
 
                 texto_medicoes = (
                     "medição"
@@ -1940,20 +2425,40 @@ if not df_filtrado.empty:
                 # ------------------------------------------------
                 # DETALHES DO POPUP
                 # ------------------------------------------------
-                pressao_min = float(grupo["Pressao_MCA"].min())
-                pressao_max = float(grupo["Pressao_MCA"].max())
+                pressao_min = float(
+                    grupo["Pressao_MCA"].min()
+                )
 
-                min_formatado = f"{pressao_min:.2f}".replace(".", ",")
-                max_formatado = f"{pressao_max:.2f}".replace(".", ",")
+                pressao_max = float(
+                    grupo["Pressao_MCA"].max()
+                )
+
+                min_formatado = (
+                    f"{pressao_min:.2f}"
+                    .replace(".", ",")
+                )
+
+                max_formatado = (
+                    f"{pressao_max:.2f}"
+                    .replace(".", ",")
+                )
 
                 linhas_medicoes = []
 
                 for _, registro in grupo.sort_values(
-                    by=["Data", "ID"],
-                    ascending=[False, True]
+                    by=[
+                        "Data",
+                        "ID"
+                    ],
+                    ascending=[
+                        False,
+                        True
+                    ]
                 ).iterrows():
 
-                    pressao_reg = float(registro["Pressao_MCA"])
+                    pressao_reg = float(
+                        registro["Pressao_MCA"]
+                    )
 
                     pressao_reg_formatada = (
                         f"{pressao_reg:.2f}"
@@ -1967,18 +2472,22 @@ if not df_filtrado.empty:
                             border-bottom:1px solid #e5e7eb;
                             font-size:11px;
                         ">
+
                             <div style="
                                 font-weight:700;
                                 color:#111827;
                             ">
-                                {registro['Data']} · {pressao_reg_formatada} MCA
+                                {registro['Data']} ·
+                                {pressao_reg_formatada} MCA
                             </div>
+
                             <div style="
                                 color:#6b7280;
                                 margin-top:2px;
                             ">
                                 ID: {registro['ID']}
                             </div>
+
                         </div>
                         """
                     )
@@ -1988,6 +2497,7 @@ if not df_filtrado.empty:
                 )
 
                 if quantidade > 12:
+
                     detalhes_medicoes += (
                         f"""
                         <div style="
@@ -1996,7 +2506,8 @@ if not df_filtrado.empty:
                             font-size:10px;
                             text-align:center;
                         ">
-                            + {quantidade - 12} medições adicionais
+                            + {quantidade - 12}
+                            medições adicionais
                         </div>
                         """
                     )
@@ -2007,6 +2518,7 @@ if not df_filtrado.empty:
                     font-family:Arial,sans-serif;
                     color:#111827;
                 ">
+
                     <div style="
                         font-size:17px;
                         font-weight:800;
@@ -2028,6 +2540,7 @@ if not df_filtrado.empty:
                         gap:6px;
                         margin-bottom:10px;
                     ">
+
                         <div style="
                             flex:1;
                             background:#f8fafc;
@@ -2035,12 +2548,21 @@ if not df_filtrado.empty:
                             padding:8px;
                             border-left:4px solid {cor};
                         ">
-                            <div style="font-size:10px;color:#64748b;">
+
+                            <div style="
+                                font-size:10px;
+                                color:#64748b;
+                            ">
                                 MÉDIA
                             </div>
-                            <div style="font-size:18px;font-weight:800;">
+
+                            <div style="
+                                font-size:18px;
+                                font-weight:800;
+                            ">
                                 {media_formatada} MCA
                             </div>
+
                         </div>
 
                         <div style="
@@ -2049,13 +2571,23 @@ if not df_filtrado.empty:
                             border-radius:8px;
                             padding:8px;
                         ">
-                            <div style="font-size:10px;color:#64748b;">
+
+                            <div style="
+                                font-size:10px;
+                                color:#64748b;
+                            ">
                                 MEDIÇÕES
                             </div>
-                            <div style="font-size:18px;font-weight:800;">
+
+                            <div style="
+                                font-size:18px;
+                                font-weight:800;
+                            ">
                                 {quantidade}
                             </div>
+
                         </div>
+
                     </div>
 
                     <div style="
@@ -2075,36 +2607,54 @@ if not df_filtrado.empty:
                     ">
                         {detalhes_medicoes}
                     </div>
+
                 </div>
                 """
 
-                # ------------------------------------------------
-                # MARCADOR PRINCIPAL DO BAIRRO
-                # ------------------------------------------------
+                # =================================================
+                # MARCADOR DO BAIRRO
+                # =================================================
                 if mostrar_rotulos:
 
+                    # O wrapper agora possui uma classe própria e
+                    # prioridade numérica baseada na quantidade de
+                    # medições do bairro.
+                    #
+                    # Isso será utilizado pelo algoritmo JS de
+                    # desobstrução dos rótulos.
                     marker_html = f"""
-                    <div style="
-                        position:relative;
-                        width:310px;
-                        height:72px;
-                        font-family:Arial,sans-serif;
-                        pointer-events:auto;
-                    ">
+                    <div
+                        class="bp-marker-wrapper"
+                        data-bp-priority="{quantidade}"
+                        style="
+                            position:relative;
+                            width:280px;
+                            height:66px;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
                         <!-- PIN -->
                         <div style="
                             position:absolute;
                             left:0;
                             top:3px;
-                            width:48px;
-                            height:60px;
+                            width:42px;
+                            height:54px;
                             z-index:2;
                         ">
-                            <svg width="48" height="60"
-                                 viewBox="0 0 48 60"
-                                 xmlns="http://www.w3.org/2000/svg"
-                                 style="display:block; overflow:visible;">
+
+                            <svg
+                                width="42"
+                                height="54"
+                                viewBox="0 0 48 60"
+                                xmlns="http://www.w3.org/2000/svg"
+                                style="
+                                    display:block;
+                                    overflow:visible;
+                                "
+                            >
 
                                 <path
                                     d="M24 2
@@ -2130,34 +2680,42 @@ if not df_filtrado.empty:
                                     r="4"
                                     fill="{cor}"
                                 />
+
                             </svg>
+
                         </div>
 
                         <!-- RÓTULO -->
-                        <div style="
-                            position:absolute;
-                            left:39px;
-                            top:0;
-                            width:260px;
-                            min-height:57px;
-                            background:rgba(255,255,255,0.97);
-                            border:1px solid #d7dee8;
-                            border-left:5px solid {cor};
-                            border-radius:9px;
-                            box-shadow:0 3px 12px rgba(15,23,42,0.22);
-                            padding:7px 11px 7px 13px;
-                            box-sizing:border-box;
-                            color:#111827;
-                        ">
+                        <div
+                            class="bp-label-card"
+                            style="
+                                position:absolute;
+                                left:34px;
+                                top:0;
+                                width:240px;
+                                min-height:52px;
+                                background:rgba(255,255,255,0.97);
+                                border:1px solid #d7dee8;
+                                border-left:4px solid {cor};
+                                border-radius:8px;
+                                box-shadow:
+                                    0 3px 12px
+                                    rgba(15,23,42,0.22);
+                                padding:
+                                    6px 9px 6px 11px;
+                                box-sizing:border-box;
+                                color:#111827;
+                            "
+                        >
 
                             <div style="
-                                font-size:13px;
+                                font-size:12px;
                                 font-weight:800;
                                 line-height:1.15;
                                 white-space:nowrap;
                                 overflow:hidden;
                                 text-overflow:ellipsis;
-                                padding-right:4px;
+                                padding-right:3px;
                             ">
                                 {bairro}
                             </div>
@@ -2165,46 +2723,69 @@ if not df_filtrado.empty:
                             <div style="
                                 display:flex;
                                 align-items:center;
-                                gap:8px;
-                                margin-top:5px;
-                                font-size:11px;
+                                gap:7px;
+                                margin-top:4px;
+                                font-size:10px;
                                 line-height:1.1;
                             ">
-                                <span style="font-weight:800;">
+
+                                <span style="
+                                    font-weight:800;
+                                ">
                                     {media_formatada} MCA
                                 </span>
 
                                 <span style="
                                     width:1px;
-                                    height:13px;
+                                    height:12px;
                                     background:#cbd5e1;
                                 "></span>
 
-                                <span style="color:#475569;">
-                                    {quantidade} {texto_medicoes}
+                                <span style="
+                                    color:#475569;
+                                ">
+                                    {quantidade}
+                                    {texto_medicoes}
                                 </span>
+
                             </div>
 
                         </div>
+
                     </div>
                     """
 
-                    icon_size = (310, 72)
-                    icon_anchor = (24, 58)
+                    icon_size = (
+                        280,
+                        66
+                    )
+
+                    icon_anchor = (
+                        21,
+                        52
+                    )
 
                 else:
 
-                    # Quando o usuário desabilita os rótulos, mantém-se
-                    # somente o pin maior no mapa.
+                    # ------------------------------------------------
+                    # SOMENTE PIN
+                    # ------------------------------------------------
                     marker_html = f"""
                     <div style="
-                        width:48px;
-                        height:60px;
+                        width:42px;
+                        height:54px;
                     ">
-                        <svg width="48" height="60"
-                             viewBox="0 0 48 60"
-                             xmlns="http://www.w3.org/2000/svg"
-                             style="display:block; overflow:visible;">
+
+                        <svg
+                            width="42"
+                            height="54"
+                            viewBox="0 0 48 60"
+                            xmlns="http://www.w3.org/2000/svg"
+                            style="
+                                display:block;
+                                overflow:visible;
+                            "
+                        >
 
                             <path
                                 d="M24 2
@@ -2230,12 +2811,21 @@ if not df_filtrado.empty:
                                 r="4"
                                 fill="{cor}"
                             />
+
                         </svg>
+
                     </div>
                     """
 
-                    icon_size = (48, 60)
-                    icon_anchor = (24, 58)
+                    icon_size = (
+                        42,
+                        54
+                    )
+
+                    icon_anchor = (
+                        21,
+                        52
+                    )
 
                 folium.map.Marker(
                     location=[
@@ -2246,7 +2836,9 @@ if not df_filtrado.empty:
                         html=marker_html,
                         icon_size=icon_size,
                         icon_anchor=icon_anchor,
-                        class_name="pressao-bairro-marker"
+                        class_name=(
+                            "pressao-bairro-marker"
+                        )
                     ),
                     popup=folium.Popup(
                         popup,
@@ -2254,16 +2846,310 @@ if not df_filtrado.empty:
                     ),
                     tooltip=(
                         f"{bairro} | "
-                        f"Média: {media_formatada} MCA | "
-                        f"{quantidade} {texto_medicoes}"
+                        f"Média: "
+                        f"{media_formatada} MCA | "
+                        f"{quantidade} "
+                        f"{texto_medicoes}"
                     )
                 ).add_to(m)
 
 
 # ============================================================
+# SISTEMA DE DESOBSTRUÇÃO DOS RÓTULOS
+# ============================================================
+#
+# Objetivo:
+#
+# - Evitar que os cards dos bairros se sobreponham.
+# - Dar prioridade aos bairros com maior quantidade de medições.
+# - Esconder apenas o rótulo conflitante.
+# - Manter o pin sempre visível.
+# - Recalcular depois de zoom/movimentação.
+#
+# O algoritmo trabalha na posição REAL dos elementos na tela,
+# portanto a decisão muda naturalmente conforme o usuário
+# movimenta ou aproxima/afasta o mapa.
+# ============================================================
+if (
+    modo_visualizacao == "Por bairro"
+    and mostrar_rotulos
+):
+
+    map_name = m.get_name()
+
+    declutter_js = f"""
+    <script>
+    (function() {{
+
+        var tentativas = 0;
+        var maxTentativas = 40;
+
+        function configurarDesobstrucao() {{
+
+            tentativas++;
+
+            if (
+                typeof {map_name} === "undefined"
+                || !{map_name}
+            ) {{
+
+                if (tentativas < maxTentativas) {{
+                    setTimeout(
+                        configurarDesobstrucao,
+                        150
+                    );
+                }}
+
+                return;
+            }}
+
+            var mapa = {map_name};
+
+            if (!mapa) {{
+                return;
+            }}
+
+            function caixasSeSobrepoem(
+                a,
+                b,
+                margem
+            ) {{
+
+                return !(
+                    a.right + margem < b.left ||
+                    a.left - margem > b.right ||
+                    a.bottom + margem < b.top ||
+                    a.top - margem > b.bottom
+                );
+            }}
+
+
+            function recalcularRotulos() {{
+
+                var elementos = Array.from(
+                    document.querySelectorAll(
+                        ".pressao-bairro-marker"
+                    )
+                );
+
+                var candidatos = [];
+
+                elementos.forEach(
+                    function(marker) {{
+
+                        var wrapper =
+                            marker.querySelector(
+                                ".bp-marker-wrapper"
+                            );
+
+                        var label =
+                            marker.querySelector(
+                                ".bp-label-card"
+                            );
+
+                        if (
+                            !wrapper
+                            || !label
+                        ) {{
+                            return;
+                        }}
+
+                        var prioridade = parseInt(
+                            wrapper.getAttribute(
+                                "data-bp-priority"
+                            ) || "0",
+                            10
+                        );
+
+                        candidatos.push({{
+                            wrapper: wrapper,
+                            label: label,
+                            prioridade: prioridade
+                        }});
+
+                    }}
+                );
+
+
+                /*
+                 * Maior quantidade de medições primeiro.
+                 * Em caso de empate, mantém a ordem original.
+                 */
+                candidatos.sort(
+                    function(a, b) {{
+                        return (
+                            b.prioridade
+                            - a.prioridade
+                        );
+                    }}
+                );
+
+
+                /*
+                 * Primeiro todos os rótulos ficam ocultos.
+                 * Usamos visibility, e não display:none,
+                 * para que o navegador continue calculando
+                 * corretamente o tamanho do card.
+                 */
+                candidatos.forEach(
+                    function(item) {{
+
+                        item.label.style.visibility =
+                            "hidden";
+
+                    }}
+                );
+
+
+                var exibidos = [];
+
+                /*
+                 * Pequena margem de segurança entre os cards.
+                 */
+                var margem = 6;
+
+
+                candidatos.forEach(
+                    function(item) {{
+
+                        var rect =
+                            item.label.getBoundingClientRect();
+
+                        var conflito = false;
+
+                        for (
+                            var i = 0;
+                            i < exibidos.length;
+                            i++
+                        ) {{
+
+                            if (
+                                caixasSeSobrepoem(
+                                    rect,
+                                    exibidos[i],
+                                    margem
+                                )
+                            ) {{
+
+                                conflito = true;
+                                break;
+
+                            }}
+
+                        }}
+
+
+                        if (!conflito) {{
+
+                            item.label.style.visibility =
+                                "visible";
+
+                            exibidos.push(rect);
+
+                        }} else {{
+
+                            /*
+                             * Somente o card desaparece.
+                             * O pin continua normalmente visível.
+                             */
+                            item.label.style.visibility =
+                                "hidden";
+
+                        }}
+
+                    }}
+                );
+
+            }
+
+
+            var recalculoAgendado = false;
+
+            function agendarRecalculo() {{
+
+                if (recalculoAgendado) {{
+                    return;
+                }}
+
+                recalculoAgendado = true;
+
+                setTimeout(
+                    function() {{
+
+                        recalculoAgendado = false;
+
+                        recalcularRotulos();
+
+                    }},
+                    80
+                );
+
+            }}
+
+
+            mapa.on(
+                "zoomend",
+                agendarRecalculo
+            );
+
+            mapa.on(
+                "moveend",
+                agendarRecalculo
+            );
+
+            mapa.on(
+                "resize",
+                agendarRecalculo
+            );
+
+
+            window.addEventListener(
+                "resize",
+                agendarRecalculo
+            );
+
+
+            /*
+             * O mapa precisa estar completamente renderizado
+             * antes da primeira leitura dos bounding boxes.
+             */
+            setTimeout(
+                recalcularRotulos,
+                100
+            );
+
+            setTimeout(
+                recalcularRotulos,
+                300
+            );
+
+            setTimeout(
+                recalcularRotulos,
+                700
+            );
+
+        }}
+
+
+        configurarDesobstrucao();
+
+    }})();
+    </script>
+    """
+
+    m.get_root().html.add_child(
+        Element(declutter_js)
+    )
+
+
+# ============================================================
 # LEGENDA DAS CORES
 # ============================================================
-
+#
+# ATENÇÃO:
+# A legenda abaixo é apenas apresentação visual.
+# A lógica interna continua usando 15 MCA.
+# ============================================================
 legend_html = f"""
 <div style="
     position: fixed;
@@ -2281,11 +3167,19 @@ legend_html = f"""
     width: 176px;
     color: #1f2937;
 ">
-    <div style="font-weight: 700; margin-bottom: 4px; color: #111827;">
+
+    <div style="
+        font-weight: 700;
+        margin-bottom: 4px;
+        color: #111827;
+    ">
         Pressão
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+    ">
+
         <span style="
             display:inline-block;
             width:9px;
@@ -2295,10 +3189,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
+
         Sem Pressão (0 MCA)
+
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+    ">
+
         <span style="
             display:inline-block;
             width:9px;
@@ -2308,10 +3207,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
+
         Baixa Pressão (&gt; 0 e ≤ 5 MCA)
+
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+    ">
+
         <span style="
             display:inline-block;
             width:9px;
@@ -2321,10 +3225,15 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
-        Em Atenção (&gt; 5 e ≤ 15 MCA)
+
+        Em Atenção (&gt; 5 e ≤ 10 MCA)
+
     </div>
 
-    <div style="white-space: nowrap;">
+    <div style="
+        white-space: nowrap;
+    ">
+
         <span style="
             display:inline-block;
             width:9px;
@@ -2334,17 +3243,26 @@ legend_html = f"""
             margin-right:5px;
             vertical-align:middle;
         "></span>
+
         Alta Pressão (&gt; 15 MCA)
+
     </div>
+
+</div>
 """
 
-m.get_root().html.add_child(Element(legend_html))
+m.get_root().html.add_child(
+    Element(legend_html)
+)
+
 
 map_data = st_folium(
     m,
     width="100%",
     height=520,
-    returned_objects=["last_clicked"],
+    returned_objects=[
+        "last_clicked"
+    ],
     key="mapa_principal"
 )
 
@@ -2352,10 +3270,14 @@ map_data = st_folium(
 if (
     st.session_state.modo_adicionar_mapa
     and map_data
-    and map_data.get("last_clicked")
+    and map_data.get(
+        "last_clicked"
+    )
 ):
 
-    clicked = map_data["last_clicked"]
+    clicked = map_data[
+        "last_clicked"
+    ]
 
     if clicked:
 
@@ -2374,10 +3296,13 @@ if (
 
 st.divider()
 
+
 # ============================================================
 # TABELA
 # ============================================================
-st.subheader("📋 Registro de Pontos")
+st.subheader(
+    "📋 Registro de Pontos"
+)
 
 if not df_filtrado.empty:
 
@@ -2392,7 +3317,9 @@ if not df_filtrado.empty:
             "Pressao_MCA",
             "Observacao"
         ]
-    ].reset_index(drop=True)
+    ].reset_index(
+        drop=True
+    )
 
     evento = st.dataframe(
         df_show,
@@ -2412,10 +3339,18 @@ if not df_filtrado.empty:
     if linhas_selecionadas:
 
         idx = linhas_selecionadas[0]
-        registro = df_show.iloc[idx]
-        id_sel = str(registro["ID"])
 
-        col_a, col_b, _ = st.columns([1, 1, 4])
+        registro = df_show.iloc[
+            idx
+        ]
+
+        id_sel = str(
+            registro["ID"]
+        )
+
+        col_a, col_b, _ = st.columns(
+            [1, 1, 4]
+        )
 
         with col_a:
 
@@ -2423,7 +3358,10 @@ if not df_filtrado.empty:
                 "✏️ Editar",
                 use_container_width=True
             ):
-                modal_editar_ponto(id_sel)
+
+                modal_editar_ponto(
+                    id_sel
+                )
 
         with col_b:
 
@@ -2432,7 +3370,9 @@ if not df_filtrado.empty:
                 use_container_width=True
             ):
 
-                if excluir_ponto(id_sel):
+                if excluir_ponto(
+                    id_sel
+                ):
 
                     st.success(
                         "Excluído com sucesso."
@@ -2457,12 +3397,16 @@ st.markdown(
 
 if not df_all.empty:
 
-    col_g1, col_g2, col_g3 = st.columns([2, 2, 2])
+    col_g1, col_g2, col_g3 = st.columns(
+        [2, 2, 2]
+    )
 
     with col_g1:
 
         data_inicio_padrao = (
-            hoje - timedelta(days=30)
+            hoje - timedelta(
+                days=30
+            )
         )
 
         data_ini_analise = st.date_input(
@@ -2494,7 +3438,9 @@ if not df_all.empty:
             "Selecione o Bairro",
             options=[
                 "Selecione..."
-            ] + bairros_disponiveis,
+            ]
+            +
+            bairros_disponiveis,
             key="analise_bairro"
         )
 
@@ -2503,13 +3449,15 @@ if not df_all.empty:
         if data_ini_analise > data_fim_analise:
 
             st.error(
-                "A data inicial não pode ser maior que a data final."
+                "A data inicial não pode ser maior "
+                "que a data final."
             )
 
         else:
 
             df_tendencia = df_all[
-                df_all["Bairro"] == bairro_analise
+                df_all["Bairro"]
+                == bairro_analise
             ].copy()
 
             if not df_tendencia.empty:
@@ -2520,18 +3468,25 @@ if not df_all.empty:
                     errors="coerce"
                 )
 
-                df_tendencia = df_tendencia.dropna(
-                    subset=["DataObj"]
+                df_tendencia = (
+                    df_tendencia
+                    .dropna(
+                        subset=["DataObj"]
+                    )
                 )
 
                 mask = (
                     (
-                        df_tendencia["DataObj"].dt.date
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
                         >= data_ini_analise
                     )
                     &
                     (
-                        df_tendencia["DataObj"].dt.date
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
                         <= data_fim_analise
                     )
                 )
@@ -2539,7 +3494,9 @@ if not df_all.empty:
                 df_tendencia = (
                     df_tendencia
                     .loc[mask]
-                    .sort_values("DataObj")
+                    .sort_values(
+                        "DataObj"
+                    )
                 )
 
                 if not df_tendencia.empty:
@@ -2564,7 +3521,8 @@ if not df_all.empty:
                         line_dash="dash",
                         line_color=COR_BAIXA_PRESSAO,
                         annotation_text=(
-                            "Limite: Baixa Pressão (5 MCA)"
+                            "Limite: "
+                            "Baixa Pressão (5 MCA)"
                         ),
                         annotation_position="top left"
                     )
@@ -2574,7 +3532,8 @@ if not df_all.empty:
                         line_dash="dash",
                         line_color=COR_ALTA_PRESSAO,
                         annotation_text=(
-                            "Limite: Alta Pressão (15 MCA)"
+                            "Limite: "
+                            "Alta Pressão (15 MCA)"
                         ),
                         annotation_position="top left"
                     )
@@ -2583,7 +3542,9 @@ if not df_all.empty:
                         y=0,
                         line_dash="solid",
                         line_color=COR_SEM_PRESSAO,
-                        annotation_text="Sem Pressão (0 MCA)",
+                        annotation_text=(
+                            "Sem Pressão (0 MCA)"
+                        ),
                         annotation_position="bottom left"
                     )
 
@@ -2607,25 +3568,29 @@ if not df_all.empty:
                 else:
 
                     st.info(
-                        f"Nenhum registro encontrado para o bairro "
-                        f"**{bairro_analise}** no período selecionado."
+                        f"Nenhum registro encontrado "
+                        f"para o bairro "
+                        f"**{bairro_analise}** "
+                        f"no período selecionado."
                     )
 
             else:
 
                 st.warning(
-                    "Não há dados históricos suficientes para este bairro."
+                    "Não há dados históricos suficientes "
+                    "para este bairro."
                 )
 
     else:
 
         st.info(
-            "👆 Selecione um **Bairro** acima para carregar "
-            "a análise de tendência temporal."
+            "👆 Selecione um **Bairro** acima para "
+            "carregar a análise de tendência temporal."
         )
 
 else:
 
     st.info(
-        "Aguardando dados para gerar o gráfico de tendência."
+        "Aguardando dados para gerar "
+        "o gráfico de tendência."
     )
