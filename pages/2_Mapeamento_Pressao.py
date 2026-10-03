@@ -56,7 +56,7 @@ if not verificar_autenticacao():
 # ============================================================
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
-SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+SPREADSHEET_ID = "1idCgabn5g5X48hmdE-gqWfrUKUf2XxWGB5M_yJFk0yM"
 COLUNAS_PADRAO = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]
 
 # ============================================================
