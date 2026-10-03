@@ -15,6 +15,8 @@ from typing import Optional
 import time
 import plotly.express as px
 from branca.element import Element
+from html import escape
+
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -42,6 +44,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # ============================================================
 # TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
@@ -54,6 +57,7 @@ if not verificar_autenticacao():
         st.switch_page("app.py")
 
     st.stop()
+
 
 # ============================================================
 # CONSTANTES
@@ -76,6 +80,7 @@ COLUNAS_PADRAO = [
     "Observacao"
 ]
 
+
 # ============================================================
 # CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
 # ============================================================
@@ -86,21 +91,28 @@ COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
+
     try:
         valor = float(pressao)
+
     except (TypeError, ValueError):
+
         valor = 0.0
 
     if valor == 0:
+
         return "Sem Pressão", COR_SEM_PRESSAO
 
     elif valor <= 5:
+
         return "Baixa Pressão", COR_BAIXA_PRESSAO
 
     elif valor <= 15:
+
         return "Em Atenção", COR_EM_ATENCAO
 
     else:
+
         return "Alta Pressão", COR_ALTA_PRESSAO
 
 
@@ -185,6 +197,7 @@ def conectar_google_sheets():
                 )
 
     except Exception:
+
         pass
 
     return ws
@@ -207,6 +220,7 @@ except Exception as e:
 # FUNÇÕES DE DADOS E EXPORTAÇÃO
 # ============================================================
 def gerar_id() -> str:
+
     return str(
         uuid.uuid4()
     )[:8].upper()
@@ -261,12 +275,14 @@ def parse_float(
         isinstance(valor, float)
         and pd.isna(valor)
     ):
+
         return default
 
     if isinstance(
         valor,
         (int, float)
     ):
+
         return float(valor)
 
     try:
@@ -281,6 +297,7 @@ def parse_float(
             "nat",
             ""
         ):
+
             return default
 
         texto = (
@@ -310,19 +327,23 @@ def normalizar_coordenada(
     )
 
     if num is None:
+
         return None
 
     if tipo == "lat" and not (
         -90.0 <= num <= 90.0
     ):
+
         return None
 
     if tipo == "lon" and not (
         -180.0 <= num <= 180.0
     ):
+
         return None
 
     if num == 0.0:
+
         return None
 
     return round(
@@ -337,12 +358,14 @@ def normalizar_data(valor) -> str:
         isinstance(valor, float)
         and pd.isna(valor)
     ):
+
         return ""
 
     if isinstance(
         valor,
         (datetime, date)
     ):
+
         return valor.strftime(
             "%d/%m/%Y"
         )
@@ -357,6 +380,7 @@ def normalizar_data(valor) -> str:
         "nat",
         ""
     ):
+
         return ""
 
     formatos = [
@@ -422,6 +446,7 @@ def carregar_dados() -> pd.DataFrame:
             str(c).strip()
             for c in linha
         ):
+
             continue
 
         reg = {}
@@ -451,6 +476,7 @@ def carregar_dados() -> pd.DataFrame:
     for col in COLUNAS_PADRAO:
 
         if col not in df.columns:
+
             df[col] = ""
 
     def limpar_id(v):
@@ -551,6 +577,7 @@ def carregar_dados() -> pd.DataFrame:
 
 
 def limpar_cache():
+
     st.cache_data.clear()
 
 
@@ -589,6 +616,7 @@ def adicionar_lote_seguro(
 ):
 
     if not linhas_dados:
+
         return 0
 
     df_atual = carregar_dados()
@@ -737,6 +765,7 @@ def atualizar_ponto(
         )
 
         if celula is None:
+
             return False
 
         linha = celula.row
@@ -781,6 +810,7 @@ def excluir_ponto(
         )
 
         if celula is None:
+
             return False
 
         worksheet.delete_rows(
@@ -877,27 +907,35 @@ def gerar_kml(df):
 hoje = date.today()
 
 if "data_inicial_selecionada" not in st.session_state:
+
     st.session_state.data_inicial_selecionada = hoje
 
 if "data_final_selecionada" not in st.session_state:
+
     st.session_state.data_final_selecionada = hoje
 
 if "clicked_lat" not in st.session_state:
+
     st.session_state.clicked_lat = None
 
 if "clicked_lon" not in st.session_state:
+
     st.session_state.clicked_lon = None
 
 if "modo_adicionar_mapa" not in st.session_state:
+
     st.session_state.modo_adicionar_mapa = False
 
 if "dados_upload_pendentes_bp" not in st.session_state:
+
     st.session_state.dados_upload_pendentes_bp = None
 
 if "nome_arquivo_pendente_bp" not in st.session_state:
+
     st.session_state.nome_arquivo_pendente_bp = None
 
 if "file_uploader_key_bp" not in st.session_state:
+
     st.session_state.file_uploader_key_bp = 0
 
 
@@ -1180,6 +1218,7 @@ def modal_editar_ponto(
                         st.rerun()
 
             if cancelar_edicao:
+
                 st.rerun()
 
     else:
@@ -1945,7 +1984,11 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
 
 elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
-    # Mantém 15 MCA na lógica de tratamento.
+    # ========================================================
+    # IMPORTANTE:
+    # O texto apresentado ao usuário permanece ≤ 10 MCA,
+    # mas a regra operacional continua sendo ≤ 15 MCA.
+    # ========================================================
     df_filtrado = df_filtrado[
         (
             df_filtrado["Pressao_MCA"] > 5
@@ -2262,7 +2305,7 @@ if not df_filtrado.empty:
                         font-size:11px;
                         color:#475569;
                     ">
-                        <b>Observação:</b> {observacao}
+                        <b>Observação:</b> {escape(observacao)}
                     </div>
                     """
 
@@ -2278,7 +2321,7 @@ if not df_filtrado.empty:
                         font-weight:800;
                         margin-bottom:2px;
                     ">
-                        {bairro}
+                        {escape(bairro)}
                     </div>
 
                     <div style="
@@ -2286,7 +2329,7 @@ if not df_filtrado.empty:
                         color:#6b7280;
                         margin-bottom:12px;
                     ">
-                        {municipio}
+                        {escape(municipio)}
                     </div>
 
                     <div style="
@@ -2319,8 +2362,8 @@ if not df_filtrado.empty:
                         line-height:1.55;
                     ">
                         <b>Classificação:</b> {classificacao}<br>
-                        <b>Data:</b> {data_registro}<br>
-                        <b>ID:</b> {registro['ID']}
+                        <b>Data:</b> {escape(data_registro)}<br>
+                        <b>ID:</b> {escape(str(registro['ID']))}
                     </div>
 
                     {observacao_html}
@@ -2418,6 +2461,17 @@ if not df_filtrado.empty:
                     .replace(".", ",")
                 )
 
+                bairro_html = escape(
+                    str(bairro)
+                )
+
+                municipio_html = escape(
+                    str(municipio)
+                )
+
+                # =================================================
+                # DETALHES DAS MEDIÇÕES
+                # =================================================
                 linhas_medicoes = []
 
                 for _, registro in grupo.sort_values(
@@ -2452,7 +2506,7 @@ if not df_filtrado.empty:
                                 font-weight:700;
                                 color:#111827;
                             ">
-                                {registro['Data']} ·
+                                {escape(str(registro['Data']))} ·
                                 {pressao_reg_formatada} MCA
                             </div>
 
@@ -2460,7 +2514,7 @@ if not df_filtrado.empty:
                                 color:#6b7280;
                                 margin-top:2px;
                             ">
-                                ID: {registro['ID']}
+                                ID: {escape(str(registro['ID']))}
                             </div>
 
                         </div>
@@ -2499,7 +2553,7 @@ if not df_filtrado.empty:
                         font-weight:800;
                         margin-bottom:2px;
                     ">
-                        {bairro}
+                        {bairro_html}
                     </div>
 
                     <div style="
@@ -2507,7 +2561,7 @@ if not df_filtrado.empty:
                         color:#6b7280;
                         margin-bottom:12px;
                     ">
-                        {municipio}
+                        {municipio_html}
                     </div>
 
                     <div style="
@@ -2587,8 +2641,19 @@ if not df_filtrado.empty:
                 """
 
                 # =================================================
-                # MARCADOR DO BAIRRO
+                # NOVO SISTEMA VISUAL DOS BAIRROS
                 # =================================================
+                #
+                # O pin agora é independente do rótulo.
+                #
+                # O elemento do Leaflet possui apenas 40x40 px.
+                # O rótulo pode ultrapassar esse espaço graças
+                # ao overflow: visible.
+                #
+                # Isso evita que o tamanho do rótulo interfira
+                # na posição real do marcador.
+                # =================================================
+
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -2597,120 +2662,41 @@ if not df_filtrado.empty:
                         data-bp-priority="{quantidade}"
                         style="
                             position:relative;
-                            width:280px;
-                            height:66px;
+                            width:40px;
+                            height:40px;
+                            overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
                         "
                     >
 
-                        <div style="
-                            position:absolute;
-                            left:0;
-                            top:3px;
-                            width:42px;
-                            height:54px;
-                            z-index:2;
-                        ">
-
-                            <svg
-                                width="42"
-                                height="54"
-                                viewBox="0 0 48 60"
-                                xmlns="http://www.w3.org/2000/svg"
-                                style="
-                                    display:block;
-                                    overflow:visible;
-                                "
-                            >
-
-                                <path
-                                    d="M24 2
-                                       C11.85 2 2.5 11.35 2.5 22.8
-                                       C2.5 37.4 24 58 24 58
-                                       C24 58 45.5 37.4 45.5 22.8
-                                       C45.5 11.35 36.15 2 24 2Z"
-                                    fill="{cor}"
-                                    stroke="#FFFFFF"
-                                    stroke-width="3"
-                                />
-
-                                <circle
-                                    cx="24"
-                                    cy="22"
-                                    r="9"
-                                    fill="#FFFFFF"
-                                />
-
-                                <circle
-                                    cx="24"
-                                    cy="22"
-                                    r="4"
-                                    fill="{cor}"
-                                />
-
-                            </svg>
-
+                        <div
+                            class="bp-pin"
+                            style="
+                                --bp-color:{cor};
+                            "
+                        >
+                            <span class="bp-pin-center"></span>
                         </div>
 
                         <div
                             class="bp-label-card"
-                            style="
-                                position:absolute;
-                                left:34px;
-                                top:0;
-                                width:240px;
-                                min-height:52px;
-                                background:rgba(255,255,255,0.97);
-                                border:1px solid #d7dee8;
-                                border-left:4px solid {cor};
-                                border-radius:8px;
-                                box-shadow:
-                                    0 3px 12px
-                                    rgba(15,23,42,0.22);
-                                padding:
-                                    6px 9px 6px 11px;
-                                box-sizing:border-box;
-                                color:#111827;
-                            "
+                            data-bp-default="top"
                         >
 
-                            <div style="
-                                font-size:12px;
-                                font-weight:800;
-                                line-height:1.15;
-                                white-space:nowrap;
-                                overflow:hidden;
-                                text-overflow:ellipsis;
-                                padding-right:3px;
-                            ">
-                                {bairro}
+                            <div class="bp-label-title">
+                                {bairro_html}
                             </div>
 
-                            <div style="
-                                display:flex;
-                                align-items:center;
-                                gap:7px;
-                                margin-top:4px;
-                                font-size:10px;
-                                line-height:1.1;
-                            ">
+                            <div class="bp-label-data">
 
-                                <span style="
-                                    font-weight:800;
-                                ">
+                                <span class="bp-label-pressure">
                                     {media_formatada} MCA
                                 </span>
 
-                                <span style="
-                                    width:1px;
-                                    height:12px;
-                                    background:#cbd5e1;
-                                "></span>
+                                <span class="bp-label-separator"></span>
 
-                                <span style="
-                                    color:#475569;
-                                ">
+                                <span>
                                     {quantidade}
                                     {texto_medicoes}
                                 </span>
@@ -2723,72 +2709,50 @@ if not df_filtrado.empty:
                     """
 
                     icon_size = (
-                        280,
-                        66
+                        40,
+                        40
                     )
 
                     icon_anchor = (
-                        21,
-                        52
+                        20,
+                        20
                     )
 
                 else:
 
                     marker_html = f"""
-                    <div style="
-                        width:42px;
-                        height:54px;
-                    ">
+                    <div
+                        class="bp-marker-wrapper"
+                        style="
+                            position:relative;
+                            width:40px;
+                            height:40px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
-                        <svg
-                            width="42"
-                            height="54"
-                            viewBox="0 0 48 60"
-                            xmlns="http://www.w3.org/2000/svg"
+                        <div
+                            class="bp-pin"
                             style="
-                                display:block;
-                                overflow:visible;
+                                --bp-color:{cor};
                             "
                         >
-
-                            <path
-                                d="M24 2
-                                   C11.85 2 2.5 11.35 2.5 22.8
-                                   C2.5 37.4 24 58 24 58
-                                   C24 58 45.5 37.4 45.5 22.8
-                                   C45.5 11.35 36.15 2 24 2Z"
-                                fill="{cor}"
-                                stroke="#FFFFFF"
-                                stroke-width="3"
-                            />
-
-                            <circle
-                                cx="24"
-                                cy="22"
-                                r="9"
-                                fill="#FFFFFF"
-                            />
-
-                            <circle
-                                cx="24"
-                                cy="22"
-                                r="4"
-                                fill="{cor}"
-                            />
-
-                        </svg>
+                            <span class="bp-pin-center"></span>
+                        </div>
 
                     </div>
                     """
 
                     icon_size = (
-                        42,
-                        54
+                        40,
+                        40
                     )
 
                     icon_anchor = (
-                        21,
-                        52
+                        20,
+                        20
                     )
 
                 folium.map.Marker(
@@ -2805,24 +2769,303 @@ if not df_filtrado.empty:
                     popup=folium.Popup(
                         popup,
                         max_width=320
-                    ),
-                    tooltip=(
-                        f"{bairro} | "
-                        f"Média: "
-                        f"{media_formatada} MCA | "
-                        f"{quantidade} "
-                        f"{texto_medicoes}"
                     )
                 ).add_to(m)
+
+
+# ============================================================
+# ESTILO DOS PINS E RÓTULOS
+# ============================================================
+#
+# Este CSS é independente do layout do Streamlit.
+# Atua somente dentro do mapa Leaflet.
+# ============================================================
+map_style_html = """
+<style>
+
+    /*
+     * O container do marcador não pode cortar
+     * o rótulo que ultrapassa seus 40x40 px.
+     */
+    .leaflet-marker-icon.pressao-bairro-marker {
+        background: transparent !important;
+        border: 0 !important;
+        overflow: visible !important;
+    }
+
+
+    /*
+     * Wrapper do pin.
+     */
+    .pressao-bairro-marker .bp-marker-wrapper {
+        position: relative !important;
+        width: 40px !important;
+        height: 40px !important;
+        overflow: visible !important;
+    }
+
+
+    /*
+     * Pin principal.
+     *
+     * Mantemos o tamanho pequeno para não poluir
+     * o mapa quando vários bairros estão próximos.
+     */
+    .pressao-bairro-marker .bp-pin {
+
+        position: absolute;
+
+        left: 50%;
+        top: 50%;
+
+        width: 29px;
+        height: 29px;
+
+        transform: translate(-50%, -50%);
+
+        background: var(--bp-color);
+
+        border: 2px solid #ffffff;
+
+        border-radius: 50%;
+
+        box-sizing: border-box;
+
+        box-shadow:
+            0 2px 6px rgba(15, 23, 42, 0.35);
+
+        z-index: 20;
+
+        pointer-events: auto;
+    }
+
+
+    /*
+     * Pequeno "bico" inferior do pin.
+     */
+    .pressao-bairro-marker .bp-pin::after {
+
+        content: "";
+
+        position: absolute;
+
+        left: 50%;
+        bottom: -6px;
+
+        width: 11px;
+        height: 11px;
+
+        background: var(--bp-color);
+
+        border-right: 2px solid #ffffff;
+        border-bottom: 2px solid #ffffff;
+
+        transform:
+            translateX(-50%)
+            rotate(45deg);
+
+        box-sizing: border-box;
+
+        z-index: -1;
+    }
+
+
+    /*
+     * Centro branco do pin.
+     */
+    .pressao-bairro-marker .bp-pin-center {
+
+        position: absolute;
+
+        left: 50%;
+        top: 50%;
+
+        width: 9px;
+        height: 9px;
+
+        transform: translate(-50%, -50%);
+
+        background: #ffffff;
+
+        border-radius: 50%;
+
+        box-shadow:
+            0 0 0 1px rgba(15, 23, 42, 0.08);
+
+        z-index: 30;
+    }
+
+
+    /*
+     * RÓTULO
+     *
+     * O JavaScript altera apenas left/top/transform
+     * para encontrar a melhor posição.
+     */
+    .pressao-bairro-marker .bp-label-card {
+
+        position: absolute;
+
+        width: 158px;
+
+        box-sizing: border-box;
+
+        padding: 5px 8px;
+
+        background: rgba(255, 255, 255, 0.97);
+
+        border: 1px solid #d7dee8;
+
+        border-left: 3px solid var(--bp-color);
+
+        border-radius: 6px;
+
+        box-shadow:
+            0 2px 8px rgba(15, 23, 42, 0.20);
+
+        color: #111827;
+
+        font-family: Arial, sans-serif;
+
+        display: block !important;
+
+        opacity: 1 !important;
+
+        visibility: visible;
+
+        z-index: 1000;
+
+        pointer-events: none;
+
+        line-height: 1.1;
+
+        white-space: normal;
+
+        transition:
+            left 0.12s ease,
+            top 0.12s ease,
+            transform 0.12s ease;
+
+        /*
+         * Evita que um rótulo seja cortado
+         * por containers internos.
+         */
+        overflow: hidden;
+    }
+
+
+    /*
+     * Título do bairro.
+     */
+    .pressao-bairro-marker .bp-label-title {
+
+        font-size: 11px;
+
+        font-weight: 800;
+
+        line-height: 1.15;
+
+        white-space: nowrap;
+
+        overflow: hidden;
+
+        text-overflow: ellipsis;
+
+        color: #111827;
+    }
+
+
+    /*
+     * Linha inferior do rótulo.
+     */
+    .pressao-bairro-marker .bp-label-data {
+
+        display: flex;
+
+        align-items: center;
+
+        gap: 6px;
+
+        margin-top: 4px;
+
+        font-size: 9px;
+
+        line-height: 1.1;
+
+        color: #475569;
+
+        white-space: nowrap;
+    }
+
+
+    .pressao-bairro-marker .bp-label-pressure {
+
+        font-weight: 800;
+
+        color: #111827;
+    }
+
+
+    .pressao-bairro-marker .bp-label-separator {
+
+        display: inline-block;
+
+        width: 1px;
+        height: 10px;
+
+        background: #cbd5e1;
+
+        flex: 0 0 auto;
+    }
+
+
+    /*
+     * Garante que tooltip padrão do Leaflet
+     * não seja usado como substituto do nosso rótulo.
+     */
+    .pressao-bairro-marker .leaflet-tooltip {
+        display: none !important;
+    }
+
+</style>
+"""
+
+m.get_root().html.add_child(
+    Element(map_style_html)
+)
 
 
 # ============================================================
 # DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
 # ============================================================
 #
-# Este bloco fica FORA de qualquer if Python.
-# Quando não houver rótulos, o JavaScript simplesmente
-# não encontrará .bp-marker-wrapper e não fará nada.
+# NOVA ESTRUTURA:
+#
+# 1. Todos os pins continuam visíveis.
+#
+# 2. Os rótulos são ordenados pela quantidade
+#    de medições do bairro.
+#
+# 3. Para cada bairro são testadas até 8 posições:
+#
+#       1. cima
+#       2. baixo
+#       3. direita
+#       4. esquerda
+#       5. cima-direita
+#       6. cima-esquerda
+#       7. baixo-direita
+#       8. baixo-esquerda
+#
+# 4. A primeira posição sem conflito é usada.
+#
+# 5. Se nenhuma posição estiver disponível,
+#    somente o rótulo é escondido.
+#
+# 6. O pin continua visível.
+#
+# 7. O cálculo é repetido após zoom, movimento
+#    e redimensionamento.
 # ============================================================
 
 map_name = m.get_name()
@@ -2834,13 +3077,29 @@ declutter_js = """
     function iniciarDeclutter() {
 
         if (typeof MAP_NAME_PLACEHOLDER === "undefined") {
-            setTimeout(iniciarDeclutter, 150);
+
+            setTimeout(
+                iniciarDeclutter,
+                150
+            );
+
             return;
         }
 
+
         var map = MAP_NAME_PLACEHOLDER;
 
-        function caixasSeSobrepoem(a, b, margem) {
+
+        /*
+         * ----------------------------------------------------
+         * Verifica colisão entre dois retângulos.
+         * ----------------------------------------------------
+         */
+        function caixasSeSobrepoem(
+            a,
+            b,
+            margem
+        ) {
 
             return !(
                 a.right + margem < b.left ||
@@ -2850,128 +3109,515 @@ declutter_js = """
             );
         }
 
+
+        /*
+         * ----------------------------------------------------
+         * Verifica se o rótulo está dentro da área visível
+         * do mapa.
+         * ----------------------------------------------------
+         */
+        function estaDentroDoMapa(
+            caixa,
+            areaMapa,
+            margem
+        ) {
+
+            return !(
+                caixa.left < areaMapa.left + margem ||
+                caixa.right > areaMapa.right - margem ||
+                caixa.top < areaMapa.top + margem ||
+                caixa.bottom > areaMapa.bottom - margem
+            );
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * Define uma posição candidata para o rótulo.
+         *
+         * O ponto de referência é o centro do wrapper,
+         * que corresponde ao centro do pin.
+         * ----------------------------------------------------
+         */
+        function aplicarPosicao(
+            rotulo,
+            posicao
+        ) {
+
+            /*
+             * Remove estilos anteriores.
+             */
+            rotulo.style.left = "";
+            rotulo.style.top = "";
+            rotulo.style.transform = "";
+
+
+            /*
+             * CIMA
+             */
+            if (posicao === "top") {
+
+                rotulo.style.left = "50%";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
+                    "translate(-50%, -100%)";
+
+            }
+
+
+            /*
+             * BAIXO
+             */
+            else if (posicao === "bottom") {
+
+                rotulo.style.left = "50%";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(-50%, 0)";
+
+            }
+
+
+            /*
+             * DIREITA
+             */
+            else if (posicao === "right") {
+
+                rotulo.style.left = "46px";
+                rotulo.style.top = "50%";
+                rotulo.style.transform =
+                    "translate(0, -50%)";
+
+            }
+
+
+            /*
+             * ESQUERDA
+             */
+            else if (posicao === "left") {
+
+                rotulo.style.left = "-6px";
+                rotulo.style.top = "50%";
+                rotulo.style.transform =
+                    "translate(-100%, -50%)";
+
+            }
+
+
+            /*
+             * CIMA-DIREITA
+             */
+            else if (posicao === "top-right") {
+
+                rotulo.style.left = "42px";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
+                    "translate(0, -100%)";
+
+            }
+
+
+            /*
+             * CIMA-ESQUERDA
+             */
+            else if (posicao === "top-left") {
+
+                rotulo.style.left = "-2px";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
+                    "translate(-100%, -100%)";
+
+            }
+
+
+            /*
+             * BAIXO-DIREITA
+             */
+            else if (posicao === "bottom-right") {
+
+                rotulo.style.left = "42px";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(0, 0)";
+
+            }
+
+
+            /*
+             * BAIXO-ESQUERDA
+             */
+            else if (posicao === "bottom-left") {
+
+                rotulo.style.left = "-2px";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(-100%, 0)";
+
+            }
+        }
+
+
+        /*
+         * ----------------------------------------------------
+         * Calcula o melhor posicionamento.
+         * ----------------------------------------------------
+         */
         function recalcularRotulos() {
 
             var container = map.getContainer();
 
             if (!container) {
+
                 return;
             }
 
-            var marcadores = container.querySelectorAll(
-                ".pressao-bairro-marker .bp-marker-wrapper"
-            );
+
+            var areaMapa =
+                container.getBoundingClientRect();
+
+
+            var marcadores =
+                container.querySelectorAll(
+                    ".pressao-bairro-marker .bp-marker-wrapper"
+                );
+
 
             if (!marcadores.length) {
+
                 return;
             }
 
-            var areaMapa = container.getBoundingClientRect();
+
             var candidatos = [];
 
-            marcadores.forEach(function(wrapper) {
 
-                var rotulo = wrapper.querySelector(
-                    ".bp-label-card"
-                );
+            /*
+             * ------------------------------------------------
+             * Primeira passagem:
+             *
+             * prepara todos os rótulos e captura prioridade.
+             * ------------------------------------------------
+             */
+            marcadores.forEach(
+                function(wrapper) {
 
-                if (!rotulo) {
-                    return;
+                    var rotulo =
+                        wrapper.querySelector(
+                            ".bp-label-card"
+                        );
+
+
+                    /*
+                     * Marcadores sem rótulo:
+                     * continuam normalmente no mapa.
+                     */
+                    if (!rotulo) {
+
+                        return;
+                    }
+
+
+                    /*
+                     * Todos os rótulos começam visíveis
+                     * para que o browser consiga medir
+                     * corretamente seus tamanhos.
+                     */
+                    rotulo.style.display =
+                        "block";
+
+                    rotulo.style.visibility =
+                        "hidden";
+
+
+                    /*
+                     * Começamos pelo topo.
+                     */
+                    aplicarPosicao(
+                        rotulo,
+                        "top"
+                    );
+
+
+                    var prioridade =
+                        parseInt(
+                            wrapper.getAttribute(
+                                "data-bp-priority"
+                            ) || "0",
+                            10
+                        );
+
+
+                    if (isNaN(prioridade)) {
+
+                        prioridade = 0;
+                    }
+
+
+                    candidatos.push({
+
+                        wrapper: wrapper,
+
+                        rotulo: rotulo,
+
+                        prioridade: prioridade,
+
+                        ordem: candidatos.length
+
+                    });
+
                 }
+            );
 
-                rotulo.style.display = "block";
-                rotulo.style.visibility = "hidden";
 
-                var caixa = rotulo.getBoundingClientRect();
-
-                if (
-                    caixa.right < areaMapa.left ||
-                    caixa.left > areaMapa.right ||
-                    caixa.bottom < areaMapa.top ||
-                    caixa.top > areaMapa.bottom
-                ) {
-                    rotulo.style.visibility = "hidden";
-                    return;
-                }
-
-                var prioridade = parseInt(
-                    wrapper.getAttribute(
-                        "data-bp-priority"
-                    ) || "0",
-                    10
-                );
-
-                if (isNaN(prioridade)) {
-                    prioridade = 0;
-                }
-
-                candidatos.push({
-                    wrapper: wrapper,
-                    rotulo: rotulo,
-                    prioridade: prioridade
-                });
-            });
-
-            candidatos.sort(function(a, b) {
-
-                if (b.prioridade !== a.prioridade) {
-                    return b.prioridade - a.prioridade;
-                }
-
-                return 0;
-            });
-
-            var aceitos = [];
-            var margem = 5;
-
-            candidatos.forEach(function(item) {
-
-                var caixa = item.rotulo.getBoundingClientRect();
-                var conflito = false;
-
-                for (
-                    var i = 0;
-                    i < aceitos.length;
-                    i++
-                ) {
+            /*
+             * ------------------------------------------------
+             * Ordenação:
+             *
+             * maior quantidade de medições primeiro.
+             *
+             * Em caso de empate, mantém a ordem original.
+             * ------------------------------------------------
+             */
+            candidatos.sort(
+                function(a, b) {
 
                     if (
-                        caixasSeSobrepoem(
-                            caixa,
-                            aceitos[i],
-                            margem
-                        )
+                        b.prioridade
+                        !==
+                        a.prioridade
                     ) {
-                        conflito = true;
-                        break;
+
+                        return (
+                            b.prioridade
+                            -
+                            a.prioridade
+                        );
                     }
+
+                    return (
+                        a.ordem
+                        -
+                        b.ordem
+                    );
                 }
+            );
 
-                if (conflito) {
 
-                    item.rotulo.style.visibility = "hidden";
+            /*
+             * ------------------------------------------------
+             * Posições disponíveis.
+             *
+             * A ordem prioriza primeiro as posições
+             * mais naturais em torno do pin.
+             * ------------------------------------------------
+             */
+            var posicoes = [
 
-                } else {
+                "top",
 
-                    item.rotulo.style.visibility = "visible";
+                "bottom",
 
-                    aceitos.push(caixa);
+                "right",
+
+                "left",
+
+                "top-right",
+
+                "top-left",
+
+                "bottom-right",
+
+                "bottom-left"
+
+            ];
+
+
+            /*
+             * ------------------------------------------------
+             * Rótulos já aceitos.
+             * ------------------------------------------------
+             */
+            var aceitos = [];
+
+
+            /*
+             * Margem mínima entre dois rótulos.
+             */
+            var margem = 5;
+
+
+            /*
+             * Margem interna do mapa.
+             */
+            var margemMapa = 4;
+
+
+            /*
+             * ------------------------------------------------
+             * Processa cada rótulo pela ordem de prioridade.
+             * ------------------------------------------------
+             */
+            candidatos.forEach(
+                function(item) {
+
+                    var encontrouPosicao = false;
+
+
+                    /*
+                     * Testa cada posição.
+                     */
+                    for (
+                        var p = 0;
+                        p < posicoes.length;
+                        p++
+                    ) {
+
+                        var posicao =
+                            posicoes[p];
+
+
+                        aplicarPosicao(
+                            item.rotulo,
+                            posicao
+                        );
+
+
+                        /*
+                         * getBoundingClientRect()
+                         * precisa ser chamado depois da
+                         * aplicação da posição.
+                         */
+                        var caixa =
+                            item.rotulo
+                            .getBoundingClientRect();
+
+
+                        /*
+                         * Se estiver fora do mapa,
+                         * tenta outra posição.
+                         */
+                        if (
+                            !estaDentroDoMapa(
+                                caixa,
+                                areaMapa,
+                                margemMapa
+                            )
+                        ) {
+
+                            continue;
+                        }
+
+
+                        var conflito = false;
+
+
+                        /*
+                         * Compara com os rótulos
+                         * que já foram aceitos.
+                         */
+                        for (
+                            var i = 0;
+                            i < aceitos.length;
+                            i++
+                        ) {
+
+                            if (
+                                caixasSeSobrepoem(
+                                    caixa,
+                                    aceitos[i],
+                                    margem
+                                )
+                            ) {
+
+                                conflito = true;
+
+                                break;
+                            }
+                        }
+
+
+                        /*
+                         * Se não houver conflito,
+                         * essa posição é aceita.
+                         */
+                        if (!conflito) {
+
+                            item.rotulo.style.visibility =
+                                "visible";
+
+                            aceitos.push(
+                                caixa
+                            );
+
+                            encontrouPosicao = true;
+
+                            break;
+                        }
+
+                    }
+
+
+                    /*
+                     * ------------------------------------------------
+                     * Nenhuma posição disponível.
+                     *
+                     * Importante:
+                     *
+                     * escondemos APENAS o rótulo.
+                     *
+                     * O pin continua totalmente visível.
+                     * ------------------------------------------------
+                     */
+                    if (!encontrouPosicao) {
+
+                        item.rotulo.style.visibility =
+                            "hidden";
+
+                    }
+
                 }
-            });
+            );
         }
 
+
+        /*
+         * ----------------------------------------------------
+         * Agendamento para evitar executar o algoritmo
+         * dezenas de vezes durante uma movimentação.
+         * ----------------------------------------------------
+         */
         var agendamento = null;
+
 
         function agendarRecalculo() {
 
             if (agendamento) {
-                clearTimeout(agendamento);
+
+                clearTimeout(
+                    agendamento
+                );
             }
+
 
             agendamento = setTimeout(
                 function() {
 
+                    /*
+                     * Duas passagens ajudam a garantir que
+                     * o Leaflet já terminou de reposicionar
+                     * os elementos.
+                     */
                     recalcularRotulos();
+
+
+                    requestAnimationFrame(
+                        function() {
+
+                            recalcularRotulos();
+
+                        }
+                    );
+
 
                     agendamento = null;
 
@@ -2980,42 +3626,76 @@ declutter_js = """
             );
         }
 
+
+        /*
+         * ----------------------------------------------------
+         * Eventos do Leaflet.
+         * ----------------------------------------------------
+         */
         map.on(
             "zoomend",
             agendarRecalculo
         );
+
 
         map.on(
             "moveend",
             agendarRecalculo
         );
 
+
         map.on(
             "resize",
             agendarRecalculo
         );
 
+
+        /*
+         * Redimensionamento da janela.
+         */
         window.addEventListener(
             "resize",
             agendarRecalculo
         );
 
+
+        /*
+         * ----------------------------------------------------
+         * Primeiras execuções.
+         *
+         * O mapa do Streamlit/Folium pode terminar de montar
+         * depois que este script começa.
+         * ----------------------------------------------------
+         */
         setTimeout(
             recalcularRotulos,
-            150
+            100
         );
+
 
         setTimeout(
             recalcularRotulos,
-            400
+            250
         );
+
 
         setTimeout(
             recalcularRotulos,
-            800
+            500
         );
+
+
+        setTimeout(
+            recalcularRotulos,
+            900
+        );
+
     }
 
+
+    /*
+     * Inicia o sistema.
+     */
     iniciarDeclutter();
 
 })();
@@ -3133,6 +3813,9 @@ m.get_root().html.add_child(
 )
 
 
+# ============================================================
+# RENDERIZAÇÃO DO MAPA
+# ============================================================
 map_data = st_folium(
     m,
     width="100%",
