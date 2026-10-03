@@ -20,9 +20,8 @@ import unicodedata
 
 
 # ============================================================
-# CONFIGURAÇÃO
+# CONFIGURAÇÃO DA PÁGINA
 # ============================================================
-
 st.set_page_config(
     page_title="Monitoramento de Baixa Pressão - COI",
     page_icon="💧",
@@ -30,11 +29,26 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none !important;
+        }
+
+        [data-testid="stSidebar"] div.block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 1rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 
 # ============================================================
-# AUTENTICAÇÃO
+# TRAVA DE SEGURANÇA E CONTROLE DE SESSÃO DO HUB
 # ============================================================
-
 from auth import verificar_autenticacao
 
 if not verificar_autenticacao():
@@ -49,11 +63,12 @@ if not verificar_autenticacao():
 # ============================================================
 # CONSTANTES
 # ============================================================
-
 LAT_BASE = -5.0892
 LON_BASE = -42.8019
 
-SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+SPREADSHEET_ID = (
+    "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
+)
 
 COLUNAS_PADRAO = [
     "ID",
@@ -67,1194 +82,2416 @@ COLUNAS_PADRAO = [
     "Matricula"
 ]
 
+
+# ============================================================
+# CLASSIFICAÇÃO E PALETA DE CORES DA PRESSÃO
+# ============================================================
 COR_SEM_PRESSAO = "#FF5C60"
 COR_BAIXA_PRESSAO = "#F8DC00"
 COR_EM_ATENCAO = "#FF8FE1"
 COR_ALTA_PRESSAO = "#A11FFF"
 
 
+def classificar_pressao(pressao):
+
+    try:
+
+        valor = float(pressao)
+
+    except (TypeError, ValueError):
+
+        valor = 0.0
+
+    if valor == 0:
+
+        return "Sem Pressão", COR_SEM_PRESSAO
+
+    elif valor <= 5:
+
+        return "Baixa Pressão", COR_BAIXA_PRESSAO
+
+    elif valor <= 15:
+
+        return "Em Atenção", COR_EM_ATENCAO
+
+    else:
+
+        return "Alta Pressão", COR_ALTA_PRESSAO
+
+
 # ============================================================
-# FUNÇÕES AUXILIARES
+# CONEXÃO COM GOOGLE SHEETS
 # ============================================================
+@st.cache_resource
+def conectar_google_sheets():
 
-def normalizar_texto(valor):
-    if pd.isna(valor):
-        return ""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
-    valor = str(valor).strip()
-
-    valor = unicodedata.normalize(
-        "NFKD",
-        valor
-    ).encode(
-        "ASCII",
-        "ignore"
-    ).decode(
-        "ASCII"
+    credentials_dict = json.loads(
+        st.secrets["gcp_json"]
     )
 
-    return " ".join(valor.lower().split())
+    credentials = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes
+    )
+
+    gc = gspread.authorize(credentials)
+
+    sh = gc.open_by_key(
+        SPREADSHEET_ID
+    )
+
+    try:
+
+        ws = sh.worksheet(
+            "baixa_pressao"
+        )
+
+    except Exception:
+
+        try:
+
+            ws = sh.add_worksheet(
+                title="baixa_pressao",
+                rows="1000",
+                cols="20"
+            )
+
+        except Exception:
+
+            ws = sh.sheet1
+
+    try:
+
+        dados_iniciais = ws.get_all_values()
+
+        if not dados_iniciais or len(dados_iniciais) == 0:
+
+            ws.append_row([
+                "ID",
+                "Data",
+                "Municipio",
+                "Bairro",
+                "Latitude",
+                "Longitude",
+                "Pressao_MCA",
+                "Observacao",
+                "Matricula"
+            ])
+
+        else:
+
+            cabecalho_atual = [
+                str(c).strip()
+                for c in dados_iniciais[0]
+            ]
+
+            # Garante a coluna Observacao
+            if (
+                len(cabecalho_atual) >= 7
+                and "Observacao" not in cabecalho_atual
+                and "Observação" not in cabecalho_atual
+            ):
+
+                ws.update(
+                    "H1",
+                    [["Observacao"]]
+                )
+
+            # Garante a coluna Matricula na coluna I.
+            # Compatibilidade com instalações antigas
+            # que ainda possuem somente 8 colunas.
+            if (
+                "Matricula" not in cabecalho_atual
+                and "Matrícula" not in cabecalho_atual
+            ):
+
+                ws.update(
+                    "I1",
+                    [["Matricula"]]
+                )
+
+    except Exception:
+
+        pass
+
+    return ws
 
 
-def converter_float(valor, padrao=0.0):
+try:
+
+    worksheet = conectar_google_sheets()
+
+except Exception as e:
+
+    st.error(
+        f"❌ Erro ao conectar com o Google Sheets: {e}"
+    )
+
+    st.stop()
+
+
+# ============================================================
+# FUNÇÕES DE DADOS E EXPORTAÇÃO
+# ============================================================
+def gerar_id() -> str:
+
+    return str(
+        uuid.uuid4()
+    )[:8].upper()
+
+
+def normalizar_coluna(nome: str) -> str:
+
+    nome = str(
+        nome
+    ).strip().lower()
+
+    mapeamento = {
+
+        "id": "ID",
+
+        "data": "Data",
+
+        "municipio": "Municipio",
+        "município": "Municipio",
+
+        "bairro": "Bairro",
+
+        "latitude": "Latitude",
+        "lat": "Latitude",
+
+        "longitude": "Longitude",
+        "lon": "Longitude",
+        "long": "Longitude",
+
+        "pressao_mca": "Pressao_MCA",
+        "pressão_mca": "Pressao_MCA",
+        "pressao": "Pressao_MCA",
+        "pressão": "Pressao_MCA",
+        "mca": "Pressao_MCA",
+
+        "observacao": "Observacao",
+        "observação": "Observacao",
+        "obs": "Observacao",
+
+        "matricula": "Matricula",
+        "matrícula": "Matricula",
+        "matrícula ": "Matricula",
+        "mat": "Matricula"
+    }
+
+    return mapeamento.get(
+        nome,
+        nome.title()
+    )
+
+
+def normalizar_texto_local(
+    valor,
+    padrao=""
+) -> str:
 
     if valor is None:
+
         return padrao
 
-    if isinstance(valor, (int, float)):
-        try:
-            if pd.isna(valor):
-                return padrao
-        except Exception:
-            pass
+    texto = str(
+        valor
+    ).strip()
+
+    if not texto or texto.lower() in (
+        "nan",
+        "none",
+        "nat"
+    ):
+
+        return padrao
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto
+    )
+
+    texto = "".join(
+        caractere
+        for caractere in texto
+        if not unicodedata.combining(caractere)
+    )
+
+    return texto.upper().strip()
+
+
+def parse_float(
+    valor,
+    default=None
+):
+
+    if valor is None or (
+        isinstance(valor, float)
+        and pd.isna(valor)
+    ):
+
+        return default
+
+    if isinstance(
+        valor,
+        (int, float)
+    ):
 
         return float(valor)
 
-    texto = str(valor).strip()
-
-    if not texto:
-        return padrao
-
-    texto = texto.replace("MCA", "")
-    texto = texto.replace("mca", "")
-    texto = texto.replace(" ", "")
-
-    # Trata números no padrão brasileiro
-    if "," in texto and "." in texto:
-        texto = texto.replace(".", "").replace(",", ".")
-    elif "," in texto:
-        texto = texto.replace(",", ".")
-
     try:
+
+        texto = str(
+            valor
+        ).strip()
+
+        if not texto or texto.lower() in (
+            "nan",
+            "none",
+            "nat",
+            ""
+        ):
+
+            return default
+
+        texto = (
+            texto
+            .replace(",", ".")
+            .replace(" ", "")
+        )
+
         return float(texto)
-    except Exception:
-        return padrao
+
+    except (
+        ValueError,
+        TypeError
+    ):
+
+        return default
 
 
-def classificar_pressao(pressao):
+def normalizar_coordenada(
+    valor,
+    tipo: str = "lat"
+) -> Optional[float]:
 
-    pressao = converter_float(pressao, 0)
-
-    if pressao == 0:
-        return "Sem Pressão"
-
-    if pressao <= 5:
-        return "Baixa Pressão"
-
-    if pressao <= 15:
-        return "Em Atenção"
-
-    return "Alta Pressão"
-
-
-def cor_classificacao(classificacao):
-
-    mapa = {
-        "Sem Pressão": COR_SEM_PRESSAO,
-        "Baixa Pressão": COR_BAIXA_PRESSAO,
-        "Em Atenção": COR_EM_ATENCAO,
-        "Alta Pressão": COR_ALTA_PRESSAO
-    }
-
-    return mapa.get(
-        classificacao,
-        COR_BAIXA_PRESSAO
+    num = parse_float(
+        valor,
+        default=None
     )
 
-
-def gerar_id():
-    return str(uuid.uuid4())
-
-
-def formatar_pressao(valor):
-
-    try:
-        valor = float(valor)
-    except Exception:
-        valor = 0
-
-    return f"{valor:.2f}".replace(".", ",")
-
-
-# ============================================================
-# GOOGLE SHEETS
-# ============================================================
-
-@st.cache_resource
-def conectar_google():
-
-    try:
-
-        credenciais_dict = st.secrets["gcp_json"]
-
-        if isinstance(credenciais_dict, str):
-            credenciais_dict = json.loads(
-                credenciais_dict
-            )
-
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-
-        credentials = Credentials.from_service_account_info(
-            credenciais_dict,
-            scopes=scopes
-        )
-
-        cliente = gspread.authorize(credentials)
-
-        planilha = cliente.open_by_key(
-            SPREADSHEET_ID
-        )
-
-        try:
-            aba = planilha.worksheet(
-                "baixa_pressao"
-            )
-        except Exception:
-            aba = planilha.add_worksheet(
-                title="baixa_pressao",
-                rows=1000,
-                cols=len(COLUNAS_PADRAO)
-            )
-
-            aba.append_row(
-                COLUNAS_PADRAO
-            )
-
-        return aba
-
-    except Exception as e:
-
-        st.error(
-            f"Erro ao conectar ao Google Sheets: {e}"
-        )
+    if num is None:
 
         return None
 
+    if tipo == "lat" and not (
+        -90.0 <= num <= 90.0
+    ):
 
-worksheet = conectar_google()
+        return None
+
+    if tipo == "lon" and not (
+        -180.0 <= num <= 180.0
+    ):
+
+        return None
+
+    if num == 0.0:
+
+        return None
+
+    return round(
+        float(num),
+        6
+    )
 
 
-# ============================================================
-# GARANTIR ESTRUTURA DA PLANILHA
-# ============================================================
+def normalizar_data(valor) -> str:
 
-def garantir_colunas():
+    if valor is None or (
+        isinstance(valor, float)
+        and pd.isna(valor)
+    ):
 
-    if worksheet is None:
-        return
+        return ""
+
+    if isinstance(
+        valor,
+        (datetime, date)
+    ):
+
+        return valor.strftime(
+            "%d/%m/%Y"
+        )
+
+    texto = str(
+        valor
+    ).strip()
+
+    if not texto or texto.lower() in (
+        "nan",
+        "none",
+        "nat",
+        ""
+    ):
+
+        return ""
+
+    formatos = [
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%Y/%m/%d"
+    ]
+
+    for fmt in formatos:
+
+        try:
+
+            return datetime.strptime(
+                texto,
+                fmt
+            ).strftime(
+                "%d/%m/%Y"
+            )
+
+        except ValueError:
+
+            continue
+
+    return texto
+
+
+def carregar_dados() -> pd.DataFrame:
 
     try:
 
         valores = worksheet.get_all_values()
-
-        if not valores:
-
-            worksheet.append_row(
-                COLUNAS_PADRAO
-            )
-
-            return
-
-        cabecalho = valores[0]
-
-        alterou = False
-
-        for coluna in COLUNAS_PADRAO:
-
-            if coluna not in cabecalho:
-
-                cabecalho.append(
-                    coluna
-                )
-
-                alterou = True
-
-        if alterou:
-
-            worksheet.update(
-                "1:1",
-                [cabecalho]
-            )
-
-    except Exception:
-        pass
-
-
-garantir_colunas()
-
-
-# ============================================================
-# CARREGAMENTO
-# ============================================================
-
-@st.cache_data(ttl=20)
-def carregar_dados():
-
-    if worksheet is None:
-        return pd.DataFrame(
-            columns=COLUNAS_PADRAO
-        )
-
-    try:
-
-        valores = worksheet.get_all_values()
-
-        if not valores:
-            return pd.DataFrame(
-                columns=COLUNAS_PADRAO
-            )
-
-        cabecalho = valores[0]
-
-        dados = valores[1:]
-
-        df = pd.DataFrame(
-            dados,
-            columns=cabecalho
-        )
-
-        for coluna in COLUNAS_PADRAO:
-
-            if coluna not in df.columns:
-                df[coluna] = ""
-
-        df = df[
-            COLUNAS_PADRAO
-        ].copy()
-
-        # ----------------------------------------------------
-        # TEXTO
-        # ----------------------------------------------------
-
-        for coluna in [
-            "ID",
-            "Municipio",
-            "Bairro",
-            "Observacao",
-            "Matricula"
-        ]:
-
-            df[coluna] = (
-                df[coluna]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-            )
-
-        # ----------------------------------------------------
-        # DATA
-        # ----------------------------------------------------
-
-        df["Data"] = pd.to_datetime(
-            df["Data"],
-            errors="coerce",
-            dayfirst=True
-        )
-
-        # ----------------------------------------------------
-        # COORDENADAS
-        # ----------------------------------------------------
-
-        df["Latitude"] = df[
-            "Latitude"
-        ].apply(
-            lambda x: converter_float(
-                x,
-                None
-            )
-        )
-
-        df["Longitude"] = df[
-            "Longitude"
-        ].apply(
-            lambda x: converter_float(
-                x,
-                None
-            )
-        )
-
-        df["Latitude"] = df[
-            "Latitude"
-        ].round(6)
-
-        df["Longitude"] = df[
-            "Longitude"
-        ].round(6)
-
-        # ----------------------------------------------------
-        # PRESSÃO
-        # ----------------------------------------------------
-
-        df["Pressao_MCA"] = df[
-            "Pressao_MCA"
-        ].apply(
-            lambda x: converter_float(
-                x,
-                0
-            )
-        )
-
-        # ----------------------------------------------------
-        # LIMPEZA
-        # ----------------------------------------------------
-
-        df = df[
-            df["Bairro"].astype(str).str.strip() != ""
-        ].copy()
-
-        df["Classificacao"] = df[
-            "Pressao_MCA"
-        ].apply(
-            classificar_pressao
-        )
-
-        return df.reset_index(
-            drop=True
-        )
 
     except Exception as e:
 
         st.error(
-            f"Erro ao carregar dados: {e}"
+            f"Erro ao ler planilha: {e}"
         )
 
         return pd.DataFrame(
             columns=COLUNAS_PADRAO
         )
 
+    if not valores or len(valores) < 2:
 
-df = carregar_dados()
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
+
+    cabecalhos_raw = valores[0]
+
+    cabecalhos = [
+        normalizar_coluna(c)
+        for c in cabecalhos_raw
+    ]
+
+    registros = []
+
+    for linha in valores[1:]:
+
+        if not any(
+            str(c).strip()
+            for c in linha
+        ):
+
+            continue
+
+        reg = {}
+
+        for i, col in enumerate(
+            cabecalhos
+        ):
+
+            reg[col] = (
+                linha[i]
+                if i < len(linha)
+                else ""
+            )
+
+        registros.append(reg)
+
+    if not registros:
+
+        return pd.DataFrame(
+            columns=COLUNAS_PADRAO
+        )
+
+    df = pd.DataFrame(
+        registros
+    )
+
+    for col in COLUNAS_PADRAO:
+
+        if col not in df.columns:
+
+            df[col] = ""
+
+    def limpar_id(v):
+
+        s = str(v).strip()
+
+        if not s or s.lower() in (
+            "nan",
+            "none",
+            ""
+        ):
+
+            return gerar_id()
+
+        return s
+
+    df["ID"] = df["ID"].apply(
+        limpar_id
+    )
+
+    df["Data"] = df["Data"].apply(
+        normalizar_data
+    )
+
+    # ========================================================
+    # NORMALIZAÇÃO DE MUNICÍPIO
+    # ========================================================
+    df["Municipio"] = df["Municipio"].apply(
+        lambda x:
+        normalizar_texto_local(
+            x,
+            padrao="TERESINA"
+        )
+    )
+
+    # ========================================================
+    # NORMALIZAÇÃO DE BAIRRO
+    # ========================================================
+    df["Bairro"] = df["Bairro"].apply(
+        lambda x:
+        normalizar_texto_local(
+            x,
+            padrao=""
+        )
+    )
+
+    df["Latitude"] = df[
+        "Latitude"
+    ].apply(
+        lambda x:
+        normalizar_coordenada(
+            x,
+            "lat"
+        )
+    )
+
+    df["Longitude"] = df[
+        "Longitude"
+    ].apply(
+        lambda x:
+        normalizar_coordenada(
+            x,
+            "lon"
+        )
+    )
+
+    df["Pressao_MCA"] = df[
+        "Pressao_MCA"
+    ].apply(
+        lambda x:
+        parse_float(
+            x,
+            0.0
+        ) or 0.0
+    )
+
+    df["Observacao"] = (
+        df["Observacao"]
+        .astype(str)
+        .str.strip()
+        .replace({
+            "nan": "",
+            "None": ""
+        })
+    )
+
+    # ========================================================
+    # MATRÍCULA
+    # ========================================================
+    df["Matricula"] = (
+        df["Matricula"]
+        .astype(str)
+        .str.strip()
+        .replace({
+            "nan": "",
+            "None": ""
+        })
+    )
+
+    df = df[
+        df["Bairro"]
+        .astype(str)
+        .str.strip()
+        != ""
+    ]
+
+    return df[
+        COLUNAS_PADRAO
+    ].reset_index(
+        drop=True
+    )
 
 
-# ============================================================
-# CRUD
-# ============================================================
+def limpar_cache():
 
-def invalidar_cache():
-
-    try:
-        carregar_dados.clear()
-    except Exception:
-        pass
+    st.cache_data.clear()
 
 
 def adicionar_ponto(
-    data,
-    municipio,
-    bairro,
-    latitude,
-    longitude,
-    pressao,
-    observacao,
-    matricula
+    municipio: str,
+    matricula: str,
+    bairro: str,
+    lat: float,
+    lon: float,
+    pressao: float,
+    data_str: str,
+    observacao: str
 ):
 
-    if worksheet is None:
-        return False
+    novo_id = gerar_id()
 
-    try:
+    municipio_normalizado = normalizar_texto_local(
+        municipio,
+        padrao="TERESINA"
+    )
 
-        novo_id = gerar_id()
+    bairro_normalizado = normalizar_texto_local(
+        bairro,
+        padrao=""
+    )
 
-        linha = [
-            novo_id,
-            data.strftime("%d/%m/%Y")
-            if isinstance(data, (date, datetime))
-            else str(data),
-            str(municipio).strip(),
-            str(bairro).strip(),
-            round(float(latitude), 6),
-            round(float(longitude), 6),
-            converter_float(pressao),
-            str(observacao).strip(),
-            str(matricula).strip()
-        ]
+    matricula_normalizada = str(
+        matricula or ""
+    ).strip()
 
-        worksheet.append_row(
-            linha,
-            value_input_option="USER_ENTERED"
-        )
+    worksheet.append_row([
+        str(novo_id),
+        str(data_str),
+        municipio_normalizado,
+        bairro_normalizado,
+        float(lat),
+        float(lon),
+        float(pressao),
+        str(observacao),
+        matricula_normalizada
+    ])
 
-        invalidar_cache()
+    time.sleep(0.3)
 
-        return True
+    limpar_cache()
 
-    except Exception as e:
-
-        st.error(
-            f"Erro ao adicionar ponto: {e}"
-        )
-
-        return False
+    return novo_id
 
 
-def adicionar_lote_seguro(df_lote):
+def adicionar_lote_seguro(
+    linhas_dados: list
+):
 
-    if worksheet is None:
-        return False
+    if not linhas_dados:
 
-    try:
+        return 0
 
-        if df_lote.empty:
-            return False
+    df_atual = carregar_dados()
 
-        linhas = []
+    chaves_existentes = set()
 
-        for _, row in df_lote.iterrows():
+    if not df_atual.empty:
 
-            data = row.get(
-                "Data",
-                datetime.now()
+        for _, r in df_atual.iterrows():
+
+            lat_f = (
+                f"{float(r['Latitude']):.6f}"
+                if pd.notnull(
+                    r["Latitude"]
+                )
+                else ""
             )
 
-            if pd.isna(data):
-                data = datetime.now()
+            lon_f = (
+                f"{float(r['Longitude']):.6f}"
+                if pd.notnull(
+                    r["Longitude"]
+                )
+                else ""
+            )
 
-            if isinstance(data, pd.Timestamp):
-                data = data.to_pydatetime()
-
-            linha = [
+            # Matrícula permanece fora da chave
+            # de duplicidade.
+            chave = (
+                str(r["Data"]).strip(),
                 str(
-                    row.get(
-                        "ID",
-                        gerar_id()
-                    )
-                ).strip()
-                or gerar_id(),
-
-                data.strftime("%d/%m/%Y"),
-
+                    r["Municipio"]
+                ).strip().lower(),
                 str(
-                    row.get(
-                        "Municipio",
-                        ""
-                    )
-                ).strip(),
+                    r["Bairro"]
+                ).strip().lower(),
+                lat_f,
+                lon_f
+            )
 
-                str(
-                    row.get(
-                        "Bairro",
-                        ""
-                    )
-                ).strip(),
+            chaves_existentes.add(
+                chave
+            )
 
-                round(
-                    converter_float(
-                        row.get("Latitude"),
-                        0
-                    ),
-                    6
-                ),
+    linhas_novas = []
 
-                round(
-                    converter_float(
-                        row.get("Longitude"),
-                        0
-                    ),
-                    6
-                ),
+    for linha in linhas_dados:
 
-                converter_float(
-                    row.get(
-                        "Pressao_MCA",
-                        0
-                    )
-                ),
+        (
+            id_v,
+            d_val,
+            mun_val,
+            bair_val,
+            lat_val,
+            lon_val,
+            pres_val,
+            obs_val,
+            mat_val
+        ) = linha
 
-                str(
-                    row.get(
-                        "Observacao",
-                        ""
-                    )
-                ).strip(),
+        lat_f = (
+            f"{float(lat_val):.6f}"
+        )
 
-                str(
-                    row.get(
-                        "Matricula",
-                        ""
-                    )
-                ).strip()
-            ]
+        lon_f = (
+            f"{float(lon_val):.6f}"
+        )
 
-            linhas.append(
+        chave_nova = (
+            str(d_val).strip(),
+            str(
+                mun_val
+            ).strip().lower(),
+            str(
+                bair_val
+            ).strip().lower(),
+            lat_f,
+            lon_f
+        )
+
+        if chave_nova not in chaves_existentes:
+
+            linhas_novas.append(
                 linha
             )
 
-        if linhas:
-
-            worksheet.append_rows(
-                linhas,
-                value_input_option="USER_ENTERED"
+            chaves_existentes.add(
+                chave_nova
             )
 
-            invalidar_cache()
+    if linhas_novas:
 
-            return True
+        dados_formatados = [
 
-        return False
+            [
+                str(i),
+                str(d),
+                normalizar_texto_local(
+                    mun,
+                    padrao="TERESINA"
+                ),
+                normalizar_texto_local(
+                    b,
+                    padrao=""
+                ),
+                float(lat),
+                float(lon),
+                float(p),
+                str(o),
+                str(mat).strip()
+            ]
 
-    except Exception as e:
+            for (
+                i,
+                d,
+                mun,
+                b,
+                lat,
+                lon,
+                p,
+                o,
+                mat
+            ) in linhas_novas
+        ]
 
-        st.error(
-            f"Erro ao inserir lote: {e}"
+        worksheet.append_rows(
+            dados_formatados,
+            value_input_option="USER_ENTERED"
         )
 
-        return False
+        time.sleep(0.3)
+
+        limpar_cache()
+
+        return len(
+            linhas_novas
+        )
+
+    return 0
 
 
 def atualizar_ponto(
-    id_ponto,
-    data,
-    municipio,
-    bairro,
-    latitude,
-    longitude,
-    pressao,
-    observacao,
-    matricula
-):
-
-    if worksheet is None:
-        return False
+    id_registro: str,
+    municipio: str,
+    matricula: str,
+    bairro: str,
+    lat: float,
+    lon: float,
+    pressao: float,
+    data_str: str,
+    observacao: str
+) -> bool:
 
     try:
 
         celula = worksheet.find(
-            str(id_ponto)
+            str(id_registro)
         )
 
-        if not celula:
+        if celula is None:
+
             return False
 
-        linha = [
-            str(id_ponto),
-            data.strftime("%d/%m/%Y")
-            if isinstance(data, (date, datetime))
-            else str(data),
-            str(municipio).strip(),
-            str(bairro).strip(),
-            round(float(latitude), 6),
-            round(float(longitude), 6),
-            converter_float(pressao),
-            str(observacao).strip(),
-            str(matricula).strip()
-        ]
+        linha = celula.row
 
         worksheet.update(
-            f"A{celula.row}:I{celula.row}",
-            [linha],
-            value_input_option="USER_ENTERED"
+            f"A{linha}:I{linha}",
+            [[
+                str(id_registro),
+                str(data_str),
+                normalizar_texto_local(
+                    municipio,
+                    padrao="TERESINA"
+                ),
+                normalizar_texto_local(
+                    bairro,
+                    padrao=""
+                ),
+                float(lat),
+                float(lon),
+                float(pressao),
+                str(observacao),
+                str(matricula).strip()
+            ]]
         )
 
-        invalidar_cache()
+        time.sleep(0.3)
+
+        limpar_cache()
 
         return True
 
     except Exception as e:
 
         st.error(
-            f"Erro ao atualizar ponto: {e}"
+            f"Erro ao atualizar: {e}"
         )
 
         return False
 
 
-def excluir_ponto(id_ponto):
-
-    if worksheet is None:
-        return False
+def excluir_ponto(
+    id_registro: str
+) -> bool:
 
     try:
 
         celula = worksheet.find(
-            str(id_ponto)
+            str(id_registro)
         )
 
-        if not celula:
+        if celula is None:
+
             return False
 
         worksheet.delete_rows(
             celula.row
         )
 
-        invalidar_cache()
+        time.sleep(0.3)
+
+        limpar_cache()
 
         return True
 
-    except Exception as e:
-
-        st.error(
-            f"Erro ao excluir ponto: {e}"
-        )
+    except Exception:
 
         return False
 
 
-# ============================================================
-# EXPORTAÇÃO XLSX
-# ============================================================
+def data_para_str(
+    d: date
+) -> str:
 
-def exportar_xlsx(df_export):
-
-    output = io.BytesIO()
-
-    with pd.ExcelWriter(
-        output,
-        engine="openpyxl"
-    ) as writer:
-
-        df_export.to_excel(
-            writer,
-            index=False,
-            sheet_name="Baixa Pressão"
-        )
-
-    output.seek(0)
-
-    return output
+    return d.strftime(
+        "%d/%m/%Y"
+    )
 
 
-# ============================================================
-# EXPORTAÇÃO KML
-# ============================================================
-
-def exportar_kml(df_export):
+def gerar_kml(df):
 
     kml = simplekml.Kml()
 
-    for _, row in df_export.iterrows():
+    for _, row in df.iterrows():
 
-        lat = converter_float(
-            row["Latitude"],
-            None
+        lat = row.get(
+            "Latitude"
         )
 
-        lon = converter_float(
-            row["Longitude"],
-            None
+        lon = row.get(
+            "Longitude"
         )
 
-        if lat is None or lon is None:
-            continue
+        if pd.notnull(lat) and pd.notnull(lon):
 
-        classificacao = classificar_pressao(
-            row["Pressao_MCA"]
-        )
+            try:
 
-        pnt = kml.newpoint(
-            name=str(
-                row["Bairro"]
-            ),
-            coords=[
-                (lon, lat)
-            ]
-        )
+                obs_text = (
+                    f"\nObservação: "
+                    f"{row.get('Observacao', '')}"
+                    if str(
+                        row.get(
+                            "Observacao",
+                            ""
+                        )
+                    ).strip()
+                    else ""
+                )
 
-        pnt.description = (
-            f"Bairro: {row['Bairro']}<br>"
-            f"Município: {row['Municipio']}<br>"
-            f"Pressão: "
-            f"{formatar_pressao(row['Pressao_MCA'])} MCA<br>"
-            f"Classificação: {classificacao}<br>"
-            f"Matrícula: {row['Matricula']}"
-        )
+                matricula_text = (
+                    f"\nMatrícula: "
+                    f"{row.get('Matricula', '')}"
+                    if str(
+                        row.get(
+                            "Matricula",
+                            ""
+                        )
+                    ).strip()
+                    else ""
+                )
 
-    output = io.BytesIO(
-        kml.kml().encode(
-            "utf-8"
-        )
+                kml.newpoint(
+                    name=str(
+                        row.get(
+                            "ID",
+                            "Ponto"
+                        )
+                    ),
+                    description=(
+                        f"Município: "
+                        f"{row.get('Municipio', '')}\n"
+                        f"Bairro: "
+                        f"{row.get('Bairro', '')}\n"
+                        f"Matrícula: "
+                        f"{row.get('Matricula', '')}\n"
+                        f"Pressão: "
+                        f"{row.get('Pressao_MCA', '')} MCA"
+                        f"{obs_text}"
+                    ),
+                    coords=[
+                        (
+                            float(lon),
+                            float(lat)
+                        )
+                    ]
+                )
+
+            except (
+                ValueError,
+                TypeError
+            ):
+
+                continue
+
+    return kml.kml()
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+hoje = date.today()
+
+if "data_inicial_selecionada" not in st.session_state:
+
+    st.session_state.data_inicial_selecionada = hoje
+
+if "data_final_selecionada" not in st.session_state:
+
+    st.session_state.data_final_selecionada = hoje
+
+if "clicked_lat" not in st.session_state:
+
+    st.session_state.clicked_lat = None
+
+if "clicked_lon" not in st.session_state:
+
+    st.session_state.clicked_lon = None
+
+if "modo_adicionar_mapa" not in st.session_state:
+
+    st.session_state.modo_adicionar_mapa = False
+
+if "dados_upload_pendentes_bp" not in st.session_state:
+
+    st.session_state.dados_upload_pendentes_bp = None
+
+if "nome_arquivo_pendente_bp" not in st.session_state:
+
+    st.session_state.nome_arquivo_pendente_bp = None
+
+if "file_uploader_key_bp" not in st.session_state:
+
+    st.session_state.file_uploader_key_bp = 0
+
+
+# ============================================================
+# DIALOGS
+# ============================================================
+@st.dialog("➕ Cadastrar Novo Ponto")
+def modal_novo_ponto():
+
+    lat_default = (
+        st.session_state.clicked_lat
+        if st.session_state.clicked_lat is not None
+        else LAT_BASE
     )
 
-    return output
+    lon_default = (
+        st.session_state.clicked_lon
+        if st.session_state.clicked_lon is not None
+        else LON_BASE
+    )
+
+    with st.form(
+        "form_novo_ponto_modal",
+        clear_on_submit=True
+    ):
+
+        data_cadastro = st.date_input(
+            "Data do Registro",
+            value=st.session_state.data_final_selecionada,
+            format="DD/MM/YYYY"
+        )
+
+        municipio = st.text_input(
+            "Município *",
+            value="Teresina"
+        )
+
+        matricula = st.text_input(
+            "Matrícula",
+            placeholder="Ex: 123456789"
+        )
+
+        bairro = st.text_input(
+            "Bairro *",
+            placeholder="Ex: Centro"
+        )
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+
+            lat = st.text_input(
+                "Latitude * (aceita vírgula ou ponto)",
+                value=str(lat_default)
+            )
+
+        with c2:
+
+            lon = st.text_input(
+                "Longitude * (aceita vírgula ou ponto)",
+                value=str(lon_default)
+            )
+
+        pressao = st.number_input(
+            "Pressão (MCA) *",
+            format="%.2f",
+            value=0.00,
+            min_value=0.0,
+            step=0.1
+        )
+
+        observacao = st.text_input(
+            "Observação",
+            placeholder="Ex: Válvula fechada"
+        )
+
+        enviado = st.form_submit_button(
+            "Cadastrar Ponto",
+            type="primary",
+            use_container_width=True
+        )
+
+        if enviado:
+
+            lat_n = normalizar_coordenada(
+                lat,
+                "lat"
+            )
+
+            lon_n = normalizar_coordenada(
+                lon,
+                "lon"
+            )
+
+            if not municipio.strip() or not bairro.strip():
+
+                st.error(
+                    "Município e Bairro são obrigatórios."
+                )
+
+            elif lat_n is None or lon_n is None:
+
+                st.error(
+                    "Coordenadas inválidas. "
+                    "Verifique os valores de Latitude e Longitude."
+                )
+
+            else:
+
+                novo_id = adicionar_ponto(
+                    normalizar_texto_local(
+                        municipio,
+                        padrao="TERESINA"
+                    ),
+                    matricula.strip(),
+                    normalizar_texto_local(
+                        bairro,
+                        padrao=""
+                    ),
+                    lat_n,
+                    lon_n,
+                    pressao,
+                    data_para_str(
+                        data_cadastro
+                    ),
+                    observacao.strip()
+                )
+
+                st.success(
+                    f"Ponto cadastrado com sucesso! ID: {novo_id}"
+                )
+
+                st.session_state.clicked_lat = None
+                st.session_state.clicked_lon = None
+
+                st.rerun()
+
+
+@st.dialog("✏️ Editar Ponto")
+def modal_editar_ponto(
+    id_registro: str
+):
+
+    df_all = carregar_dados()
+
+    df_edit_busca = df_all[
+        df_all["ID"] == id_registro
+    ]
+
+    if not df_edit_busca.empty:
+
+        reg_edit = df_edit_busca.iloc[0]
+
+        try:
+
+            data_parsed = datetime.strptime(
+                str(reg_edit["Data"]),
+                "%d/%m/%Y"
+            ).date()
+
+        except ValueError:
+
+            data_parsed = hoje
+
+        with st.form(
+            "form_edicao_modal"
+        ):
+
+            data_e = st.date_input(
+                "Data do Registro",
+                value=data_parsed,
+                format="DD/MM/YYYY"
+            )
+
+            municipio_e = st.text_input(
+                "Município *",
+                value=str(
+                    reg_edit["Municipio"]
+                )
+            )
+
+            matricula_e = st.text_input(
+                "Matrícula",
+                value=str(
+                    reg_edit["Matricula"]
+                )
+            )
+
+            bairro_e = st.text_input(
+                "Bairro *",
+                value=str(
+                    reg_edit["Bairro"]
+                )
+            )
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+
+                lat_e = st.text_input(
+                    "Latitude *",
+                    value=str(
+                        reg_edit["Latitude"]
+                        or LAT_BASE
+                    )
+                )
+
+            with c2:
+
+                lon_e = st.text_input(
+                    "Longitude *",
+                    value=str(
+                        reg_edit["Longitude"]
+                        or LON_BASE
+                    )
+                )
+
+            pressao_e = st.number_input(
+                "Pressão (MCA) *",
+                format="%.2f",
+                value=float(
+                    reg_edit["Pressao_MCA"]
+                    or 0.0
+                ),
+                min_value=0.0,
+                step=0.1
+            )
+
+            observacao_e = st.text_input(
+                "Observação",
+                value=str(
+                    reg_edit["Observacao"]
+                )
+            )
+
+            col_salvar, col_canc = st.columns(2)
+
+            with col_salvar:
+
+                salvar_edicao = st.form_submit_button(
+                    "💾 Salvar",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            with col_canc:
+
+                cancelar_edicao = st.form_submit_button(
+                    "❌ Cancelar",
+                    use_container_width=True
+                )
+
+            if salvar_edicao:
+
+                lat_n = normalizar_coordenada(
+                    lat_e,
+                    "lat"
+                )
+
+                lon_n = normalizar_coordenada(
+                    lon_e,
+                    "lon"
+                )
+
+                if (
+                    not municipio_e.strip()
+                    or not bairro_e.strip()
+                ):
+
+                    st.error(
+                        "Município e Bairro são obrigatórios."
+                    )
+
+                elif lat_n is None or lon_n is None:
+
+                    st.error(
+                        "Coordenadas inválidas."
+                    )
+
+                else:
+
+                    if atualizar_ponto(
+                        id_registro,
+                        normalizar_texto_local(
+                            municipio_e,
+                            padrao="TERESINA"
+                        ),
+                        matricula_e.strip(),
+                        normalizar_texto_local(
+                            bairro_e,
+                            padrao=""
+                        ),
+                        lat_n,
+                        lon_n,
+                        pressao_e,
+                        data_para_str(
+                            data_e
+                        ),
+                        observacao_e.strip()
+                    ):
+
+                        st.success(
+                            "Atualizado com sucesso!"
+                        )
+
+                        st.rerun()
+
+            if cancelar_edicao:
+
+                st.rerun()
+
+    else:
+
+        st.warning(
+            "Registro não encontrado."
+        )
+
+
+@st.dialog("📋 Pré-visualização da Planilha")
+def modal_previa_upload():
+
+    st.write(
+        f"Arquivo carregado: "
+        f"**{st.session_state.nome_arquivo_pendente_bp}**"
+    )
+
+    df_preview = pd.DataFrame(
+        st.session_state.dados_upload_pendentes_bp,
+        columns=[
+            "ID",
+            "Data",
+            "Municipio",
+            "Bairro",
+            "Latitude",
+            "Longitude",
+            "Pressao_MCA",
+            "Observacao",
+            "Matricula"
+        ]
+    )
+
+    st.dataframe(
+        df_preview[
+            [
+                "Data",
+                "Municipio",
+                "Matricula",
+                "Bairro",
+                "Latitude",
+                "Longitude",
+                "Pressao_MCA",
+                "Observacao"
+            ]
+        ],
+        use_container_width=True
+    )
+
+    st.info(
+        f"Total de registros válidos prontos para envio: "
+        f"**{len(df_preview)}**"
+    )
+
+    col_btn1, col_btn2 = st.columns(2)
+
+    with col_btn1:
+
+        if st.button(
+            "Confirmar e Enviar",
+            type="primary",
+            use_container_width=True
+        ):
+
+            with st.spinner(
+                "Enviando registros com segurança para o Google Sheets..."
+            ):
+
+                qtd_inserida = adicionar_lote_seguro(
+                    st.session_state.dados_upload_pendentes_bp
+                )
+
+            st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.nome_arquivo_pendente_bp = None
+            st.session_state.file_uploader_key_bp += 1
+
+            if qtd_inserida > 0:
+
+                st.success(
+                    f"✅ {qtd_inserida} novos registros importados com sucesso!"
+                )
+
+            else:
+
+                st.info(
+                    "ℹ️ Todos os registros da planilha já existiam "
+                    "no sistema. Nenhuma duplicação foi feita."
+                )
+
+            time.sleep(1)
+
+            st.rerun()
+
+    with col_btn2:
+
+        if st.button(
+            "Cancelar",
+            use_container_width=True
+        ):
+
+            st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.nome_arquivo_pendente_bp = None
+            st.session_state.file_uploader_key_bp += 1
+
+            st.rerun()
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
-
 with st.sidebar:
 
     st.markdown(
-        "## 💧 Filtros"
+        "### 💧 COI - Monitoramento"
+    )
+
+    st.caption(
+        "Baixa Pressão • Tempo Real"
     )
 
     st.markdown(
-        "---"
+        "#### 📅 Selecionar Período"
     )
 
-    if not df.empty:
+    c_data_ini, c_data_fim = st.columns(2)
 
-        datas_validas = df[
-            "Data"
-        ].dropna()
+    with c_data_ini:
 
-        if not datas_validas.empty:
+        data_inicial = st.date_input(
+            "Data inicial",
+            value=st.session_state.data_inicial_selecionada,
+            format="DD/MM/YYYY",
+            key="calendario_data_inicial"
+        )
 
-            data_min = (
-                datas_validas
-                .min()
-                .date()
-            )
+    with c_data_fim:
 
-            data_max = (
-                datas_validas
-                .max()
-                .date()
+        data_final = st.date_input(
+            "Data final",
+            value=st.session_state.data_final_selecionada,
+            format="DD/MM/YYYY",
+            key="calendario_data_final"
+        )
+
+    st.session_state.data_inicial_selecionada = data_inicial
+    st.session_state.data_final_selecionada = data_final
+
+    if data_inicial > data_final:
+
+        st.error(
+            "A data inicial não pode ser maior que a data final."
+        )
+
+        periodo_valido = False
+
+    else:
+
+        periodo_valido = True
+
+        if data_inicial == data_final:
+
+            st.success(
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}**"
             )
 
         else:
 
-            data_min = date.today()
-            data_max = date.today()
+            st.info(
+                f"Exibindo dados de "
+                f"**{data_para_str(data_inicial)}** "
+                f"a **{data_para_str(data_final)}**"
+            )
 
-    else:
-
-        data_min = date.today()
-        data_max = date.today()
-
-    intervalo_data = st.date_input(
-        "Período",
-        value=(
-            data_min,
-            data_max
-        ),
-        min_value=data_min,
-        max_value=data_max
-    )
-
-    if len(intervalo_data) == 2:
-
-        data_inicio = intervalo_data[0]
-        data_fim = intervalo_data[1]
-
-    else:
-
-        data_inicio = data_min
-        data_fim = data_max
-
-    municipios = sorted(
-        [
-            x for x in df[
-                "Municipio"
-            ].dropna().unique()
-            if str(x).strip()
-        ]
-    )
-
-    municipio_selecionado = st.selectbox(
-        "Município",
-        ["Todos"] + municipios
-    )
-
-    df_bairro_filtro = df.copy()
-
-    if municipio_selecionado != "Todos":
-
-        df_bairro_filtro = df_bairro_filtro[
-            df_bairro_filtro[
-                "Municipio"
-            ] == municipio_selecionado
-        ]
-
-    bairros = sorted(
-        [
-            x for x in df_bairro_filtro[
-                "Bairro"
-            ].dropna().unique()
-            if str(x).strip()
-        ]
-    )
-
-    bairro_selecionado = st.selectbox(
-        "Bairro",
-        ["Todos"] + bairros
-    )
-
-    matriculas = sorted(
-        [
-            x for x in df[
-                "Matricula"
-            ].dropna().unique()
-            if str(x).strip()
-        ]
-    )
-
-    matricula_selecionada = st.selectbox(
-        "Matrícula",
-        ["Todas"] + matriculas
-    )
-
-    faixa_pressao = st.slider(
-        "Faixa de pressão (MCA)",
-        min_value=0.0,
-        max_value=100.0,
-        value=(0.0, 100.0),
-        step=0.5
-    )
+    st.divider()
 
     st.markdown(
-        "---"
+        "#### 🔍 Filtros"
     )
 
-    st.markdown(
-        "### 📍 Visualização"
-    )
+    df_all = carregar_dados()
 
-    tipo_mapa = st.selectbox(
-        "Tipo de mapa",
-        [
-            "OSM",
-            "Esri Satellite",
-            "OpenTopoMap"
-        ]
-    )
+    if not df_all.empty and periodo_valido:
 
-    modo_visualizacao = st.radio(
-        "Visualização",
-        [
-            "Por bairro",
-            "Medições individuais"
-        ]
-    )
-
-    exibir_rotulos = st.checkbox(
-        "Exibir rótulos dos bairros",
-        value=True
-    )
-
-    modo_adicionar = st.checkbox(
-        "📍 Modo adicionar ponto",
-        value=False
-    )
-
-    st.markdown(
-        "---"
-    )
-
-    st.markdown(
-        "### 🔄 Atualização"
-    )
-
-    intervalo_refresh = st.selectbox(
-        "Atualização automática",
-        [
-            "Desativada",
-            "30 segundos",
-            "1 minuto",
-            "5 minutos"
-        ],
-        index=0
-    )
-
-    if intervalo_refresh != "Desativada":
-
-        mapa_intervalo = {
-            "30 segundos": 30000,
-            "1 minuto": 60000,
-            "5 minutos": 300000
-        }
-
-        st_autorefresh(
-            interval=mapa_intervalo[
-                intervalo_refresh
-            ],
-            key="refresh_bp"
+        df_all["DataObjFiltro"] = pd.to_datetime(
+            df_all["Data"],
+            format="%d/%m/%Y",
+            errors="coerce"
         )
 
-    st.markdown(
-        "---"
+        df_data = df_all[
+            (
+                df_all["DataObjFiltro"].dt.date
+                >= data_inicial
+            )
+            &
+            (
+                df_all["DataObjFiltro"].dt.date
+                <= data_final
+            )
+        ].copy()
+
+    else:
+
+        df_data = (
+            df_all.copy()
+            if not df_all.empty
+            else df_all
+        )
+
+    municipios_opts = (
+        ["Todos"]
+        +
+        sorted(
+            df_data["Municipio"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+        if not df_data.empty
+        else ["Todos"]
     )
 
-    st.markdown(
-        "### 📤 Dados"
+    mun_sel = st.selectbox(
+        "Município",
+        municipios_opts,
+        key="filtro_municipio"
     )
+
+    bairros_base = (
+        df_data[
+            df_data["Municipio"] == mun_sel
+        ]
+        if (
+            mun_sel != "Todos"
+            and not df_data.empty
+        )
+        else df_data
+    )
+
+    bairros_opts = (
+        ["Todos"]
+        +
+        sorted(
+            bairros_base["Bairro"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+        if not bairros_base.empty
+        else ["Todos"]
+    )
+
+    bairro_sel = st.selectbox(
+        "Bairro",
+        bairros_opts,
+        key="filtro_bairro"
+    )
+
+    # ========================================================
+    # FILTRO DE MATRÍCULA
+    # ========================================================
+    matriculas_base = (
+        df_data[
+            (
+                df_data["Municipio"] == mun_sel
+            )
+            &
+            (
+                df_data["Bairro"] == bairro_sel
+            )
+        ]
+        if (
+            mun_sel != "Todos"
+            and bairro_sel != "Todos"
+            and not df_data.empty
+        )
+        else (
+            df_data[
+                df_data["Municipio"] == mun_sel
+            ]
+            if (
+                mun_sel != "Todos"
+                and not df_data.empty
+            )
+            else df_data
+        )
+    )
+
+    matriculas_opts = (
+        ["Todas"]
+        +
+        sorted(
+            [
+                str(x).strip()
+                for x in matriculas_base["Matricula"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+                and str(x).strip().lower()
+                not in ("nan", "none")
+            ]
+        )
+        if not matriculas_base.empty
+        else ["Todas"]
+    )
+
+    matricula_sel = st.selectbox(
+        "Matrícula",
+        matriculas_opts,
+        key="filtro_matricula"
+    )
+
+    faixa_sel = st.selectbox(
+        "Faixa de Pressão",
+        [
+            "Todas",
+            "Sem Pressão (0 MCA)",
+            "Baixa Pressão (> 0 e ≤ 5 MCA)",
+            "Em Atenção (> 5 e ≤ 10 MCA)",
+            "Alta Pressão (> 15 MCA)"
+        ],
+        key="filtro_pressao"
+    )
+
+    st.divider()
+
+    st.markdown(
+        "#### ➕ Ações e Dados"
+    )
+
+    if st.button(
+        "Adicionar Novo Ponto",
+        type="primary",
+        use_container_width=True
+    ):
+
+        modal_novo_ponto()
 
     arquivo_upload = st.file_uploader(
-        "Importar XLSX ou CSV",
+        "📂 Enviar Planilha (XLSX/CSV)",
         type=[
             "xlsx",
             "csv"
-        ]
+        ],
+        key=(
+            f"upload_baixa_pressao_"
+            f"{st.session_state.file_uploader_key_bp}"
+        )
     )
 
-    if st.button(
-        "⬇️ Baixar modelo"
-    ):
+    # ========================================================
+    # MODELO XLSX
+    # ========================================================
+    df_modelo = pd.DataFrame(
+        [{
+            "Data": datetime.now().strftime(
+                "%d/%m/%Y"
+            ),
+            "Municipio": "TERESINA",
+            "Bairro": "CENTRO",
+            "Latitude": -5.0892,
+            "Longitude": -42.8019,
+            "Pressao_MCA": 2.5,
+            "Observacao": "EXEMPLO DE OBSERVAÇÃO",
+            "Matricula": "123456789"
+        }],
+        columns=COLUNAS_PADRAO[1:]
+    )
 
-        modelo = pd.DataFrame(
-            columns=COLUNAS_PADRAO
+    output_modelo = io.BytesIO()
+
+    with pd.ExcelWriter(
+        output_modelo,
+        engine="openpyxl"
+    ) as writer:
+
+        df_modelo.to_excel(
+            writer,
+            index=False,
+            sheet_name="Modelo"
         )
 
-        buffer_modelo = io.BytesIO()
+    st.download_button(
+        label="📥 Baixar Planilha Modelo",
+        data=output_modelo.getvalue(),
+        file_name=(
+            "modelo_importacao_"
+            "baixa_pressao.xlsx"
+        ),
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        use_container_width=True
+    )
+
+    # ========================================================
+    # UPLOAD
+    # ========================================================
+    if arquivo_upload is not None:
+
+        if (
+            st.session_state.nome_arquivo_pendente_bp
+            != arquivo_upload.name
+        ):
+
+            try:
+
+                if arquivo_upload.name.endswith(
+                    ".csv"
+                ):
+
+                    df_up = pd.read_csv(
+                        arquivo_upload
+                    )
+
+                else:
+
+                    df_up = pd.read_excel(
+                        arquivo_upload
+                    )
+
+                # Normaliza os nomes das colunas.
+                # Aceita Matricula, Matrícula, MATRICULA, etc.
+                df_up.columns = [
+                    normalizar_coluna(c)
+                    for c in df_up.columns
+                ]
+
+                lote_para_enviar = []
+
+                for _, row in df_up.iterrows():
+
+                    raw_data = row.get(
+                        "Data",
+                        row.get(
+                            "date",
+                            ""
+                        )
+                    )
+
+                    data_val = normalizar_data(
+                        raw_data
+                    )
+
+                    if not data_val:
+
+                        data_val = data_para_str(
+                            st.session_state
+                            .data_final_selecionada
+                        )
+
+                    muni = normalizar_texto_local(
+                        row.get(
+                            "Municipio",
+                            "TERESINA"
+                        ),
+                        padrao="TERESINA"
+                    )
+
+                    bair = normalizar_texto_local(
+                        row.get(
+                            "Bairro",
+                            ""
+                        ),
+                        padrao=""
+                    )
+
+                    matricula_val = str(
+                        row.get(
+                            "Matricula",
+                            ""
+                        )
+                    ).strip()
+
+                    if matricula_val.lower() in (
+                        "nan",
+                        "none"
+                    ):
+
+                        matricula_val = ""
+
+                    lat_val = normalizar_coordenada(
+                        row.get(
+                            "Latitude",
+                            row.get("Lat")
+                        ),
+                        "lat"
+                    )
+
+                    lon_val = normalizar_coordenada(
+                        row.get(
+                            "Longitude",
+                            row.get("Lon")
+                        ),
+                        "lon"
+                    )
+
+                    pres_val = parse_float(
+                        row.get(
+                            "Pressao_MCA",
+                            0.0
+                        ),
+                        0.0
+                    )
+
+                    obs_val = str(
+                        row.get(
+                            "Observacao",
+                            ""
+                        )
+                    ).strip()
+
+                    if obs_val.lower() in (
+                        "nan",
+                        "none"
+                    ):
+
+                        obs_val = ""
+
+                    if (
+                        bair
+                        and lat_val is not None
+                        and lon_val is not None
+                    ):
+
+                        lote_para_enviar.append([
+                            gerar_id(),
+                            data_val,
+                            muni,
+                            bair,
+                            float(lat_val),
+                            float(lon_val),
+                            float(pres_val),
+                            obs_val,
+                            matricula_val
+                        ])
+
+                if lote_para_enviar:
+
+                    st.session_state.dados_upload_pendentes_bp = (
+                        lote_para_enviar
+                    )
+
+                    st.session_state.nome_arquivo_pendente_bp = (
+                        arquivo_upload.name
+                    )
+
+                else:
+
+                    st.warning(
+                        "⚠️ Nenhum registro válido encontrado. "
+                        "Verifique se os nomes das colunas são: "
+                        "Data, Municipio, Matricula, Bairro, Latitude, "
+                        "Longitude, Pressao_MCA, Observacao."
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    f"❌ Erro ao processar arquivo: {e}"
+                )
+
+    if (
+        st.session_state.dados_upload_pendentes_bp
+        is not None
+    ):
+
+        modal_previa_upload()
+
+    st.divider()
+
+    st.markdown(
+        "#### 📥 Exportar Dados"
+    )
+
+    if not df_all.empty:
+
+        output = io.BytesIO()
 
         with pd.ExcelWriter(
-            buffer_modelo,
+            output,
             engine="openpyxl"
         ) as writer:
 
-            modelo.to_excel(
+            df_all.to_excel(
                 writer,
-                index=False
+                index=False,
+                sheet_name="Baixa_Pressao"
             )
 
-        buffer_modelo.seek(0)
+        excel_data = output.getvalue()
 
         st.download_button(
-            "Baixar modelo XLSX",
-            data=buffer_modelo,
-            file_name="modelo_baixa_pressao.xlsx",
+            label="📊 Baixar em Excel (XLSX)",
+            data=excel_data,
+            file_name=(
+                f"baixa_pressao_"
+                f"{datetime.now().strftime('%Y%m%d')}.xlsx"
+            ),
             mime=(
                 "application/vnd.openxmlformats-officedocument."
                 "spreadsheetml.sheet"
-            )
+            ),
+            use_container_width=True
         )
 
-    if st.button(
-        "🔄 Atualizar dados"
-    ):
+        kml_string = gerar_kml(
+            df_all
+        )
 
-        invalidar_cache()
-        st.rerun()
+        st.download_button(
+            label="🗺️ Baixar Mapa (KML/KMZ)",
+            data=kml_string,
+            file_name=(
+                f"baixa_pressao_"
+                f"{datetime.now().strftime('%Y%m%d')}.kml"
+            ),
+            mime="application/vnd.google-earth.kml+xml",
+            use_container_width=True
+        )
+
+    st.divider()
+
+    st.markdown(
+        "#### ⏱️ Atualização"
+    )
+
+    intervalo = st.select_slider(
+        "Intervalo (segundos)",
+        options=[
+            0,
+            15,
+            30,
+            60,
+            120
+        ],
+        value=30
+    )
+
+    if intervalo > 0:
+
+        st_autorefresh(
+            interval=intervalo * 1000,
+            key="autorefresh"
+        )
+
+    st.markdown(
+        "<br>" * 2,
+        unsafe_allow_html=True
+    )
+
+    st.divider()
 
     if st.button(
-        "🏠 Voltar ao menu"
+        "🏠 Voltar ao Menu Principal",
+        use_container_width=True
     ):
 
         st.switch_page(
             "app.py"
         )
 
+    st.divider()
 
-# ============================================================
-# IMPORTAÇÃO
-# ============================================================
+    if "modo_escuro_bp" not in st.session_state:
 
-if arquivo_upload is not None:
+        st.session_state.modo_escuro_bp = False
 
-    try:
+    modo_escuro_bp = st.toggle(
+        "🌙 Modo escuro",
+        value=st.session_state.modo_escuro_bp,
+        key="toggle_modo_escuro_bp",
+    )
 
-        if arquivo_upload.name.lower().endswith(
-            ".csv"
-        ):
+    st.session_state.modo_escuro_bp = (
+        modo_escuro_bp
+    )
 
-            df_importado = pd.read_csv(
-                arquivo_upload,
-                sep=None,
-                engine="python"
-            )
+    if modo_escuro_bp:
 
-        else:
+        st.markdown(
+            """
+            <style>
+                .stApp {
+                    background-color: #0e1117;
+                    color: #fafafa;
+                }
 
-            df_importado = pd.read_excel(
-                arquivo_upload
-            )
+                [data-testid="stSidebar"] {
+                    background-color: #161b22;
+                }
 
-        st.sidebar.success(
-            f"{len(df_importado)} registros carregados."
+                .stApp p,
+                .stApp label,
+                .stApp h1,
+                .stApp h2,
+                .stApp h3,
+                .stApp h4,
+                .stApp h5,
+                .stApp h6 {
+                    color: #f0f0f0 !important;
+                }
+
+                [data-testid="stMetric"],
+                [data-testid="stExpander"],
+                div[data-testid="stDataFrame"] {
+                    background-color: #161b22;
+                }
+
+                input,
+                textarea,
+                [data-baseweb="select"] > div {
+                    background-color: #21262d !important;
+                    color: #f0f0f0 !important;
+                }
+
+                [data-baseweb="select"] * {
+                    color: #f0f0f0 !important;
+                }
+
+                .stButton > button,
+                .stDownloadButton > button {
+                    background-color: #000000 !important;
+                    color: #ffffff !important;
+                    border: 1px solid #444c56 !important;
+                }
+
+                .stButton > button *,
+                .stDownloadButton > button * {
+                    color: #ffffff !important;
+                }
+
+                .stButton > button:hover,
+                .stDownloadButton > button:hover {
+                    background-color: #000000 !important;
+                    color: #ff0000 !important;
+                    border-color: #ff0000 !important;
+                }
+
+                .stButton > button:hover *,
+                .stDownloadButton > button:hover * {
+                    color: #ff0000 !important;
+                }
+
+                [data-testid="stDataFrame"] {
+                    color: #f0f0f0;
+                }
+            </style>
+            """,
+            unsafe_allow_html=True,
         )
 
-        if st.sidebar.button(
-            "Importar registros"
-        ):
-
-            colunas_faltantes = [
-                c for c in COLUNAS_PADRAO
-                if c not in df_importado.columns
-            ]
-
-            for coluna in colunas_faltantes:
-                df_importado[coluna] = ""
-
-            df_importado = df_importado[
-                COLUNAS_PADRAO
-            ]
-
-            if adicionar_lote_seguro(
-                df_importado
-            ):
-
-                st.success(
-                    "Dados importados com sucesso."
-                )
-
-                st.rerun()
-
-    except Exception as e:
-
-        st.sidebar.error(
-            f"Erro na importação: {e}"
-        )
-
 
 # ============================================================
-# FILTRAGEM
+# ÁREA PRINCIPAL
 # ============================================================
-
-df_filtrado = df.copy()
-
-if not df_filtrado.empty:
-
-    df_filtrado = df_filtrado[
-        df_filtrado["Data"].dt.date.between(
-            data_inicio,
-            data_fim
-        )
-    ]
-
-    if municipio_selecionado != "Todos":
-
-        df_filtrado = df_filtrado[
-            df_filtrado[
-                "Municipio"
-            ] == municipio_selecionado
-        ]
-
-    if bairro_selecionado != "Todos":
-
-        df_filtrado = df_filtrado[
-            df_filtrado[
-                "Bairro"
-            ] == bairro_selecionado
-        ]
-
-    if matricula_selecionada != "Todas":
-
-        df_filtrado = df_filtrado[
-            df_filtrado[
-                "Matricula"
-            ] == matricula_selecionada
-        ]
-
-    df_filtrado = df_filtrado[
-        df_filtrado[
-            "Pressao_MCA"
-        ].between(
-            faixa_pressao[0],
-            faixa_pressao[1]
-        )
-    ]
-
-
-# ============================================================
-# TÍTULO
-# ============================================================
-
 st.title(
     "💧 Painel de Monitoramento de Baixa Pressão - COI"
 )
+
+if periodo_valido:
+
+    if data_inicial == data_final:
+
+        st.caption(
+            f"Visualizando: "
+            f"**{data_para_str(data_inicial)}**"
+        )
+
+    else:
+
+        st.caption(
+            f"Visualizando de "
+            f"**{data_para_str(data_inicial)}** "
+            f"a **{data_para_str(data_final)}**"
+        )
+
+df = carregar_dados()
+
+
+# ============================================================
+# FILTRO PRINCIPAL POR INTERVALO
+# ============================================================
+if not df.empty and periodo_valido:
+
+    df["DataObjFiltro"] = pd.to_datetime(
+        df["Data"],
+        format="%d/%m/%Y",
+        errors="coerce"
+    )
+
+    df_filtrado = df[
+        (
+            df["DataObjFiltro"].dt.date
+            >= data_inicial
+        )
+        &
+        (
+            df["DataObjFiltro"].dt.date
+            <= data_final
+        )
+    ].copy()
+
+else:
+
+    df_filtrado = (
+        df.copy()
+        if not df.empty
+        else df.copy()
+    )
+
+
+if mun_sel != "Todos":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Municipio"] == mun_sel
+    ]
+
+
+if bairro_sel != "Todos":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Bairro"] == bairro_sel
+    ]
+
+
+# ============================================================
+# FILTRO PRINCIPAL POR MATRÍCULA
+# ============================================================
+if matricula_sel != "Todas":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Matricula"]
+        .astype(str)
+        .str.strip()
+        == matricula_sel
+    ]
+
+
+if faixa_sel == "Sem Pressão (0 MCA)":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Pressao_MCA"] == 0
+    ]
+
+elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
+
+    df_filtrado = df_filtrado[
+        (
+            df_filtrado["Pressao_MCA"] > 0
+        )
+        &
+        (
+            df_filtrado["Pressao_MCA"] <= 5
+        )
+    ]
+
+elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
+
+    # ========================================================
+    # IMPORTANTE:
+    # O texto apresentado ao usuário permanece ≤ 10 MCA,
+    # mas a regra operacional continua sendo ≤ 15 MCA.
+    # ========================================================
+    df_filtrado = df_filtrado[
+        (
+            df_filtrado["Pressao_MCA"] > 5
+        )
+        &
+        (
+            df_filtrado["Pressao_MCA"] <= 15
+        )
+    ]
+
+elif faixa_sel == "Alta Pressão (> 15 MCA)":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Pressao_MCA"] > 15
+    ]
 
 
 # ============================================================
 # MÉTRICAS
 # ============================================================
+if not df_filtrado.empty:
 
-total = len(
-    df_filtrado
-)
+    total = len(
+        df_filtrado
+    )
 
-sem_pressao = len(
-    df_filtrado[
+    sem_pressao = len(
         df_filtrado[
-            "Pressao_MCA"
-        ] == 0
-    ]
-)
+            df_filtrado["Pressao_MCA"] == 0
+        ]
+    )
 
-baixa_pressao = len(
-    df_filtrado[
-        (
-            df_filtrado[
-                "Pressao_MCA"
-            ] > 0
-        )
-        &
-        (
-            df_filtrado[
-                "Pressao_MCA"
-            ] <= 5
-        )
-    ]
-)
-
-em_atencao = len(
-    df_filtrado[
-        (
-            df_filtrado[
-                "Pressao_MCA"
-            ] > 5
-        )
-        &
-        (
-            df_filtrado[
-                "Pressao_MCA"
-            ] <= 15
-        )
-    ]
-)
-
-alta_pressao = len(
-    df_filtrado[
+    baixa_pressao = len(
         df_filtrado[
-            "Pressao_MCA"
-        ] > 15
-    ]
-)
+            (
+                df_filtrado["Pressao_MCA"] > 0
+            )
+            &
+            (
+                df_filtrado["Pressao_MCA"] <= 5
+            )
+        ]
+    )
 
+    em_atencao = len(
+        df_filtrado[
+            (
+                df_filtrado["Pressao_MCA"] > 5
+            )
+            &
+            (
+                df_filtrado["Pressao_MCA"] <= 15
+            )
+        ]
+    )
 
-col1, col2, col3, col4, col5 = st.columns(5)
+    alta_pressao = len(
+        df_filtrado[
+            df_filtrado["Pressao_MCA"] > 15
+        ]
+    )
 
-with col1:
-    st.metric(
-        "Total",
+    k1, k2, k3, k4, k5 = st.columns(5)
+
+    k1.metric(
+        "Total de Ocorrências",
         total
     )
 
-with col2:
-    st.metric(
-        "Sem Pressão",
+    k2.metric(
+        "Sem Pressão (0 MCA)",
         sem_pressao
     )
 
-with col3:
-    st.metric(
-        "Baixa Pressão",
+    k3.metric(
+        "Baixa Pressão (≤ 5 MCA)",
         baixa_pressao
     )
 
-with col4:
-    st.metric(
-        "Em Atenção",
+    k4.metric(
+        "Em Atenção (> 5 e ≤ 10 MCA)",
         em_atencao
     )
 
-with col5:
-    st.metric(
-        "Alta Pressão",
+    k5.metric(
+        "Alta Pressão (> 15 MCA)",
         alta_pressao
     )
 
+else:
+
+    if periodo_valido:
+
+        st.info(
+            "Nenhum ponto registrado no período "
+            "e filtros selecionados."
+        )
+
+
+st.divider()
+
 
 # ============================================================
-# PIN SVG
+# MAPA
 # ============================================================
+st.subheader(
+    "🗺️ Mapa de Baixa Pressão"
+)
 
+c_map1, c_map2, c_map3, c_map4 = st.columns(
+    [2, 2.2, 2, 2]
+)
+
+
+with c_map1:
+
+    tipo_mapa = st.selectbox(
+        "🗺️ Tipo de Mapa",
+        options=[
+            "Mapa Padrão (OpenStreetMap)",
+            "Satélite (Esri World Imagery)",
+            "Terreno (OpenTopoMap)"
+        ],
+        key="seletor_tipo_mapa_bp"
+    )
+
+
+with c_map2:
+
+    modo_visualizacao = st.selectbox(
+        "📊 Visualização",
+        options=[
+            "Por bairro",
+            "Medições individuais"
+        ],
+        key="modo_visualizacao_mapa_bp",
+        help=(
+            "Por bairro mostra uma visão gerencial consolidada. "
+            "Medições individuais mostra cada ponto registrado."
+        )
+    )
+
+
+with c_map3:
+
+    st.checkbox(
+        "Exibir rótulos dos bairros",
+        value=True,
+        key="mostrar_rotulos_bp",
+        help=(
+            "Mostra informações junto aos pins. "
+            "No modo por bairro mostra pressão média e quantidade. "
+            "No modo individual mostra a medição daquele ponto."
+        )
+    )
+
+    mostrar_rotulos = st.session_state.mostrar_rotulos_bp
+
+
+with c_map4:
+
+    st.session_state.modo_adicionar_mapa = st.checkbox(
+        "📍 Modo adicionar ponto",
+        value=st.session_state.modo_adicionar_mapa
+    )
+
+
+if (
+    not df_filtrado.empty
+    and df_filtrado["Latitude"].notna().any()
+):
+
+    centro_lat = float(
+        df_filtrado["Latitude"].mean()
+    )
+
+    centro_lon = float(
+        df_filtrado["Longitude"].mean()
+    )
+
+    zoom = 13
+
+else:
+
+    centro_lat = LAT_BASE
+    centro_lon = LON_BASE
+    zoom = 12
+
+
+m = folium.Map(
+    location=[
+        centro_lat,
+        centro_lon
+    ],
+    zoom_start=zoom,
+    tiles=None,
+    control_scale=True
+)
+
+
+if "Satélite" in tipo_mapa:
+
+    folium.TileLayer(
+        tiles=(
+            "https://server.arcgisonline.com/"
+            "ArcGIS/rest/services/World_Imagery/"
+            "MapServer/tile/{z}/{y}/{x}"
+        ),
+        attr=(
+            "Esri &mdash; Source: Esri, i-cubed, USDA, "
+            "USGS, AEX, GeoEye, Getmapping, Aerogrid, "
+            "IGN, IGP, UPR-EGP, and the GIS User Community"
+        ),
+        name="Satélite (Esri World Imagery)"
+    ).add_to(m)
+
+elif "Terreno" in tipo_mapa:
+
+    folium.TileLayer(
+        "OpenTopoMap",
+        name="Terreno (OpenTopoMap)"
+    ).add_to(m)
+
+else:
+
+    folium.TileLayer(
+        "OpenStreetMap",
+        name="Mapa Padrão (OpenStreetMap)"
+    ).add_to(m)
+
+
+# ============================================================
+# FUNÇÕES VISUAIS DOS PINS
+# ============================================================
 def gerar_pin_svg(
     cor: str,
     tamanho: str = "bairro"
 ) -> str:
+
+    """
+    Gera um pin SVG independente do CSS de rotação.
+
+    Isso evita problemas de renderização do pin
+    dentro do DivIcon do Folium.
+    """
 
     if tamanho == "individual":
 
         largura = 34
         altura = 39
 
+        escala = 0.88
+
     else:
 
         largura = 40
         altura = 45
+
+        escala = 1.0
 
     return f"""
     <svg
@@ -1270,16 +2507,18 @@ def gerar_pin_svg(
             transform:translate(-50%,-50%);
             overflow:visible;
             pointer-events:auto;
-            z-index:2000;
+            z-index:1100;
         "
     >
+
         <path
             d="
                 M20 43
                 C18.5 40.8 5 26.2 5 16
                 C5 7.72 11.72 1 20 1
                 C28.28 1 35 7.72 35 16
-                C35 26.2 21.5 40.8 20 43 Z
+                C35 26.2 21.5 40.8 20 43
+                Z
             "
             fill="{cor}"
             stroke="#ffffff"
@@ -1293,1731 +2532,1851 @@ def gerar_pin_svg(
             r="5"
             fill="#ffffff"
         />
+
     </svg>
     """
 
 
 # ============================================================
-# CSS
+# VISUALIZAÇÃO DOS MARCADORES
 # ============================================================
-
-map_style_html = """
-
-<style>
-
-.leaflet-marker-icon {
-    background: transparent !important;
-    border: none !important;
-    overflow: visible !important;
-}
-
-.bp-marker-wrapper {
-    position: relative !important;
-    overflow: visible !important;
-    pointer-events: none !important;
-}
-
-.bp-pin-svg {
-    pointer-events: auto !important;
-    overflow: visible !important;
-}
-
-.bp-label-card {
-
-    position: absolute !important;
-
-    width: 158px;
-
-    box-sizing: border-box;
-
-    padding: 5px 8px;
-
-    background: rgba(
-        255,
-        255,
-        255,
-        0.95
-    );
-
-    border: 1px solid rgba(
-        80,
-        80,
-        80,
-        0.30
-    );
-
-    border-left: 4px solid
-        var(--bp-label-color, #777);
-
-    border-radius: 6px;
-
-    box-shadow:
-        0 2px 7px
-        rgba(0, 0, 0, 0.22);
-
-    color: #222;
-
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
-
-    font-size: 11px;
-
-    line-height: 1.25;
-
-    z-index: 900 !important;
-
-    pointer-events: none !important;
-
-    white-space: normal;
-
-    transition:
-        left 0.15s ease,
-        top 0.15s ease,
-        opacity 0.15s ease;
-
-}
-
-.bp-label-card-individual {
-    width: 145px;
-}
-
-.bp-label-card-bairro {
-    width: 158px;
-}
-
-.bp-label-title {
-    font-weight: 700;
-    margin-bottom: 2px;
-}
-
-.bp-label-data {
-    font-weight: 500;
-}
-
-.leaflet-tooltip {
-    display: none !important;
-}
-
-</style>
-
-"""
-
-
-# ============================================================
-# MAPA
-# ============================================================
-
 if not df_filtrado.empty:
 
-    coordenadas_validas = df_filtrado[
-        df_filtrado["Latitude"].notna()
-        &
-        df_filtrado["Longitude"].notna()
-        &
-        (df_filtrado["Latitude"] != 0)
-        &
-        (df_filtrado["Longitude"] != 0)
-    ]
+    validos = df_filtrado.dropna(
+        subset=[
+            "Latitude",
+            "Longitude"
+        ]
+    ).copy()
 
-else:
+    if not validos.empty:
 
-    coordenadas_validas = pd.DataFrame()
+        validos["Municipio"] = (
+            validos["Municipio"]
+            .fillna("MUNICIPIO NAO INFORMADO")
+            .astype(str)
+            .str.strip()
+        )
 
+        validos["Bairro"] = (
+            validos["Bairro"]
+            .fillna("BAIRRO NAO INFORMADO")
+            .astype(str)
+            .str.strip()
+        )
 
-if not coordenadas_validas.empty:
+        validos["Matricula"] = (
+            validos["Matricula"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
 
-    centro_lat = coordenadas_validas[
-        "Latitude"
-    ].mean()
+        validos["Pressao_MCA"] = pd.to_numeric(
+            validos["Pressao_MCA"],
+            errors="coerce"
+        ).fillna(0.0)
 
-    centro_lon = coordenadas_validas[
-        "Longitude"
-    ].mean()
-
-    zoom_inicial = 13
-
-else:
-
-    centro_lat = LAT_BASE
-    centro_lon = LON_BASE
-    zoom_inicial = 12
-
-
-m = folium.Map(
-    location=[
-        centro_lat,
-        centro_lon
-    ],
-    zoom_start=zoom_inicial,
-    control_scale=True,
-    tiles=None
-)
-
-
-# ============================================================
-# CAMADAS
-# ============================================================
-
-folium.TileLayer(
-    "OpenStreetMap",
-    name="OSM",
-    control=True
-).add_to(m)
-
-
-folium.TileLayer(
-    tiles=(
-        "https://server.arcgisonline.com/"
-        "ArcGIS/rest/services/"
-        "World_Imagery/"
-        "MapServer/tile/{z}/{y}/{x}"
-    ),
-    attr="Esri",
-    name="Esri Satellite",
-    control=True
-).add_to(m)
-
-
-folium.TileLayer(
-    "OpenTopoMap",
-    name="OpenTopoMap",
-    control=True
-).add_to(m)
-
-
-# ============================================================
-# MARCADORES
-# ============================================================
-
-if not df_filtrado.empty:
-
-    if modo_visualizacao == "Medições individuais":
-
-        # ----------------------------------------------------
+        # ====================================================
         # MEDIÇÕES INDIVIDUAIS
-        # ----------------------------------------------------
+        # ====================================================
+        if modo_visualizacao == "Medições individuais":
 
-        for _, row in df_filtrado.iterrows():
+            for _, registro in validos.iterrows():
 
-            lat = converter_float(
-                row["Latitude"],
-                None
-            )
+                pressao = float(
+                    registro["Pressao_MCA"]
+                )
 
-            lon = converter_float(
-                row["Longitude"],
-                None
-            )
+                classificacao, cor = classificar_pressao(
+                    pressao
+                )
 
-            if lat is None or lon is None:
-                continue
+                pressao_formatada = (
+                    f"{pressao:.2f}"
+                    .replace(".", ",")
+                )
 
-            if lat == 0 or lon == 0:
-                continue
+                bairro = str(
+                    registro["Bairro"]
+                )
 
-            pressao = converter_float(
-                row["Pressao_MCA"],
-                0
-            )
+                municipio = str(
+                    registro["Municipio"]
+                )
 
-            classificacao = classificar_pressao(
-                pressao
-            )
+                matricula = str(
+                    registro.get(
+                        "Matricula",
+                        ""
+                    )
+                ).strip()
 
-            cor = cor_classificacao(
-                classificacao
-            )
+                data_registro = str(
+                    registro["Data"]
+                )
 
-            bairro = str(
-                row["Bairro"]
-            )
+                observacao = str(
+                    registro.get(
+                        "Observacao",
+                        ""
+                    )
+                )
 
-            titulo = escape(
-                bairro
-            )
+                observacao_html = ""
 
-            label_html = ""
+                if (
+                    observacao
+                    and observacao.lower() != "nan"
+                ):
 
-            if exibir_rotulos:
+                    observacao_html = f"""
+                    <div style="
+                        margin-top:9px;
+                        font-size:11px;
+                        color:#475569;
+                    ">
+                        <b>Observação:</b> {escape(observacao)}
+                    </div>
+                    """
 
-                label_html = f"""
-                <div
-                    class="
-                        bp-label-card
-                        bp-label-card-individual
-                    "
-                    data-bp-label="1"
-                >
-                    <div
-                        class="bp-label-title"
-                    >
-                        {titulo}
+                popup_individual = f"""
+                <div style="
+                    width:250px;
+                    font-family:Arial,sans-serif;
+                    color:#111827;
+                ">
+
+                    <div style="
+                        font-size:16px;
+                        font-weight:800;
+                        margin-bottom:2px;
+                    ">
+                        {escape(bairro)}
                     </div>
 
-                    <div
-                        class="bp-label-data"
-                    >
-                        {formatar_pressao(pressao)}
-                        MCA ·
-                        {escape(classificacao)}
+                    <div style="
+                        font-size:11px;
+                        color:#6b7280;
+                        margin-bottom:8px;
+                    ">
+                        {escape(municipio)}
                     </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        margin-bottom:10px;
+                    ">
+                        <b>Matrícula:</b>
+                        {escape(matricula) if matricula else "Não informada"}
+                    </div>
+
+                    <div style="
+                        background:#f8fafc;
+                        border-radius:8px;
+                        padding:9px;
+                        border-left:4px solid {cor};
+                        margin-bottom:10px;
+                    ">
+
+                        <div style="
+                            font-size:10px;
+                            color:#64748b;
+                        ">
+                            PRESSÃO MEDIDA
+                        </div>
+
+                        <div style="
+                            font-size:20px;
+                            font-weight:800;
+                        ">
+                            {pressao_formatada} MCA
+                        </div>
+
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        line-height:1.55;
+                    ">
+                        <b>Classificação:</b> {classificacao}<br>
+                        <b>Data:</b> {escape(data_registro)}<br>
+                        <b>ID:</b> {escape(str(registro['ID']))}
+                    </div>
+
+                    {observacao_html}
+
                 </div>
                 """
 
-            pin_svg = gerar_pin_svg(
-                cor,
-                "individual"
-            )
+                # --------------------------------------------
+                # RÓTULO INDIVIDUAL
+                # Matrícula NÃO entra aqui.
+                # --------------------------------------------
+                if mostrar_rotulos:
 
-            marker_html = f"""
-            <div
-                class="
-                    bp-marker-wrapper
-                    bp-individual-marker-wrapper
-                "
-                data-bp-priority="1"
-                style="
-                    width:42px;
-                    height:42px;
-                    position:relative;
-                    overflow:visible;
-                "
-            >
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-individual-marker-wrapper"
+                        data-bp-priority="1"
+                        style="
+                            position:relative;
+                            width:42px;
+                            height:42px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
-                {pin_svg}
+                        {gerar_pin_svg(
+                            cor,
+                            "individual"
+                        )}
 
-                {label_html}
+                        <div
+                            class="bp-label-card bp-label-card-individual"
+                            data-bp-default="top"
+                        >
 
-            </div>
-            """
+                            <div class="bp-label-title">
+                                {escape(bairro)}
+                            </div>
 
-            popup_html = f"""
-            <div style="
-                min-width:230px;
-                font-family:Arial;
-            ">
+                            <div class="bp-label-data">
 
-                <b>📍 {escape(bairro)}</b>
+                                <span class="bp-label-pressure">
+                                    {pressao_formatada} MCA
+                                </span>
 
-                <hr>
+                                <span class="bp-label-separator"></span>
 
-                <b>Município:</b>
-                {escape(str(row["Municipio"]))}
-                <br>
+                                <span>
+                                    {escape(classificacao)}
+                                </span>
 
-                <b>Matrícula:</b>
-                {escape(str(row["Matricula"]))}
-                <br>
+                            </div>
 
-                <b>Pressão:</b>
-                {formatar_pressao(pressao)}
-                MCA
-                <br>
+                        </div>
 
-                <b>Classificação:</b>
-                {escape(classificacao)}
-                <br>
+                    </div>
+                    """
 
-                <b>Data:</b>
-                {
-                    row["Data"].strftime("%d/%m/%Y")
-                    if pd.notna(row["Data"])
-                    else ""
-                }
+                else:
 
-                <br>
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-individual-marker-wrapper"
+                        data-bp-priority="1"
+                        style="
+                            position:relative;
+                            width:42px;
+                            height:42px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
-                <b>ID:</b>
-                {escape(str(row["ID"]))}
+                        {gerar_pin_svg(
+                            cor,
+                            "individual"
+                        )}
 
-                <br><br>
+                    </div>
+                    """
 
-                <b>Observação:</b>
-                <br>
-                {escape(str(row["Observacao"]))}
+                folium.map.Marker(
+                    location=[
+                        float(registro["Latitude"]),
+                        float(registro["Longitude"])
+                    ],
+                    icon=folium.DivIcon(
+                        html=marker_html,
+                        icon_size=(
+                            42,
+                            42
+                        ),
+                        icon_anchor=(
+                            21,
+                            21
+                        ),
+                        class_name=(
+                            "pressao-individual-marker"
+                        )
+                    ),
+                    popup=folium.Popup(
+                        popup_individual,
+                        max_width=290
+                    ),
+                    tooltip=(
+                        f"{bairro} | "
+                        f"{pressao_formatada} MCA | "
+                        f"{classificacao}"
+                    )
+                ).add_to(m)
 
-            </div>
-            """
+        # ====================================================
+        # POR BAIRRO
+        # ====================================================
+        else:
 
-            popup = folium.Popup(
-                popup_html,
-                max_width=350
-            )
-
-            tooltip = folium.Tooltip(
-                (
-                    f"{bairro} · "
-                    f"{formatar_pressao(pressao)} MCA · "
-                    f"{classificacao}"
-                ),
-                sticky=False
-            )
-
-            icon = folium.DivIcon(
-                html=marker_html,
-                icon_size=(
-                    42,
-                    42
-                ),
-                icon_anchor=(
-                    21,
-                    21
-                ),
-                class_name=(
-                    "pressao-individual-marker"
-                )
-            )
-
-            marker = folium.Marker(
-                location=[
-                    lat,
-                    lon
-                ],
-                icon=icon,
-                popup=popup,
-                tooltip=tooltip
-            )
-
-            marker.add_to(m)
-
-    else:
-
-        # ----------------------------------------------------
-        # AGRUPAMENTO POR BAIRRO
-        # ----------------------------------------------------
-
-        df_bairros = df_filtrado.copy()
-
-        df_bairros = df_bairros[
-            df_bairros["Latitude"].notna()
-            &
-            df_bairros["Longitude"].notna()
-            &
-            (df_bairros["Latitude"] != 0)
-            &
-            (df_bairros["Longitude"] != 0)
-        ]
-
-        agrupado = (
-            df_bairros
-            .groupby(
+            grupos_bairro = validos.groupby(
                 [
                     "Municipio",
                     "Bairro"
                 ],
-                dropna=False
-            )
-        )
-
-        for (
-            municipio,
-            bairro
-        ), grupo in agrupado:
-
-            if grupo.empty:
-                continue
-
-            lat = grupo[
-                "Latitude"
-            ].mean()
-
-            lon = grupo[
-                "Longitude"
-            ].mean()
-
-            quantidade = len(
-                grupo
+                dropna=False,
+                sort=True
             )
 
-            media_pressao = grupo[
-                "Pressao_MCA"
-            ].mean()
-
-            minima = grupo[
-                "Pressao_MCA"
-            ].min()
-
-            maxima = grupo[
-                "Pressao_MCA"
-            ].max()
-
-            classificacao = classificar_pressao(
-                media_pressao
-            )
-
-            cor = cor_classificacao(
-                classificacao
-            )
-
-            bairro_texto = str(
+            for (
+                municipio,
                 bairro
-            )
+            ), grupo in grupos_bairro:
 
-            municipio_texto = str(
-                municipio
-            )
+                quantidade = int(
+                    len(grupo)
+                )
 
-            label_html = ""
+                media = float(
+                    grupo["Pressao_MCA"].mean()
+                )
 
-            if exibir_rotulos:
+                lat_bairro = float(
+                    grupo["Latitude"].mean()
+                )
 
-                label_html = f"""
-                <div
-                    class="
-                        bp-label-card
-                        bp-label-card-bairro
-                    "
-                    data-bp-label="1"
-                >
+                lon_bairro = float(
+                    grupo["Longitude"].mean()
+                )
 
-                    <div
-                        class="bp-label-title"
-                    >
-                        {escape(bairro_texto)}
-                    </div>
+                classificacao, cor = classificar_pressao(
+                    media
+                )
 
-                    <div
-                        class="bp-label-data"
-                    >
-                        Média:
-                        {formatar_pressao(media_pressao)}
-                        MCA
-                    </div>
+                media_formatada = (
+                    f"{media:.2f}"
+                    .replace(".", ",")
+                )
 
-                    <div
-                        class="bp-label-data"
-                    >
-                        {quantidade}
-                        medição(ões) ·
-                        {escape(classificacao)}
-                    </div>
+                texto_medicoes = (
+                    "medição"
+                    if quantidade == 1
+                    else "medições"
+                )
 
-                </div>
-                """
+                pressao_min = float(
+                    grupo["Pressao_MCA"].min()
+                )
 
-            pin_svg = gerar_pin_svg(
-                cor,
-                "bairro"
-            )
+                pressao_max = float(
+                    grupo["Pressao_MCA"].max()
+                )
 
-            marker_html = f"""
-            <div
-                class="
-                    bp-marker-wrapper
-                    bp-bairro-marker-wrapper
-                "
-                data-bp-priority="{quantidade}"
-                style="
-                    width:44px;
-                    height:44px;
-                    position:relative;
-                    overflow:visible;
-                "
-            >
+                min_formatado = (
+                    f"{pressao_min:.2f}"
+                    .replace(".", ",")
+                )
 
-                {pin_svg}
+                max_formatado = (
+                    f"{pressao_max:.2f}"
+                    .replace(".", ",")
+                )
 
-                {label_html}
+                bairro_html = escape(
+                    str(bairro)
+                )
 
-            </div>
-            """
+                municipio_html = escape(
+                    str(municipio)
+                )
 
-            detalhes = ""
+                # =================================================
+                # DETALHES DAS MEDIÇÕES
+                # =================================================
+                linhas_medicoes = []
 
-            for _, medicao in grupo.iterrows():
+                for _, registro in grupo.sort_values(
+                    by=[
+                        "Data",
+                        "ID"
+                    ],
+                    ascending=[
+                        False,
+                        True
+                    ]
+                ).iterrows():
 
-                data_medicao = ""
-
-                if pd.notna(
-                    medicao["Data"]
-                ):
-
-                    data_medicao = (
-                        medicao["Data"]
-                        .strftime("%d/%m/%Y")
+                    pressao_reg = float(
+                        registro["Pressao_MCA"]
                     )
 
-                detalhes += f"""
-                <div
-                    style="
-                        padding:5px 0;
-                        border-bottom:
-                        1px solid #ddd;
-                    "
-                >
-                    <b>{data_medicao}</b><br>
+                    pressao_reg_formatada = (
+                        f"{pressao_reg:.2f}"
+                        .replace(".", ",")
+                    )
 
-                    Pressão:
-                    {
-                        formatar_pressao(
-                            medicao["Pressao_MCA"]
+                    matricula_reg = str(
+                        registro.get(
+                            "Matricula",
+                            ""
                         )
-                    }
-                    MCA<br>
+                    ).strip()
 
-                    Matrícula:
-                    {
-                        escape(
-                            str(
-                                medicao["Matricula"]
-                            )
-                        )
-                    }
+                    matricula_html = ""
 
-                    <br>
+                    if matricula_reg:
 
-                    ID:
-                    {
-                        escape(
-                            str(
-                                medicao["ID"]
-                            )
-                        )
-                    }
+                        matricula_html = f"""
+                        <div style="
+                            color:#6b7280;
+                            margin-top:2px;
+                        ">
+                            Matrícula:
+                            {escape(matricula_reg)}
+                        </div>
+                        """
+
+                    linhas_medicoes.append(
+                        f"""
+                        <div style="
+                            padding:7px 0;
+                            border-bottom:1px solid #e5e7eb;
+                            font-size:11px;
+                        ">
+
+                            <div style="
+                                font-weight:700;
+                                color:#111827;
+                            ">
+                                {escape(str(registro['Data']))} ·
+                                {pressao_reg_formatada} MCA
+                            </div>
+
+                            <div style="
+                                color:#6b7280;
+                                margin-top:2px;
+                            ">
+                                ID: {escape(str(registro['ID']))}
+                            </div>
+
+                            {matricula_html}
+
+                        </div>
+                        """
+                    )
+
+                detalhes_medicoes = "".join(
+                    linhas_medicoes[:12]
+                )
+
+                if quantidade > 12:
+
+                    detalhes_medicoes += (
+                        f"""
+                        <div style="
+                            margin-top:7px;
+                            color:#6b7280;
+                            font-size:10px;
+                            text-align:center;
+                        ">
+                            + {quantidade - 12}
+                            medições adicionais
+                        </div>
+                        """
+                    )
+
+                popup = f"""
+                <div style="
+                    width:280px;
+                    font-family:Arial,sans-serif;
+                    color:#111827;
+                ">
+
+                    <div style="
+                        font-size:17px;
+                        font-weight:800;
+                        margin-bottom:2px;
+                    ">
+                        {bairro_html}
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#6b7280;
+                        margin-bottom:12px;
+                    ">
+                        {municipio_html}
+                    </div>
+
+                    <div style="
+                        display:flex;
+                        gap:6px;
+                        margin-bottom:10px;
+                    ">
+
+                        <div style="
+                            flex:1;
+                            background:#f8fafc;
+                            border-radius:8px;
+                            padding:8px;
+                            border-left:4px solid {cor};
+                        ">
+
+                            <div style="
+                                font-size:10px;
+                                color:#64748b;
+                            ">
+                                MÉDIA
+                            </div>
+
+                            <div style="
+                                font-size:18px;
+                                font-weight:800;
+                            ">
+                                {media_formatada} MCA
+                            </div>
+
+                        </div>
+
+                        <div style="
+                            width:92px;
+                            background:#f8fafc;
+                            border-radius:8px;
+                            padding:8px;
+                        ">
+
+                            <div style="
+                                font-size:10px;
+                                color:#64748b;
+                            ">
+                                MEDIÇÕES
+                            </div>
+
+                            <div style="
+                                font-size:18px;
+                                font-weight:800;
+                            ">
+                                {quantidade}
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        margin-bottom:8px;
+                    ">
+                        Faixa: <b>{classificacao}</b><br>
+                        Mínima: <b>{min_formatado} MCA</b> ·
+                        Máxima: <b>{max_formatado} MCA</b>
+                    </div>
+
+                    <div style="
+                        max-height:220px;
+                        overflow-y:auto;
+                        border-top:1px solid #e5e7eb;
+                    ">
+                        {detalhes_medicoes}
+                    </div>
+
                 </div>
                 """
 
-            popup_html = f"""
-            <div style="
-                min-width:280px;
-                max-height:400px;
-                overflow-y:auto;
-                font-family:Arial;
-            ">
+                # =================================================
+                # MARCADOR DO BAIRRO
+                # =================================================
+                if mostrar_rotulos:
 
-                <h4 style="
-                    margin:0 0 4px 0;
-                ">
-                    📍 {escape(bairro_texto)}
-                </h4>
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-bairro-marker-wrapper"
+                        data-bp-priority="{quantidade}"
+                        style="
+                            position:relative;
+                            width:44px;
+                            height:44px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
-                <div>
-                    <b>Município:</b>
-                    {escape(municipio_texto)}
-                </div>
+                        {gerar_pin_svg(
+                            cor,
+                            "bairro"
+                        )}
 
-                <hr>
+                        <div
+                            class="bp-label-card bp-label-card-bairro"
+                            data-bp-default="top"
+                        >
 
-                <b>Pressão média:</b>
-                {formatar_pressao(media_pressao)}
-                MCA
+                            <div class="bp-label-title">
+                                {bairro_html}
+                            </div>
 
-                <br>
+                            <div class="bp-label-data">
 
-                <b>Classificação:</b>
-                {escape(classificacao)}
+                                <span class="bp-label-pressure">
+                                    {media_formatada} MCA
+                                </span>
 
-                <br>
+                                <span class="bp-label-separator"></span>
 
-                <b>Quantidade:</b>
-                {quantidade}
+                                <span>
+                                    {quantidade}
+                                    {texto_medicoes}
+                                </span>
 
-                <br>
+                            </div>
 
-                <b>Mínima:</b>
-                {formatar_pressao(minima)}
-                MCA
+                        </div>
 
-                <br>
+                    </div>
+                    """
 
-                <b>Máxima:</b>
-                {formatar_pressao(maxima)}
-                MCA
+                else:
 
-                <hr>
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-bairro-marker-wrapper"
+                        data-bp-priority="{quantidade}"
+                        style="
+                            position:relative;
+                            width:44px;
+                            height:44px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
 
-                <b>Detalhamento</b>
+                        {gerar_pin_svg(
+                            cor,
+                            "bairro"
+                        )}
 
-                {detalhes}
+                    </div>
+                    """
 
-            </div>
-            """
-
-            popup = folium.Popup(
-                popup_html,
-                max_width=380
-            )
-
-            tooltip = folium.Tooltip(
-                (
-                    f"{bairro_texto} · "
-                    f"Média: "
-                    f"{formatar_pressao(media_pressao)} MCA · "
-                    f"{quantidade} medição(ões)"
-                ),
-                sticky=False
-            )
-
-            icon = folium.DivIcon(
-                html=marker_html,
-                icon_size=(
-                    44,
-                    44
-                ),
-                icon_anchor=(
-                    22,
-                    22
-                ),
-                class_name=(
-                    "pressao-bairro-marker"
-                )
-            )
-
-            marker = folium.Marker(
-                location=[
-                    lat,
-                    lon
-                ],
-                icon=icon,
-                popup=popup,
-                tooltip=tooltip
-            )
-
-            marker.add_to(m)
+                folium.map.Marker(
+                    location=[
+                        lat_bairro,
+                        lon_bairro
+                    ],
+                    icon=folium.DivIcon(
+                        html=marker_html,
+                        icon_size=(
+                            44,
+                            44
+                        ),
+                        icon_anchor=(
+                            22,
+                            22
+                        ),
+                        class_name=(
+                            "pressao-bairro-marker"
+                        )
+                    ),
+                    popup=folium.Popup(
+                        popup,
+                        max_width=320
+                    ),
+                    tooltip=(
+                        f"{bairro} | "
+                        f"{media_formatada} MCA | "
+                        f"{quantidade} {texto_medicoes}"
+                    )
+                ).add_to(m)
 
 
 # ============================================================
-# CONTROLE DE CAMADAS
+# ESTILO DOS PINS E RÓTULOS
 # ============================================================
+map_style_html = """
+<style>
 
-folium.LayerControl(
-    collapsed=False
-).add_to(m)
+    .leaflet-marker-icon.pressao-bairro-marker,
+    .leaflet-marker-icon.pressao-individual-marker {
+
+        background: transparent !important;
+
+        border: 0 !important;
+
+        overflow: visible !important;
+
+        padding: 0 !important;
+
+        margin: 0 !important;
+    }
 
 
-# ============================================================
-# CSS
-# ============================================================
+    .pressao-bairro-marker .bp-marker-wrapper,
+    .pressao-individual-marker .bp-marker-wrapper {
+
+        position: relative !important;
+
+        overflow: visible !important;
+
+        pointer-events: auto !important;
+
+        font-family: Arial, sans-serif;
+    }
+
+
+    .bp-pin-svg {
+
+        display: block !important;
+
+        visibility: visible !important;
+
+        opacity: 1 !important;
+
+        overflow: visible !important;
+
+        pointer-events: auto !important;
+    }
+
+
+    .pressao-bairro-marker .bp-pin-svg,
+    .pressao-individual-marker .bp-pin-svg {
+
+        z-index: 1100 !important;
+    }
+
+
+    .bp-label-card {
+
+        position: absolute;
+
+        width: 158px;
+
+        box-sizing: border-box;
+
+        padding: 5px 8px;
+
+        background: rgba(255, 255, 255, 0.97);
+
+        border: 1px solid #d7dee8;
+
+        border-left: 3px solid var(--bp-color, #64748b);
+
+        border-radius: 6px;
+
+        box-shadow:
+            0 2px 8px rgba(15, 23, 42, 0.20);
+
+        color: #111827;
+
+        font-family: Arial, sans-serif;
+
+        display: block;
+
+        opacity: 1;
+
+        visibility: visible;
+
+        z-index: 1000;
+
+        pointer-events: none;
+
+        line-height: 1.1;
+
+        white-space: normal;
+
+        transition:
+            left 0.12s ease,
+            top 0.12s ease,
+            transform 0.12s ease;
+
+        overflow: hidden;
+    }
+
+
+    .bp-marker-wrapper {
+
+        --bp-color: #64748b;
+    }
+
+
+    .bp-label-title {
+
+        font-size: 11px;
+
+        font-weight: 800;
+
+        line-height: 1.15;
+
+        white-space: nowrap;
+
+        overflow: hidden;
+
+        text-overflow: ellipsis;
+
+        color: #111827;
+    }
+
+
+    .bp-label-data {
+
+        display: flex;
+
+        align-items: center;
+
+        gap: 6px;
+
+        margin-top: 4px;
+
+        font-size: 9px;
+
+        line-height: 1.1;
+
+        color: #475569;
+
+        white-space: nowrap;
+    }
+
+
+    .bp-label-pressure {
+
+        font-weight: 800;
+
+        color: #111827;
+    }
+
+
+    .bp-label-separator {
+
+        display: inline-block;
+
+        width: 1px;
+
+        height: 10px;
+
+        background: #cbd5e1;
+
+        flex: 0 0 auto;
+    }
+
+
+    .bp-label-card-individual {
+
+        width: 145px;
+
+        padding: 5px 7px;
+    }
+
+
+    .bp-label-card-individual .bp-label-title {
+
+        font-size: 10px;
+    }
+
+
+    .bp-label-card-individual .bp-label-data {
+
+        font-size: 8.5px;
+
+        gap: 5px;
+    }
+
+
+    .bp-label-card-bairro {
+
+        width: 158px;
+    }
+
+
+    .pressao-bairro-marker .leaflet-tooltip,
+    .pressao-individual-marker .leaflet-tooltip {
+
+        display: none !important;
+    }
+
+</style>
+"""
 
 m.get_root().html.add_child(
-    Element(
-        map_style_html
-    )
+    Element(map_style_html)
 )
 
 
 # ============================================================
-# JAVASCRIPT
-# DESCONGESTIONAMENTO DOS RÓTULOS
+# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
 # ============================================================
-
 map_name = m.get_name()
 
-
-declutter_js = r"""
+declutter_js = """
+<script>
 (function() {
 
-    const MAP_NAME_PLACEHOLDER = "__MAP_NAME__";
+    function iniciarDeclutter() {
 
-    const ESPACO_PIN = 14;
-    const MARGEM_ROTULO = 5;
-    const MARGEM_MAPA = 4;
+        if (typeof MAP_NAME_PLACEHOLDER === "undefined") {
 
-    const POSICOES = [
-        "top",
-        "bottom",
-        "right",
-        "left",
-        "top-right",
-        "top-left",
-        "bottom-right",
-        "bottom-left"
-    ];
-
-
-    function obterMapa() {
-
-        return window[
-            MAP_NAME_PLACEHOLDER
-        ];
-
-    }
-
-
-    function obterWrappers(map) {
-
-        if (!map) {
-            return [];
-        }
-
-        const container =
-            map.getContainer();
-
-        return Array.from(
-            container.querySelectorAll(
-                ".bp-marker-wrapper"
-            )
-        );
-
-    }
-
-
-    function obterPinCentro(wrapper) {
-
-        const svg =
-            wrapper.querySelector(
-                ".bp-pin-svg"
+            setTimeout(
+                iniciarDeclutter,
+                150
             );
 
-        if (!svg) {
-            return null;
+            return;
         }
 
-        const rect =
-            svg.getBoundingClientRect();
 
-        return {
-            left: rect.left,
-            right: rect.right,
-            top: rect.top,
-            bottom: rect.bottom,
-            centerX:
-                rect.left +
-                rect.width / 2,
-            centerY:
-                rect.top +
-                rect.height / 2
-        };
-
-    }
+        var map = MAP_NAME_PLACEHOLDER;
 
 
-    /*
-     * Esta é a parte principal da correção.
-     *
-     * Não usamos somente a caixa do SVG.
-     * Criamos uma área de segurança ao redor
-     * do centro do marcador.
-     *
-     * Assim o rótulo jamais poderá atravessar
-     * a região ocupada pelo pin.
-     */
-    function obterZonaProtegidaPin(wrapper) {
+        function caixasSeSobrepoem(
+            a,
+            b,
+            margem
+        ) {
 
-        const pin =
-            obterPinCentro(wrapper);
-
-        if (!pin) {
-            return null;
+            return !(
+                a.right + margem < b.left ||
+                a.left - margem > b.right ||
+                a.bottom + margem < b.top ||
+                a.top - margem > b.bottom
+            );
         }
 
-        return {
-            left:
-                pin.left -
-                ESPACO_PIN,
 
-            right:
-                pin.right +
-                ESPACO_PIN,
+        function estaDentroDoMapa(
+            caixa,
+            areaMapa,
+            margem
+        ) {
 
-            top:
-                pin.top -
-                ESPACO_PIN,
-
-            bottom:
-                pin.bottom +
-                ESPACO_PIN
-        };
-
-    }
-
-
-    function caixasSeSobrepoem(
-        a,
-        b,
-        margem
-    ) {
-
-        if (!a || !b) {
-            return false;
+            return !(
+                caixa.left < areaMapa.left + margem ||
+                caixa.right > areaMapa.right - margem ||
+                caixa.top < areaMapa.top + margem ||
+                caixa.bottom > areaMapa.bottom - margem
+            );
         }
 
-        const m =
-            margem || 0;
 
-        return !(
-            a.right <
-                b.left - m
-            ||
-            a.left >
-                b.right + m
-            ||
-            a.bottom <
-                b.top - m
-            ||
-            a.top >
-                b.bottom + m
-        );
+        function aplicarPosicao(
+            rotulo,
+            posicao
+        ) {
 
-    }
+            rotulo.style.left = "";
+            rotulo.style.top = "";
+            rotulo.style.transform = "";
 
 
-    function aplicarPosicao(
-        label,
-        pos
-    ) {
+            if (posicao === "top") {
 
-        label.style.transform = "";
-
-        switch (pos) {
-
-            case "top":
-
-                label.style.left =
-                    "50%";
-
-                label.style.top =
-                    "-18px";
-
-                label.style.transform =
+                rotulo.style.left = "50%";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
                     "translate(-50%, -100%)";
 
-                break;
+            }
 
+            else if (posicao === "bottom") {
 
-            case "bottom":
+                rotulo.style.left = "50%";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(-50%, 0)";
 
-                label.style.left =
-                    "50%";
+            }
 
-                label.style.top =
-                    "62px";
+            else if (posicao === "right") {
 
-                label.style.transform =
-                    "translateX(-50%)";
+                rotulo.style.left = "46px";
+                rotulo.style.top = "50%";
+                rotulo.style.transform =
+                    "translate(0, -50%)";
 
-                break;
+            }
 
+            else if (posicao === "left") {
 
-            case "right":
-
-                label.style.left =
-                    "62px";
-
-                label.style.top =
-                    "50%";
-
-                label.style.transform =
-                    "translateY(-50%)";
-
-                break;
-
-
-            case "left":
-
-                label.style.left =
-                    "-18px";
-
-                label.style.top =
-                    "50%";
-
-                label.style.transform =
+                rotulo.style.left = "-6px";
+                rotulo.style.top = "50%";
+                rotulo.style.transform =
                     "translate(-100%, -50%)";
 
-                break;
+            }
 
+            else if (posicao === "top-right") {
 
-            case "top-right":
+                rotulo.style.left = "42px";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
+                    "translate(0, -100%)";
 
-                label.style.left =
-                    "58px";
+            }
 
-                label.style.top =
-                    "-14px";
+            else if (posicao === "top-left") {
 
-                label.style.transform =
-                    "translateY(-100%)";
-
-                break;
-
-
-            case "top-left":
-
-                label.style.left =
-                    "-14px";
-
-                label.style.top =
-                    "-14px";
-
-                label.style.transform =
+                rotulo.style.left = "-2px";
+                rotulo.style.top = "-6px";
+                rotulo.style.transform =
                     "translate(-100%, -100%)";
 
-                break;
+            }
 
+            else if (posicao === "bottom-right") {
 
-            case "bottom-right":
-
-                label.style.left =
-                    "58px";
-
-                label.style.top =
-                    "58px";
-
-                break;
-
-
-            case "bottom-left":
-
-                label.style.left =
-                    "-14px";
-
-                label.style.top =
-                    "58px";
-
-                label.style.transform =
-                    "translateX(-100%)";
-
-                break;
-
-        }
-
-    }
-
-
-    function dentroDoMapa(
-        rect,
-        mapaRect
-    ) {
-
-        return (
-            rect.left >=
-                mapaRect.left -
-                MARGEM_MAPA
-            &&
-            rect.right <=
-                mapaRect.right +
-                MARGEM_MAPA
-            &&
-            rect.top >=
-                mapaRect.top -
-                MARGEM_MAPA
-            &&
-            rect.bottom <=
-                mapaRect.bottom +
-                MARGEM_MAPA
-        );
-
-    }
-
-
-    function prioridadeWrapper(
-        wrapper
-    ) {
-
-        const prioridade =
-            Number(
-                wrapper.dataset.bpPriority
-            );
-
-        if (
-            Number.isNaN(prioridade)
-        ) {
-            return 0;
-        }
-
-        return prioridade;
-
-    }
-
-
-    function ehIndividual(
-        wrapper
-    ) {
-
-        return wrapper.classList.contains(
-            "bp-individual-marker-wrapper"
-        );
-
-    }
-
-
-    function recalcularRotulos() {
-
-        const map =
-            obterMapa();
-
-        if (!map) {
-            return;
-        }
-
-        const container =
-            map.getContainer();
-
-        if (!container) {
-            return;
-        }
-
-        const mapaRect =
-            container.getBoundingClientRect();
-
-        const wrappers =
-            obterWrappers(map);
-
-
-        /*
-         * Primeiro coletamos todos os pins.
-         *
-         * Isso é importante:
-         * o algoritmo sabe onde todos os pins
-         * estão antes de começar a posicionar
-         * os rótulos.
-         */
-        const zonasPins =
-            wrappers.map(
-                wrapper => ({
-                    wrapper: wrapper,
-                    zona:
-                        obterZonaProtegidaPin(
-                            wrapper
-                        )
-                })
-            );
-
-
-        const candidatos = [];
-
-
-        wrappers.forEach(
-            wrapper => {
-
-                const label =
-                    wrapper.querySelector(
-                        ".bp-label-card"
-                    );
-
-                if (!label) {
-                    return;
-                }
-
-                label.style.display =
-                    "block";
-
-                label.style.visibility =
-                    "hidden";
-
-                label.style.opacity =
-                    "0";
-
-
-                /*
-                 * Pega a cor do próprio pin.
-                 */
-                const path =
-                    wrapper.querySelector(
-                        ".bp-pin-svg path"
-                    );
-
-                if (path) {
-
-                    const cor =
-                        path.getAttribute(
-                            "fill"
-                        );
-
-                    if (cor) {
-
-                        label.style
-                            .setProperty(
-                                "--bp-label-color",
-                                cor
-                            );
-
-                    }
-
-                }
-
-
-                candidatos.push({
-                    wrapper: wrapper,
-                    label: label,
-                    prioridade:
-                        prioridadeWrapper(
-                            wrapper
-                        ),
-                    individual:
-                        ehIndividual(
-                            wrapper
-                        )
-                });
+                rotulo.style.left = "42px";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(0, 0)";
 
             }
-        );
+
+            else if (posicao === "bottom-left") {
+
+                rotulo.style.left = "-2px";
+                rotulo.style.top = "46px";
+                rotulo.style.transform =
+                    "translate(-100%, 0)";
+
+            }
+        }
 
 
-        /*
-         * Individual primeiro.
-         * Dentro de cada grupo, maior quantidade
-         * recebe prioridade.
-         */
-        candidatos.sort(
-            (a, b) => {
+        function recalcularRotulos() {
 
-                if (
-                    a.individual !==
-                    b.individual
-                ) {
+            var container = map.getContainer();
 
-                    return a.individual
-                        ? -1
-                        : 1;
+            if (!container) {
 
-                }
+                return;
+            }
 
-                return (
-                    b.prioridade -
-                    a.prioridade
+
+            var areaMapa =
+                container.getBoundingClientRect();
+
+
+            var marcadores =
+                container.querySelectorAll(
+                    ".pressao-bairro-marker .bp-marker-wrapper, " +
+                    ".pressao-individual-marker .bp-marker-wrapper"
                 );
 
+
+            if (!marcadores.length) {
+
+                return;
             }
-        );
 
 
-        const rotulosAceitos = [];
+            var candidatos = [];
 
 
-        candidatos.forEach(
-            item => {
+            marcadores.forEach(
+                function(wrapper) {
 
-                const label =
-                    item.label;
-
-                const wrapper =
-                    item.wrapper;
-
-                let aceitou =
-                    false;
+                    var rotulo =
+                        wrapper.querySelector(
+                            ".bp-label-card"
+                        );
 
 
-                for (
-                    let i = 0;
-                    i < POSICOES.length;
-                    i++
-                ) {
+                    if (!rotulo) {
 
-                    const pos =
-                        POSICOES[i];
+                        return;
+                    }
+
+
+                    var svg =
+                        wrapper.querySelector(
+                            ".bp-pin-svg"
+                        );
+
+
+                    if (svg) {
+
+                        var path =
+                            svg.querySelector(
+                                "path"
+                            );
+
+                        if (path) {
+
+                            var corPin =
+                                path.getAttribute(
+                                    "fill"
+                                );
+
+                            if (corPin) {
+
+                                wrapper.style.setProperty(
+                                    "--bp-color",
+                                    corPin
+                                );
+                            }
+                        }
+                    }
+
+
+                    rotulo.style.display =
+                        "block";
+
+                    rotulo.style.visibility =
+                        "hidden";
 
 
                     aplicarPosicao(
-                        label,
-                        pos
+                        rotulo,
+                        "top"
                     );
 
 
-                    /*
-                     * Força o navegador a calcular
-                     * a nova posição imediatamente.
-                     */
-                    const rect =
-                        label.getBoundingClientRect();
+                    var prioridade =
+                        parseInt(
+                            wrapper.getAttribute(
+                                "data-bp-priority"
+                            ) || "0",
+                            10
+                        );
 
 
-                    /*
-                     * 1. Não pode sair do mapa.
-                     */
-                    if (
-                        !dentroDoMapa(
-                            rect,
-                            mapaRect
-                        )
-                    ) {
-                        continue;
+                    if (isNaN(prioridade)) {
+
+                        prioridade = 0;
                     }
 
 
-                    /*
-                     * 2. Não pode bater em
-                     * outro rótulo já aceito.
-                     */
-                    let colideRotulo =
-                        false;
+                    var individual =
+                        wrapper.classList.contains(
+                            "bp-individual-marker-wrapper"
+                        );
 
-                    for (
-                        let j = 0;
-                        j <
-                        rotulosAceitos.length;
-                        j++
+
+                    candidatos.push({
+
+                        wrapper: wrapper,
+
+                        rotulo: rotulo,
+
+                        prioridade: prioridade,
+
+                        individual: individual,
+
+                        ordem: candidatos.length
+
+                    });
+
+                }
+            );
+
+
+            candidatos.sort(
+                function(a, b) {
+
+                    if (
+                        a.individual
+                        !==
+                        b.individual
                     ) {
 
+                        return a.individual
+                            ? 1
+                            : -1;
+                    }
+
+
+                    if (
+                        b.prioridade
+                        !==
+                        a.prioridade
+                    ) {
+
+                        return (
+                            b.prioridade
+                            -
+                            a.prioridade
+                        );
+                    }
+
+
+                    return (
+                        a.ordem
+                        -
+                        b.ordem
+                    );
+
+                }
+            );
+
+
+            var posicoes = [
+
+                "top",
+
+                "bottom",
+
+                "right",
+
+                "left",
+
+                "top-right",
+
+                "top-left",
+
+                "bottom-right",
+
+                "bottom-left"
+
+            ];
+
+
+            var aceitos = [];
+
+
+            var margem = 5;
+
+
+            var margemMapa = 4;
+
+
+            candidatos.forEach(
+                function(item) {
+
+                    var encontrouPosicao = false;
+
+
+                    for (
+                        var p = 0;
+                        p < posicoes.length;
+                        p++
+                    ) {
+
+                        var posicao =
+                            posicoes[p];
+
+
+                        aplicarPosicao(
+                            item.rotulo,
+                            posicao
+                        );
+
+
+                        var caixa =
+                            item.rotulo
+                            .getBoundingClientRect();
+
+
                         if (
-                            caixasSeSobrepoem(
-                                rect,
-                                rotulosAceitos[j],
-                                MARGEM_ROTULO
+                            !estaDentroDoMapa(
+                                caixa,
+                                areaMapa,
+                                margemMapa
                             )
                         ) {
 
-                            colideRotulo =
-                                true;
-
-                            break;
-
-                        }
-
-                    }
-
-                    if (
-                        colideRotulo
-                    ) {
-                        continue;
-                    }
-
-
-                    /*
-                     * 3. NÃO PODE ocupar a área
-                     * protegida de nenhum PIN.
-                     *
-                     * Aqui está a correção principal.
-                     */
-                    let colidePin =
-                        false;
-
-
-                    for (
-                        let j = 0;
-                        j <
-                        zonasPins.length;
-                        j++
-                    ) {
-
-                        const itemPin =
-                            zonasPins[j];
-
-                        if (
-                            !itemPin.zona
-                        ) {
                             continue;
                         }
 
 
-                        /*
-                         * O próprio pin também é
-                         * considerado obstáculo.
-                         *
-                         * Isso impede que o rótulo
-                         * nasça sobre o próprio pin.
-                         */
-                        if (
-                            caixasSeSobrepoem(
-                                rect,
-                                itemPin.zona,
-                                0
-                            )
+                        var conflito = false;
+
+
+                        for (
+                            var i = 0;
+                            i < aceitos.length;
+                            i++
                         ) {
 
-                            colidePin =
-                                true;
+                            if (
+                                caixasSeSobrepoem(
+                                    caixa,
+                                    aceitos[i],
+                                    margem
+                                )
+                            ) {
+
+                                conflito = true;
+
+                                break;
+                            }
+                        }
+
+
+                        if (!conflito) {
+
+                            item.rotulo.style.visibility =
+                                "visible";
+
+                            aceitos.push(
+                                caixa
+                            );
+
+                            encontrouPosicao = true;
 
                             break;
-
                         }
 
                     }
 
 
-                    if (
-                        colidePin
-                    ) {
-                        continue;
+                    if (!encontrouPosicao) {
+
+                        item.rotulo.style.visibility =
+                            "hidden";
+
                     }
 
-
-                    /*
-                     * Encontramos uma posição
-                     * realmente livre.
-                     */
-                    aceitou =
-                        true;
-
-                    label.style.visibility =
-                        "visible";
-
-                    label.style.opacity =
-                        "1";
-
-                    rotulosAceitos.push(
-                        rect
-                    );
-
-                    break;
-
                 }
-
-
-                /*
-                 * Se nenhuma das 8 posições
-                 * for possível, simplesmente
-                 * não mostramos o rótulo.
-                 */
-                if (!aceitou) {
-
-                    label.style.display =
-                        "none";
-
-                    label.style.visibility =
-                        "hidden";
-
-                    label.style.opacity =
-                        "0";
-
-                }
-
-            }
-        );
-
-    }
-
-
-    let recalculoAgendado =
-        false;
-
-
-    function solicitarRecalculo() {
-
-        if (
-            recalculoAgendado
-        ) {
-            return;
+            );
         }
 
-        recalculoAgendado =
-            true;
+
+        var agendamento = null;
 
 
-        requestAnimationFrame(
-            function() {
+        function agendarRecalculo() {
 
-                recalculoAgendado =
-                    false;
+            if (agendamento) {
 
-                recalcularRotulos();
-
+                clearTimeout(
+                    agendamento
+                );
             }
-        );
-
-    }
 
 
-    function iniciar() {
+            agendamento = setTimeout(
+                function() {
 
-        const map =
-            obterMapa();
+                    recalcularRotulos();
 
-        if (!map) {
 
-            setTimeout(
-                iniciar,
-                300
+                    requestAnimationFrame(
+                        function() {
+
+                            recalcularRotulos();
+
+                        }
+                    );
+
+
+                    agendamento = null;
+
+                },
+                80
             );
-
-            return;
         }
 
 
         map.on(
             "zoomend",
-            solicitarRecalculo
+            agendarRecalculo
         );
+
 
         map.on(
             "moveend",
-            solicitarRecalculo
+            agendarRecalculo
         );
+
 
         map.on(
             "resize",
-            solicitarRecalculo
+            agendarRecalculo
         );
 
 
         window.addEventListener(
             "resize",
-            solicitarRecalculo
+            agendarRecalculo
         );
 
 
-        /*
-         * Aguarda o Leaflet terminar
-         * de renderizar os SVGs.
-         */
         setTimeout(
-            solicitarRecalculo,
+            recalcularRotulos,
             100
         );
 
-        setTimeout(
-            solicitarRecalculo,
-            300
-        );
 
         setTimeout(
-            solicitarRecalculo,
-            700
+            recalcularRotulos,
+            250
         );
 
+
         setTimeout(
-            solicitarRecalculo,
-            1200
+            recalcularRotulos,
+            500
+        );
+
+
+        setTimeout(
+            recalcularRotulos,
+            900
         );
 
     }
 
 
-    if (
-        document.readyState ===
-        "loading"
-    ) {
-
-        document.addEventListener(
-            "DOMContentLoaded",
-            iniciar
-        );
-
-    } else {
-
-        iniciar();
-
-    }
+    iniciarDeclutter();
 
 })();
+</script>
 """
 
-
-declutter_js = (
-    declutter_js
-    .replace(
-        "__MAP_NAME__",
-        map_name
-    )
+declutter_js = declutter_js.replace(
+    "MAP_NAME_PLACEHOLDER",
+    map_name
 )
-
 
 m.get_root().html.add_child(
-    Element(
-        f"<script>{declutter_js}</script>"
-    )
+    Element(declutter_js)
 )
 
 
 # ============================================================
-# EXIBIÇÃO DO MAPA
+# LEGENDA DAS CORES
 # ============================================================
+legend_html = f"""
+<div style="
+    position: fixed;
+    bottom: 24px;
+    left: 24px;
+    z-index: 9999;
+    background-color: rgba(255, 255, 255, 0.94);
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    padding: 7px 9px;
+    box-shadow: 0 2px 7px rgba(0, 0, 0, 0.16);
+    font-family: Arial, sans-serif;
+    font-size: 10px;
+    line-height: 1.35;
+    width: 176px;
+    color: #1f2937;
+">
 
-st_folium(
+    <div style="
+        font-weight: 700;
+        margin-bottom: 4px;
+        color: #111827;
+    ">
+        Pressão
+    </div>
+
+    <div style="
+        white-space: nowrap;
+    ">
+        <span style="
+            display:inline-block;
+            width:9px;
+            height:9px;
+            border-radius:50%;
+            background:{COR_SEM_PRESSAO};
+            margin-right:5px;
+            vertical-align:middle;
+        "></span>
+
+        Sem Pressão (0 MCA)
+    </div>
+
+    <div style="
+        white-space: nowrap;
+    ">
+        <span style="
+            display:inline-block;
+            width:9px;
+            height:9px;
+            border-radius:50%;
+            background:{COR_BAIXA_PRESSAO};
+            margin-right:5px;
+            vertical-align:middle;
+        "></span>
+
+        Baixa Pressão (&gt; 0 e ≤ 5 MCA)
+    </div>
+
+    <div style="
+        white-space: nowrap;
+    ">
+        <span style="
+            display:inline-block;
+            width:9px;
+            height:9px;
+            border-radius:50%;
+            background:{COR_EM_ATENCAO};
+            margin-right:5px;
+            vertical-align:middle;
+        "></span>
+
+        Em Atenção (&gt; 5 e ≤ 10 MCA)
+    </div>
+
+    <div style="
+        white-space: nowrap;
+    ">
+        <span style="
+            display:inline-block;
+            width:9px;
+            height:9px;
+            border-radius:50%;
+            background:{COR_ALTA_PRESSAO};
+            margin-right:5px;
+            vertical-align:middle;
+        "></span>
+
+        Alta Pressão (&gt; 15 MCA)
+    </div>
+
+</div>
+"""
+
+m.get_root().html.add_child(
+    Element(legend_html)
+)
+
+
+# ============================================================
+# RENDERIZAÇÃO DO MAPA
+# ============================================================
+map_data = st_folium(
     m,
-    width=None,
-    height=720,
-    returned_objects=[]
+    width="100%",
+    height=520,
+    returned_objects=[
+        "last_clicked"
+    ],
+    key="mapa_principal"
 )
 
 
-# ============================================================
-# MODO ADICIONAR PONTO
-# ============================================================
-
-if modo_adicionar:
-
-    st.markdown(
-        "---"
+if (
+    st.session_state.modo_adicionar_mapa
+    and map_data
+    and map_data.get(
+        "last_clicked"
     )
-
-    st.subheader(
-        "📍 Adicionar ponto"
-    )
-
-    st.info(
-        "Preencha os dados abaixo para cadastrar "
-        "uma nova medição."
-    )
-
-    col_a, col_b = st.columns(2)
-
-    with col_a:
-
-        nova_data = st.date_input(
-            "Data",
-            value=date.today()
-        )
-
-        novo_municipio = st.text_input(
-            "Município"
-        )
-
-        novo_bairro = st.text_input(
-            "Bairro"
-        )
-
-        nova_matricula = st.text_input(
-            "Matrícula"
-        )
-
-    with col_b:
-
-        nova_latitude = st.number_input(
-            "Latitude",
-            value=float(LAT_BASE),
-            format="%.6f"
-        )
-
-        nova_longitude = st.number_input(
-            "Longitude",
-            value=float(LON_BASE),
-            format="%.6f"
-        )
-
-        nova_pressao = st.number_input(
-            "Pressão (MCA)",
-            min_value=0.0,
-            value=0.0,
-            step=0.1
-        )
-
-        nova_observacao = st.text_area(
-            "Observação"
-        )
-
-    if st.button(
-        "💾 Salvar ponto",
-        type="primary"
-    ):
-
-        if not novo_municipio.strip():
-
-            st.error(
-                "Informe o município."
-            )
-
-        elif not novo_bairro.strip():
-
-            st.error(
-                "Informe o bairro."
-            )
-
-        elif (
-            nova_latitude == 0
-            or
-            nova_longitude == 0
-        ):
-
-            st.error(
-                "Informe coordenadas válidas."
-            )
-
-        else:
-
-            sucesso = adicionar_ponto(
-                nova_data,
-                novo_municipio,
-                novo_bairro,
-                nova_latitude,
-                nova_longitude,
-                nova_pressao,
-                nova_observacao,
-                nova_matricula
-            )
-
-            if sucesso:
-
-                st.success(
-                    "Ponto adicionado com sucesso."
-                )
-
-                time.sleep(
-                    0.5
-                )
-
-                st.rerun()
-
-
-# ============================================================
-# TABELA DE DADOS
-# ============================================================
-
-with st.expander(
-    "📋 Visualizar dados filtrados"
 ):
 
-    if df_filtrado.empty:
+    clicked = map_data[
+        "last_clicked"
+    ]
 
-        st.info(
-            "Nenhum registro encontrado "
-            "com os filtros selecionados."
+    if clicked:
+
+        st.session_state.clicked_lat = round(
+            clicked["lat"],
+            6
         )
 
-    else:
+        st.session_state.clicked_lon = round(
+            clicked["lng"],
+            6
+        )
 
-        colunas_exibicao = [
+        modal_novo_ponto()
+
+
+st.divider()
+
+
+# ============================================================
+# TABELA
+# ============================================================
+st.subheader(
+    "📋 Registro de Pontos"
+)
+
+if not df_filtrado.empty:
+
+    df_show = df_filtrado[
+        [
             "ID",
             "Data",
             "Municipio",
+            "Matricula",
             "Bairro",
             "Latitude",
             "Longitude",
             "Pressao_MCA",
-            "Classificacao",
-            "Observacao",
-            "Matricula"
+            "Observacao"
+        ]
+    ].reset_index(
+        drop=True
+    )
+
+    evento = st.dataframe(
+        df_show,
+        use_container_width=True,
+        height=300,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="tabela_registros"
+    )
+
+    linhas_selecionadas = (
+        evento.selection.rows
+        if evento and evento.selection
+        else []
+    )
+
+    if linhas_selecionadas:
+
+        idx = linhas_selecionadas[0]
+
+        registro = df_show.iloc[
+            idx
         ]
 
-        df_tabela = df_filtrado[
-            colunas_exibicao
-        ].copy()
-
-        st.dataframe(
-            df_tabela,
-            use_container_width=True,
-            hide_index=True
+        id_sel = str(
+            registro["ID"]
         )
 
+        col_a, col_b, _ = st.columns(
+            [1, 1, 4]
+        )
+
+        with col_a:
+
+            if st.button(
+                "✏️ Editar",
+                use_container_width=True
+            ):
+
+                modal_editar_ponto(
+                    id_sel
+                )
+
+        with col_b:
+
+            if st.button(
+                "🗑️ Excluir",
+                use_container_width=True
+            ):
+
+                if excluir_ponto(
+                    id_sel
+                ):
+
+                    st.success(
+                        "Excluído com sucesso."
+                    )
+
+                    st.rerun()
+
 
 # ============================================================
-# EXPORTAÇÕES
+# ANALÍTICO
 # ============================================================
-
-st.markdown(
-    "---"
-)
+st.divider()
 
 st.subheader(
-    "📤 Exportar dados"
+    "📈 Análise de Tendência e Variação por Bairro"
 )
 
-col_exp1, col_exp2 = st.columns(2)
+st.markdown(
+    "Selecione um período e um bairro para acompanhar "
+    "o histórico e a variação da pressão ao longo do tempo."
+)
 
-with col_exp1:
+if not df_all.empty:
 
-    arquivo_xlsx = exportar_xlsx(
-        df_filtrado
+    col_g1, col_g2, col_g3 = st.columns(
+        [2, 2, 2]
     )
 
-    st.download_button(
-        "⬇️ Exportar XLSX",
-        data=arquivo_xlsx,
-        file_name=(
-            "monitoramento_baixa_pressao.xlsx"
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True
-    )
+    with col_g1:
 
+        data_inicio_padrao = (
+            hoje - timedelta(
+                days=30
+            )
+        )
 
-with col_exp2:
+        data_ini_analise = st.date_input(
+            "Data Inicial",
+            value=data_inicio_padrao,
+            format="DD/MM/YYYY",
+            key="analise_ini"
+        )
 
-    arquivo_kml = exportar_kml(
-        df_filtrado
-    )
+    with col_g2:
 
-    st.download_button(
-        "🌎 Exportar KML",
-        data=arquivo_kml,
-        file_name=(
-            "monitoramento_baixa_pressao.kml"
-        ),
-        mime="application/vnd.google-earth.kml+xml",
-        use_container_width=True
+        data_fim_analise = st.date_input(
+            "Data Final",
+            value=hoje,
+            format="DD/MM/YYYY",
+            key="analise_fim"
+        )
+
+    with col_g3:
+
+        bairros_disponiveis = sorted(
+            df_all["Bairro"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        bairro_analise = st.selectbox(
+            "Selecione o Bairro",
+            options=[
+                "Selecione..."
+            ]
+            +
+            bairros_disponiveis,
+            key="analise_bairro"
+        )
+
+    if bairro_analise != "Selecione...":
+
+        if data_ini_analise > data_fim_analise:
+
+            st.error(
+                "A data inicial não pode ser maior "
+                "que a data final."
+            )
+
+        else:
+
+            df_tendencia = df_all[
+                df_all["Bairro"]
+                == bairro_analise
+            ].copy()
+
+            if not df_tendencia.empty:
+
+                df_tendencia["DataObj"] = pd.to_datetime(
+                    df_tendencia["Data"],
+                    format="%d/%m/%Y",
+                    errors="coerce"
+                )
+
+                df_tendencia = (
+                    df_tendencia
+                    .dropna(
+                        subset=["DataObj"]
+                    )
+                )
+
+                mask = (
+                    (
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
+                        >= data_ini_analise
+                    )
+                    &
+                    (
+                        df_tendencia[
+                            "DataObj"
+                        ].dt.date
+                        <= data_fim_analise
+                    )
+                )
+
+                df_tendencia = (
+                    df_tendencia
+                    .loc[mask]
+                    .sort_values(
+                        "DataObj"
+                    )
+                )
+
+                if not df_tendencia.empty:
+
+                    fig = px.line(
+                        df_tendencia,
+                        x="Data",
+                        y="Pressao_MCA",
+                        markers=True,
+                        title=(
+                            f"Evolução da Pressão (MCA) "
+                            f"— {bairro_analise}"
+                        ),
+                        labels={
+                            "Data": "Data do Registro",
+                            "Pressao_MCA": "Pressão (MCA)"
+                        },
+                    )
+
+                    fig.add_hline(
+                        y=5,
+                        line_dash="dash",
+                        line_color=COR_BAIXA_PRESSAO,
+                        annotation_text=(
+                            "Limite: "
+                            "Baixa Pressão (5 MCA)"
+                        ),
+                        annotation_position="top left"
+                    )
+
+                    fig.add_hline(
+                        y=15,
+                        line_dash="dash",
+                        line_color=COR_ALTA_PRESSAO,
+                        annotation_text=(
+                            "Limite: "
+                            "Alta Pressão (15 MCA)"
+                        ),
+                        annotation_position="top left"
+                    )
+
+                    fig.add_hline(
+                        y=0,
+                        line_dash="solid",
+                        line_color=COR_SEM_PRESSAO,
+                        annotation_text=(
+                            "Sem Pressão (0 MCA)"
+                        ),
+                        annotation_position="bottom left"
+                    )
+
+                    fig.update_traces(
+                        line_color="#0284c7",
+                        line_width=3,
+                        marker_size=8
+                    )
+
+                    fig.update_layout(
+                        xaxis_title="Data",
+                        yaxis_title="Pressão (MCA)",
+                        hovermode="x unified"
+                    )
+
+                    st.plotly_chart(
+                        fig,
+                        use_container_width=True
+                    )
+
+                else:
+
+                    st.info(
+                        f"Nenhum registro encontrado "
+                        f"para o bairro "
+                        f"**{bairro_analise}** "
+                        f"no período selecionado."
+                    )
+
+            else:
+
+                st.warning(
+                    "Não há dados históricos suficientes "
+                    "para este bairro."
+                )
+
+    else:
+
+        st.info(
+            "👆 Selecione um **Bairro** acima para "
+            "carregar a análise de tendência temporal."
+        )
+
+else:
+
+    st.info(
+        "Aguardando dados para gerar "
+        "o gráfico de tendência."
     )
