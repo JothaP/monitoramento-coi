@@ -3475,7 +3475,7 @@ declutter_js = """
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "-18px";
+                rotulo.style.top = "-28px";
                 rotulo.style.transform =
                     "translate(-50%, -100%)";
 
@@ -3484,7 +3484,7 @@ declutter_js = """
             else if (posicao === "bottom") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "54px";
+                rotulo.style.top = "60px";
                 rotulo.style.transform =
                     "translate(-50%, 0)";
 
@@ -3492,7 +3492,7 @@ declutter_js = """
 
             else if (posicao === "right") {
 
-                rotulo.style.left = "50px";
+                rotulo.style.left = "56px";
                 rotulo.style.top = "50%";
                 rotulo.style.transform =
                     "translate(0, -50%)";
@@ -3501,7 +3501,7 @@ declutter_js = """
 
             else if (posicao === "left") {
 
-                rotulo.style.left = "-10px";
+                rotulo.style.left = "-16px";
                 rotulo.style.top = "50%";
                 rotulo.style.transform =
                     "translate(-100%, -50%)";
@@ -3510,8 +3510,8 @@ declutter_js = """
 
             else if (posicao === "top-right") {
 
-                rotulo.style.left = "46px";
-                rotulo.style.top = "-18px";
+                rotulo.style.left = "52px";
+                rotulo.style.top = "-28px";
                 rotulo.style.transform =
                     "translate(0, -100%)";
 
@@ -3519,8 +3519,8 @@ declutter_js = """
 
             else if (posicao === "top-left") {
 
-                rotulo.style.left = "-6px";
-                rotulo.style.top = "-18px";
+                rotulo.style.left = "-12px";
+                rotulo.style.top = "-28px";
                 rotulo.style.transform =
                     "translate(-100%, -100%)";
 
@@ -3528,8 +3528,8 @@ declutter_js = """
 
             else if (posicao === "bottom-right") {
 
-                rotulo.style.left = "46px";
-                rotulo.style.top = "54px";
+                rotulo.style.left = "52px";
+                rotulo.style.top = "60px";
                 rotulo.style.transform =
                     "translate(0, 0)";
 
@@ -3537,8 +3537,8 @@ declutter_js = """
 
             else if (posicao === "bottom-left") {
 
-                rotulo.style.left = "-6px";
-                rotulo.style.top = "54px";
+                rotulo.style.left = "-12px";
+                rotulo.style.top = "60px";
                 rotulo.style.transform =
                     "translate(-100%, 0)";
 
@@ -3748,6 +3748,10 @@ declutter_js = """
 
                     var encontrouPosicao = false;
 
+                    // Caixa do pin (ou do wrapper) — o rótulo nunca pode sobrepor o próprio pin
+                    var pinEl = item.wrapper.querySelector(".bp-pin-svg") || item.wrapper;
+                    var caixaPin = pinEl.getBoundingClientRect();
+
 
                     for (
                         var p = 0;
@@ -3775,6 +3779,19 @@ declutter_js = """
                                 caixa,
                                 areaMapa,
                                 margemMapa
+                            )
+                        ) {
+
+                            continue;
+                        }
+
+
+                        // Não permite sobreposição com o próprio pin
+                        if (
+                            caixasSeSobrepoem(
+                                caixa,
+                                caixaPin,
+                                4
                             )
                         ) {
 
