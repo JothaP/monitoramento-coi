@@ -3428,9 +3428,27 @@ declutter_js = """
             return;
         }
 
-
         var map = MAP_NAME_PLACEHOLDER;
 
+
+        // ====================================================
+        // CONFIGURAÇÃO
+        // ====================================================
+
+        // Área protegida ao redor do centro do pin.
+        // O rótulo jamais poderá entrar nessa região.
+        var RAIO_PROTECAO_PIN = 30;
+
+        // Espaço mínimo entre rótulos.
+        var MARGEM_ROTULOS = 8;
+
+        // Margem interna do mapa.
+        var MARGEM_MAPA = 4;
+
+
+        // ====================================================
+        // FUNÇÕES GEOMÉTRICAS
+        // ====================================================
 
         function caixasSeSobrepoem(
             a,
@@ -3462,6 +3480,51 @@ declutter_js = """
         }
 
 
+        // ====================================================
+        // VERIFICA SE O RÓTULO INTERSECTA A ÁREA DO PIN
+        // ====================================================
+
+        function caixaIntersectsCirculo(
+            caixa,
+            cx,
+            cy,
+            raio
+        ) {
+
+            // Ponto do círculo mais próximo do retângulo
+            var pontoX = Math.max(
+                caixa.left,
+                Math.min(
+                    cx,
+                    caixa.right
+                )
+            );
+
+            var pontoY = Math.max(
+                caixa.top,
+                Math.min(
+                    cy,
+                    caixa.bottom
+                )
+            );
+
+
+            var dx = cx - pontoX;
+            var dy = cy - pontoY;
+
+
+            return (
+                (dx * dx + dy * dy)
+                <
+                (raio * raio)
+            );
+        }
+
+
+        // ====================================================
+        // POSICIONAMENTO DOS RÓTULOS
+        // ====================================================
+
         function aplicarPosicao(
             rotulo,
             posicao
@@ -3475,80 +3538,176 @@ declutter_js = """
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "8px";
+
+                rotulo.style.top = "-28px";
+
                 rotulo.style.transform =
                     "translate(-50%, -100%)";
-
             }
+
 
             else if (posicao === "bottom") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "66px";
+
+                rotulo.style.top = "60px";
+
                 rotulo.style.transform =
                     "translate(-50%, 0)";
-
             }
+
 
             else if (posicao === "right") {
 
-                rotulo.style.left = "48px";
-                rotulo.style.top = "28px";
+                rotulo.style.left = "56px";
+
+                rotulo.style.top = "50%";
+
                 rotulo.style.transform =
                     "translate(0, -50%)";
-
             }
+
 
             else if (posicao === "left") {
 
-                rotulo.style.left = "-8px";
-                rotulo.style.top = "28px";
+                rotulo.style.left = "-16px";
+
+                rotulo.style.top = "50%";
+
                 rotulo.style.transform =
                     "translate(-100%, -50%)";
-
             }
+
 
             else if (posicao === "top-right") {
 
-                rotulo.style.left = "44px";
-                rotulo.style.top = "8px";
+                rotulo.style.left = "52px";
+
+                rotulo.style.top = "-28px";
+
                 rotulo.style.transform =
                     "translate(0, -100%)";
-
             }
+
 
             else if (posicao === "top-left") {
 
-                rotulo.style.left = "-4px";
-                rotulo.style.top = "8px";
+                rotulo.style.left = "-12px";
+
+                rotulo.style.top = "-28px";
+
                 rotulo.style.transform =
                     "translate(-100%, -100%)";
-
             }
+
 
             else if (posicao === "bottom-right") {
 
-                rotulo.style.left = "44px";
-                rotulo.style.top = "66px";
+                rotulo.style.left = "52px";
+
+                rotulo.style.top = "60px";
+
                 rotulo.style.transform =
                     "translate(0, 0)";
-
             }
+
 
             else if (posicao === "bottom-left") {
 
-                rotulo.style.left = "-4px";
-                rotulo.style.top = "66px";
+                rotulo.style.left = "-12px";
+
+                rotulo.style.top = "60px";
+
                 rotulo.style.transform =
                     "translate(-100%, 0)";
-
             }
         }
 
 
+        // ====================================================
+        // OBTÉM O CENTRO REAL DO PIN
+        // ====================================================
+
+        function obterCentroPin(
+            wrapper
+        ) {
+
+            var svg =
+                wrapper.querySelector(
+                    ".bp-pin-svg"
+                );
+
+
+            if (svg) {
+
+                var caixaSvg =
+                    svg.getBoundingClientRect();
+
+
+                return {
+
+                    x:
+                        (
+                            caixaSvg.left
+                            +
+                            caixaSvg.right
+                        )
+                        /
+                        2,
+
+                    y:
+                        (
+                            caixaSvg.top
+                            +
+                            caixaSvg.bottom
+                        )
+                        /
+                        2
+
+                };
+            }
+
+
+            // Fallback:
+            // centro do wrapper
+
+            var caixaWrapper =
+                wrapper.getBoundingClientRect();
+
+
+            return {
+
+                x:
+                    (
+                        caixaWrapper.left
+                        +
+                        caixaWrapper.right
+                    )
+                    /
+                    2,
+
+                y:
+                    (
+                        caixaWrapper.top
+                        +
+                        caixaWrapper.bottom
+                    )
+                    /
+                    2
+
+            };
+        }
+
+
+        // ====================================================
+        // RECALCULA TODOS OS RÓTULOS
+        // ====================================================
+
         function recalcularRotulos() {
 
-            var container = map.getContainer();
+            var container =
+                map.getContainer();
+
 
             if (!container) {
 
@@ -3576,6 +3735,10 @@ declutter_js = """
             var candidatos = [];
 
 
+            // =================================================
+            // PRIMEIRA PASSAGEM
+            // =================================================
+
             marcadores.forEach(
                 function(wrapper) {
 
@@ -3591,6 +3754,10 @@ declutter_js = """
                     }
 
 
+                    // -----------------------------------------
+                    // COR DO RÓTULO
+                    // -----------------------------------------
+
                     var svg =
                         wrapper.querySelector(
                             ".bp-pin-svg"
@@ -3604,12 +3771,14 @@ declutter_js = """
                                 "path"
                             );
 
+
                         if (path) {
 
                             var corPin =
                                 path.getAttribute(
                                     "fill"
                                 );
+
 
                             if (corPin) {
 
@@ -3622,11 +3791,20 @@ declutter_js = """
                     }
 
 
+                    // -----------------------------------------
+                    // DEIXA O RÓTULO VISÍVEL TEMPORARIAMENTE
+                    // PARA MEDIÇÃO
+                    // -----------------------------------------
+
                     rotulo.style.display =
                         "block";
 
                     rotulo.style.visibility =
                         "hidden";
+
+
+                    rotulo.style.transition =
+                        "none";
 
 
                     aplicarPosicao(
@@ -3639,7 +3817,9 @@ declutter_js = """
                         parseInt(
                             wrapper.getAttribute(
                                 "data-bp-priority"
-                            ) || "0",
+                            )
+                            ||
+                            "0",
                             10
                         );
 
@@ -3656,17 +3836,31 @@ declutter_js = """
                         );
 
 
+                    var centroPin =
+                        obterCentroPin(
+                            wrapper
+                        );
+
+
                     candidatos.push({
 
-                        wrapper: wrapper,
+                        wrapper:
+                            wrapper,
 
-                        rotulo: rotulo,
+                        rotulo:
+                            rotulo,
 
-                        prioridade: prioridade,
+                        prioridade:
+                            prioridade,
 
-                        individual: individual,
+                        individual:
+                            individual,
 
-                        ordem: candidatos.length
+                        centroPin:
+                            centroPin,
+
+                        ordem:
+                            candidatos.length
 
                     });
 
@@ -3674,9 +3868,14 @@ declutter_js = """
             );
 
 
+            // =================================================
+            // PRIORIZAÇÃO
+            // =================================================
+
             candidatos.sort(
                 function(a, b) {
 
+                    // Bairro primeiro
                     if (
                         a.individual
                         !==
@@ -3689,6 +3888,7 @@ declutter_js = """
                     }
 
 
+                    // Maior quantidade primeiro
                     if (
                         b.prioridade
                         !==
@@ -3712,6 +3912,10 @@ declutter_js = """
                 }
             );
 
+
+            // =================================================
+            // POSIÇÕES DISPONÍVEIS
+            // =================================================
 
             var posicoes = [
 
@@ -3737,20 +3941,15 @@ declutter_js = """
             var aceitos = [];
 
 
-            var margem = 8;
-
-
-            var margemMapa = 4;
-
+            // =================================================
+            // PROCESSAMENTO
+            // =================================================
 
             candidatos.forEach(
                 function(item) {
 
-                    var encontrouPosicao = false;
-
-                    // Caixa do pin (ou do wrapper) — o rótulo nunca pode sobrepor o próprio pin
-                    var pinEl = item.wrapper.querySelector(".bp-pin-svg") || item.wrapper;
-                    var caixaPin = pinEl.getBoundingClientRect();
+                    var encontrouPosicao =
+                        false;
 
 
                     for (
@@ -3763,22 +3962,34 @@ declutter_js = """
                             posicoes[p];
 
 
+                        // -------------------------------------
+                        // APLICA POSIÇÃO
+                        // -------------------------------------
+
                         aplicarPosicao(
                             item.rotulo,
                             posicao
                         );
 
 
+                        // -------------------------------------
+                        // FORÇA O BROWSER A RECALCULAR
+                        // -------------------------------------
+
                         var caixa =
                             item.rotulo
                             .getBoundingClientRect();
 
 
+                        // -------------------------------------
+                        // 1. NÃO PODE SAIR DO MAPA
+                        // -------------------------------------
+
                         if (
                             !estaDentroDoMapa(
                                 caixa,
                                 areaMapa,
-                                margemMapa
+                                MARGEM_MAPA
                             )
                         ) {
 
@@ -3786,12 +3997,19 @@ declutter_js = """
                         }
 
 
-                        // Não permite sobreposição com o próprio pin
+                        // -------------------------------------
+                        // 2. NÃO PODE ENTRAR NA ZONA DO PIN
+                        // -------------------------------------
+
                         if (
-                            caixasSeSobrepoem(
+                            caixaIntersectsCirculo(
                                 caixa,
-                                caixaPin,
-                                4
+
+                                item.centroPin.x,
+
+                                item.centroPin.y,
+
+                                RAIO_PROTECAO_PIN
                             )
                         ) {
 
@@ -3799,7 +4017,12 @@ declutter_js = """
                         }
 
 
-                        var conflito = false;
+                        // -------------------------------------
+                        // 3. NÃO PODE SOBREPOR OUTRO RÓTULO
+                        // -------------------------------------
+
+                        var conflito =
+                            false;
 
 
                         for (
@@ -3811,8 +4034,10 @@ declutter_js = """
                             if (
                                 caixasSeSobrepoem(
                                     caixa,
+
                                     aceitos[i],
-                                    margem
+
+                                    MARGEM_ROTULOS
                                 )
                             ) {
 
@@ -3823,34 +4048,62 @@ declutter_js = """
                         }
 
 
-                        if (!conflito) {
+                        if (conflito) {
 
-                            item.rotulo.style.visibility =
-                                "visible";
-
-                            aceitos.push(
-                                caixa
-                            );
-
-                            encontrouPosicao = true;
-
-                            break;
+                            continue;
                         }
 
+
+                        // -------------------------------------
+                        // POSIÇÃO ACEITA
+                        // -------------------------------------
+
+                        item.rotulo.style.visibility =
+                            "visible";
+
+
+                        item.rotulo.style.display =
+                            "block";
+
+
+                        item.rotulo.style.transition =
+                            "";
+
+
+                        aceitos.push(
+                            caixa
+                        );
+
+
+                        encontrouPosicao =
+                            true;
+
+
+                        break;
                     }
 
+
+                    // =================================================
+                    // NENHUMA POSIÇÃO DISPONÍVEL
+                    // =================================================
 
                     if (!encontrouPosicao) {
 
                         item.rotulo.style.visibility =
                             "hidden";
 
+                        item.rotulo.style.display =
+                            "none";
                     }
 
                 }
             );
         }
 
+
+        // ====================================================
+        // AGENDAMENTO
+        // ====================================================
 
         var agendamento = null;
 
@@ -3865,28 +4118,48 @@ declutter_js = """
             }
 
 
-            agendamento = setTimeout(
-                function() {
+            agendamento =
+                setTimeout(
+                    function() {
 
-                    recalcularRotulos();
-
-
-                    requestAnimationFrame(
-                        function() {
-
-                            recalcularRotulos();
-
-                        }
-                    );
+                        recalcularRotulos();
 
 
-                    agendamento = null;
+                        requestAnimationFrame(
+                            function() {
 
-                },
-                80
-            );
+                                recalcularRotulos();
+
+                            }
+                        );
+
+
+                        requestAnimationFrame(
+                            function() {
+
+                                requestAnimationFrame(
+                                    function() {
+
+                                        recalcularRotulos();
+
+                                    }
+                                );
+
+                            }
+                        );
+
+
+                        agendamento = null;
+
+                    },
+                    80
+                );
         }
 
+
+        // ====================================================
+        // EVENTOS DO MAPA
+        // ====================================================
 
         map.on(
             "zoomend",
@@ -3912,6 +4185,10 @@ declutter_js = """
         );
 
 
+        // ====================================================
+        // CARGA INICIAL
+        // ====================================================
+
         setTimeout(
             recalcularRotulos,
             100
@@ -3935,6 +4212,12 @@ declutter_js = """
             900
         );
 
+
+        setTimeout(
+            recalcularRotulos,
+            1500
+        );
+
     }
 
 
@@ -3944,10 +4227,12 @@ declutter_js = """
 </script>
 """
 
+
 declutter_js = declutter_js.replace(
     "MAP_NAME_PLACEHOLDER",
     map_name
 )
+
 
 m.get_root().html.add_child(
     Element(declutter_js)
