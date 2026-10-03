@@ -190,7 +190,6 @@ def conectar_google_sheets():
                 for c in dados_iniciais[0]
             ]
 
-            # Garante a coluna Observacao
             if (
                 len(cabecalho_atual) >= 7
                 and "Observacao" not in cabecalho_atual
@@ -202,9 +201,6 @@ def conectar_google_sheets():
                     [["Observacao"]]
                 )
 
-            # Garante a coluna Matricula na coluna I.
-            # Compatibilidade com instalações antigas
-            # que ainda possuem somente 8 colunas.
             if (
                 "Matricula" not in cabecalho_atual
                 and "Matrícula" not in cabecalho_atual
@@ -561,9 +557,6 @@ def carregar_dados() -> pd.DataFrame:
         normalizar_data
     )
 
-    # ========================================================
-    # NORMALIZAÇÃO DE MUNICÍPIO
-    # ========================================================
     df["Municipio"] = df["Municipio"].apply(
         lambda x:
         normalizar_texto_local(
@@ -572,9 +565,6 @@ def carregar_dados() -> pd.DataFrame:
         )
     )
 
-    # ========================================================
-    # NORMALIZAÇÃO DE BAIRRO
-    # ========================================================
     df["Bairro"] = df["Bairro"].apply(
         lambda x:
         normalizar_texto_local(
@@ -623,9 +613,6 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
-    # ========================================================
-    # MATRÍCULA
-    # ========================================================
     df["Matricula"] = (
         df["Matricula"]
         .astype(str)
@@ -733,8 +720,6 @@ def adicionar_lote_seguro(
                 else ""
             )
 
-            # Matrícula permanece fora da chave
-            # de duplicidade.
             chave = (
                 str(r["Data"]).strip(),
                 str(
@@ -1626,9 +1611,6 @@ with st.sidebar:
         key="filtro_bairro"
     )
 
-    # ========================================================
-    # FILTRO DE MATRÍCULA
-    # ========================================================
     matriculas_base = (
         df_data[
             (
@@ -1718,9 +1700,6 @@ with st.sidebar:
         )
     )
 
-    # ========================================================
-    # MODELO XLSX
-    # ========================================================
     df_modelo = pd.DataFrame(
         [{
             "Data": datetime.now().strftime(
@@ -1764,9 +1743,6 @@ with st.sidebar:
         use_container_width=True
     )
 
-    # ========================================================
-    # UPLOAD
-    # ========================================================
     if arquivo_upload is not None:
 
         if (
@@ -1790,8 +1766,6 @@ with st.sidebar:
                         arquivo_upload
                     )
 
-                # Normaliza os nomes das colunas.
-                # Aceita Matricula, Matrícula, MATRICULA, etc.
                 df_up.columns = [
                     normalizar_coluna(c)
                     for c in df_up.columns
@@ -2228,11 +2202,6 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
 
 elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
-    # ========================================================
-    # IMPORTANTE:
-    # O texto apresentado ao usuário permanece ≤ 10 MCA,
-    # mas a regra operacional continua sendo ≤ 15 MCA.
-    # ========================================================
     df_filtrado = df_filtrado[
         (
             df_filtrado["Pressao_MCA"] > 5
@@ -2472,25 +2441,16 @@ def gerar_pin_svg(
     tamanho: str = "bairro"
 ) -> str:
 
-    """
-    Gera um pin SVG independente do CSS de rotação.
-
-    Isso evita problemas de renderização do pin
-    dentro do DivIcon do Folium.
-    """
-
     if tamanho == "individual":
 
         largura = 34
         altura = 39
-
         escala = 0.88
 
     else:
 
         largura = 40
         altura = 45
-
         escala = 1.0
 
     return f"""
@@ -2711,10 +2671,6 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                # --------------------------------------------
-                # RÓTULO INDIVIDUAL
-                # Matrícula NÃO entra aqui.
-                # --------------------------------------------
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -2894,9 +2850,6 @@ if not df_filtrado.empty:
                     str(municipio)
                 )
 
-                # =================================================
-                # DETALHES DAS MEDIÇÕES
-                # =================================================
                 linhas_medicoes = []
 
                 for _, registro in grupo.sort_values(
@@ -3088,9 +3041,6 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                # =================================================
-                # MARCADOR DO BAIRRO
-                # =================================================
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -3241,6 +3191,10 @@ map_style_html = """
         overflow: visible !important;
 
         pointer-events: auto !important;
+
+        position: absolute !important;
+
+        z-index: 1100 !important;
     }
 
 
@@ -3432,6 +3386,24 @@ declutter_js = """
         var map = MAP_NAME_PLACEHOLDER;
 
 
+        // ====================================================
+        // CONFIGURAÇÕES DO ALGORITMO
+        // ====================================================
+
+        // Espaço adicional de proteção ao redor do pin.
+        // O rótulo não poderá ocupar esta área.
+        var ESPACO_PIN = 8;
+
+        // Espaçamento entre rótulos.
+        var MARGEM_ROTULOS = 5;
+
+        // Margem mínima em relação às bordas do mapa.
+        var MARGEM_MAPA = 4;
+
+
+        // ====================================================
+        // VERIFICAÇÃO DE SOBREPOSIÇÃO
+        // ====================================================
         function caixasSeSobrepoem(
             a,
             b,
@@ -3447,6 +3419,9 @@ declutter_js = """
         }
 
 
+        // ====================================================
+        // VERIFICAÇÃO DOS LIMITES DO MAPA
+        // ====================================================
         function estaDentroDoMapa(
             caixa,
             areaMapa,
@@ -3462,6 +3437,40 @@ declutter_js = """
         }
 
 
+        // ====================================================
+        // OBTÉM A ÁREA DE PROTEÇÃO DO PIN
+        // ====================================================
+        function obterCaixaProtecaoPin(
+            svg,
+            espaco
+        ) {
+
+            if (!svg) {
+
+                return null;
+            }
+
+
+            var caixa = svg.getBoundingClientRect();
+
+
+            return {
+
+                left: caixa.left - espaco,
+
+                right: caixa.right + espaco,
+
+                top: caixa.top - espaco,
+
+                bottom: caixa.bottom + espaco
+
+            };
+        }
+
+
+        // ====================================================
+        // APLICA POSIÇÃO DO RÓTULO
+        // ====================================================
         function aplicarPosicao(
             rotulo,
             posicao
@@ -3475,7 +3484,9 @@ declutter_js = """
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "-6px";
+
+                rotulo.style.top = "-10px";
+
                 rotulo.style.transform =
                     "translate(-50%, -100%)";
 
@@ -3484,7 +3495,9 @@ declutter_js = """
             else if (posicao === "bottom") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "46px";
+
+                rotulo.style.top = "50px";
+
                 rotulo.style.transform =
                     "translate(-50%, 0)";
 
@@ -3492,8 +3505,10 @@ declutter_js = """
 
             else if (posicao === "right") {
 
-                rotulo.style.left = "46px";
+                rotulo.style.left = "50px";
+
                 rotulo.style.top = "50%";
+
                 rotulo.style.transform =
                     "translate(0, -50%)";
 
@@ -3501,8 +3516,10 @@ declutter_js = """
 
             else if (posicao === "left") {
 
-                rotulo.style.left = "-6px";
+                rotulo.style.left = "-10px";
+
                 rotulo.style.top = "50%";
+
                 rotulo.style.transform =
                     "translate(-100%, -50%)";
 
@@ -3510,8 +3527,10 @@ declutter_js = """
 
             else if (posicao === "top-right") {
 
-                rotulo.style.left = "42px";
-                rotulo.style.top = "-6px";
+                rotulo.style.left = "48px";
+
+                rotulo.style.top = "-10px";
+
                 rotulo.style.transform =
                     "translate(0, -100%)";
 
@@ -3519,8 +3538,10 @@ declutter_js = """
 
             else if (posicao === "top-left") {
 
-                rotulo.style.left = "-2px";
-                rotulo.style.top = "-6px";
+                rotulo.style.left = "-8px";
+
+                rotulo.style.top = "-10px";
+
                 rotulo.style.transform =
                     "translate(-100%, -100%)";
 
@@ -3528,8 +3549,10 @@ declutter_js = """
 
             else if (posicao === "bottom-right") {
 
-                rotulo.style.left = "42px";
-                rotulo.style.top = "46px";
+                rotulo.style.left = "48px";
+
+                rotulo.style.top = "50px";
+
                 rotulo.style.transform =
                     "translate(0, 0)";
 
@@ -3537,8 +3560,10 @@ declutter_js = """
 
             else if (posicao === "bottom-left") {
 
-                rotulo.style.left = "-2px";
-                rotulo.style.top = "46px";
+                rotulo.style.left = "-8px";
+
+                rotulo.style.top = "50px";
+
                 rotulo.style.transform =
                     "translate(-100%, 0)";
 
@@ -3546,9 +3571,14 @@ declutter_js = """
         }
 
 
+        // ====================================================
+        // RECALCULA TODOS OS RÓTULOS
+        // ====================================================
         function recalcularRotulos() {
 
-            var container = map.getContainer();
+            var container =
+                map.getContainer();
+
 
             if (!container) {
 
@@ -3576,6 +3606,10 @@ declutter_js = """
             var candidatos = [];
 
 
+            // =================================================
+            // PRIMEIRA PASSAGEM:
+            // coleta pins e rótulos
+            // =================================================
             marcadores.forEach(
                 function(wrapper) {
 
@@ -3597,12 +3631,16 @@ declutter_js = """
                         );
 
 
+                    // -----------------------------------------
+                    // Cor do pin
+                    // -----------------------------------------
                     if (svg) {
 
                         var path =
                             svg.querySelector(
                                 "path"
                             );
+
 
                         if (path) {
 
@@ -3611,14 +3649,18 @@ declutter_js = """
                                     "fill"
                                 );
 
+
                             if (corPin) {
 
                                 wrapper.style.setProperty(
                                     "--bp-color",
                                     corPin
                                 );
+
                             }
+
                         }
+
                     }
 
 
@@ -3656,11 +3698,29 @@ declutter_js = """
                         );
 
 
+                    var caixaPin = null;
+
+
+                    if (svg) {
+
+                        caixaPin =
+                            obterCaixaProtecaoPin(
+                                svg,
+                                ESPACO_PIN
+                            );
+
+                    }
+
+
                     candidatos.push({
 
                         wrapper: wrapper,
 
                         rotulo: rotulo,
+
+                        svg: svg,
+
+                        caixaPin: caixaPin,
 
                         prioridade: prioridade,
 
@@ -3674,9 +3734,13 @@ declutter_js = """
             );
 
 
+            // =================================================
+            // ORDEM DE PRIORIDADE
+            // =================================================
             candidatos.sort(
                 function(a, b) {
 
+                    // Bairros antes de individuais.
                     if (
                         a.individual
                         !==
@@ -3689,6 +3753,7 @@ declutter_js = """
                     }
 
 
+                    // Maior quantidade primeiro.
                     if (
                         b.prioridade
                         !==
@@ -3713,6 +3778,9 @@ declutter_js = """
             );
 
 
+            // =================================================
+            // POSIÇÕES POSSÍVEIS
+            // =================================================
             var posicoes = [
 
                 "top",
@@ -3734,19 +3802,18 @@ declutter_js = """
             ];
 
 
+            // Rótulos já aceitos.
             var aceitos = [];
 
 
-            var margem = 5;
-
-
-            var margemMapa = 4;
-
-
+            // =================================================
+            // AVALIAÇÃO DOS RÓTULOS
+            // =================================================
             candidatos.forEach(
                 function(item) {
 
-                    var encontrouPosicao = false;
+                    var encontrouPosicao =
+                        false;
 
 
                     for (
@@ -3759,22 +3826,31 @@ declutter_js = """
                             posicoes[p];
 
 
+                        // -------------------------------------
+                        // Aplica posição temporariamente.
+                        // -------------------------------------
                         aplicarPosicao(
                             item.rotulo,
                             posicao
                         );
 
 
+                        // -------------------------------------
+                        // Obtém a caixa real do rótulo.
+                        // -------------------------------------
                         var caixa =
                             item.rotulo
                             .getBoundingClientRect();
 
 
+                        // -------------------------------------
+                        // 1. Não sair do mapa.
+                        // -------------------------------------
                         if (
                             !estaDentroDoMapa(
                                 caixa,
                                 areaMapa,
-                                margemMapa
+                                MARGEM_MAPA
                             )
                         ) {
 
@@ -3782,9 +3858,13 @@ declutter_js = """
                         }
 
 
-                        var conflito = false;
+                        var conflito =
+                            false;
 
 
+                        // -------------------------------------
+                        // 2. Não sobrepor outros rótulos.
+                        // -------------------------------------
                         for (
                             var i = 0;
                             i < aceitos.length;
@@ -3795,7 +3875,7 @@ declutter_js = """
                                 caixasSeSobrepoem(
                                     caixa,
                                     aceitos[i],
-                                    margem
+                                    MARGEM_ROTULOS
                                 )
                             ) {
 
@@ -3803,26 +3883,83 @@ declutter_js = """
 
                                 break;
                             }
+
                         }
 
 
-                        if (!conflito) {
+                        if (conflito) {
 
-                            item.rotulo.style.visibility =
-                                "visible";
-
-                            aceitos.push(
-                                caixa
-                            );
-
-                            encontrouPosicao = true;
-
-                            break;
+                            continue;
                         }
+
+
+                        // -------------------------------------
+                        // 3. Não sobrepor NENHUM pin.
+                        // -------------------------------------
+                        for (
+                            var j = 0;
+                            j < candidatos.length;
+                            j++
+                        ) {
+
+                            var outro =
+                                candidatos[j];
+
+
+                            if (
+                                !outro.caixaPin
+                            ) {
+
+                                continue;
+                            }
+
+
+                            if (
+                                caixasSeSobrepoem(
+                                    caixa,
+                                    outro.caixaPin,
+                                    0
+                                )
+                            ) {
+
+                                conflito = true;
+
+                                break;
+                            }
+
+                        }
+
+
+                        if (conflito) {
+
+                            continue;
+                        }
+
+
+                        // -------------------------------------
+                        // Posição aceita.
+                        // -------------------------------------
+                        item.rotulo.style.visibility =
+                            "visible";
+
+
+                        aceitos.push(
+                            caixa
+                        );
+
+
+                        encontrouPosicao =
+                            true;
+
+
+                        break;
 
                     }
 
 
+                    // -----------------------------------------
+                    // Nenhuma posição disponível.
+                    // -----------------------------------------
                     if (!encontrouPosicao) {
 
                         item.rotulo.style.visibility =
@@ -3832,9 +3969,13 @@ declutter_js = """
 
                 }
             );
+
         }
 
 
+        // ====================================================
+        // AGENDAMENTO DO RECÁLCULO
+        // ====================================================
         var agendamento = null;
 
 
@@ -3845,6 +3986,7 @@ declutter_js = """
                 clearTimeout(
                     agendamento
                 );
+
             }
 
 
@@ -3868,9 +4010,13 @@ declutter_js = """
                 },
                 80
             );
+
         }
 
 
+        // ====================================================
+        // EVENTOS DO MAPA
+        // ====================================================
         map.on(
             "zoomend",
             agendarRecalculo
@@ -3895,6 +4041,9 @@ declutter_js = """
         );
 
 
+        // ====================================================
+        // CARGA INICIAL
+        // ====================================================
         setTimeout(
             recalcularRotulos,
             100
