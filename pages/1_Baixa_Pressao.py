@@ -2875,271 +2875,216 @@ if (
     and mostrar_rotulos
 ):
 
-    map_name = m.get_name()
+    # ============================================================
+# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
+# ============================================================
 
-    declutter_js = f"""
-    <script>
-    (function() {{
+map_name = m.get_name()
 
-        var tentativas = 0;
-        var maxTentativas = 40;
+declutter_js = """
+<script>
+(function() {
 
-        function configurarDesobstrucao() {{
+    function iniciarDeclutter() {
 
-            tentativas++;
+        if (typeof MAP_NAME_PLACEHOLDER === "undefined") {
+            setTimeout(iniciarDeclutter, 150);
+            return;
+        }
 
-            if (
-                typeof {map_name} === "undefined"
-                || !{map_name}
-            ) {{
+        var map = MAP_NAME_PLACEHOLDER;
 
-                if (tentativas < maxTentativas) {{
-                    setTimeout(
-                        configurarDesobstrucao,
-                        150
-                    );
-                }}
+        function caixasSeSobrepoem(a, b, margem) {
+            return !(
+                a.right + margem < b.left ||
+                a.left - margem > b.right ||
+                a.bottom + margem < b.top ||
+                a.top - margem > b.bottom
+            );
+        }
 
+        function recalcularRotulos() {
+
+            var container = map.getContainer();
+
+            if (!container) {
                 return;
-            }}
-
-            var mapa = {map_name};
-
-            if (!mapa) {{
-                return;
-            }}
-
-            function caixasSeSobrepoem(
-                a,
-                b,
-                margem
-            ) {{
-
-                return !(
-                    a.right + margem < b.left ||
-                    a.left - margem > b.right ||
-                    a.bottom + margem < b.top ||
-                    a.top - margem > b.bottom
-                );
-            }}
-
-
-            function recalcularRotulos() {{
-
-                var elementos = Array.from(
-                    document.querySelectorAll(
-                        ".pressao-bairro-marker"
-                    )
-                );
-
-                var candidatos = [];
-
-                elementos.forEach(
-                    function(marker) {{
-
-                        var wrapper =
-                            marker.querySelector(
-                                ".bp-marker-wrapper"
-                            );
-
-                        var label =
-                            marker.querySelector(
-                                ".bp-label-card"
-                            );
-
-                        if (
-                            !wrapper
-                            || !label
-                        ) {{
-                            return;
-                        }}
-
-                        var prioridade = parseInt(
-                            wrapper.getAttribute(
-                                "data-bp-priority"
-                            ) || "0",
-                            10
-                        );
-
-                        candidatos.push({{
-                            wrapper: wrapper,
-                            label: label,
-                            prioridade: prioridade
-                        }});
-
-                    }}
-                );
-
-
-                /*
-                 * Maior quantidade de medições primeiro.
-                 * Em caso de empate, mantém a ordem original.
-                 */
-                candidatos.sort(
-                    function(a, b) {{
-                        return (
-                            b.prioridade
-                            - a.prioridade
-                        );
-                    }}
-                );
-
-
-                /*
-                 * Primeiro todos os rótulos ficam ocultos.
-                 * Usamos visibility, e não display:none,
-                 * para que o navegador continue calculando
-                 * corretamente o tamanho do card.
-                 */
-                candidatos.forEach(
-                    function(item) {{
-
-                        item.label.style.visibility =
-                            "hidden";
-
-                    }}
-                );
-
-
-                var exibidos = [];
-
-                /*
-                 * Pequena margem de segurança entre os cards.
-                 */
-                var margem = 6;
-
-
-                candidatos.forEach(
-                    function(item) {{
-
-                        var rect =
-                            item.label.getBoundingClientRect();
-
-                        var conflito = false;
-
-                        for (
-                            var i = 0;
-                            i < exibidos.length;
-                            i++
-                        ) {{
-
-                            if (
-                                caixasSeSobrepoem(
-                                    rect,
-                                    exibidos[i],
-                                    margem
-                                )
-                            ) {{
-
-                                conflito = true;
-                                break;
-
-                            }}
-
-                        }}
-
-
-                        if (!conflito) {{
-
-                            item.label.style.visibility =
-                                "visible";
-
-                            exibidos.push(rect);
-
-                        }} else {{
-
-                            /*
-                             * Somente o card desaparece.
-                             * O pin continua normalmente visível.
-                             */
-                            item.label.style.visibility =
-                                "hidden";
-
-                        }}
-
-                    }}
-                );
-
             }
 
+            var marcadores = container.querySelectorAll(
+                ".pressao-bairro-marker .bp-marker-wrapper"
+            );
 
-            var recalculoAgendado = false;
+            if (!marcadores.length) {
+                return;
+            }
 
-            function agendarRecalculo() {{
+            var areaMapa = container.getBoundingClientRect();
 
-                if (recalculoAgendado) {{
+            var candidatos = [];
+
+            marcadores.forEach(function(wrapper) {
+
+                var rotulo = wrapper.querySelector(".bp-label-card");
+
+                if (!rotulo) {
                     return;
-                }}
+                }
 
-                recalculoAgendado = true;
+                /*
+                 * Primeiro mostramos todos temporariamente.
+                 * Assim conseguimos medir corretamente cada cartão.
+                 */
+                rotulo.style.display = "block";
+                rotulo.style.visibility = "hidden";
 
-                setTimeout(
-                    function() {{
+                var caixa = rotulo.getBoundingClientRect();
 
-                        recalculoAgendado = false;
+                /*
+                 * Ignora rótulos que estejam completamente
+                 * fora da área visível do mapa.
+                 */
+                if (
+                    caixa.right < areaMapa.left ||
+                    caixa.left > areaMapa.right ||
+                    caixa.bottom < areaMapa.top ||
+                    caixa.top > areaMapa.bottom
+                ) {
+                    rotulo.style.visibility = "hidden";
+                    return;
+                }
 
-                        recalcularRotulos();
-
-                    }},
-                    80
+                var prioridade = parseInt(
+                    wrapper.getAttribute("data-bp-priority") || "0",
+                    10
                 );
 
-            }}
+                if (isNaN(prioridade)) {
+                    prioridade = 0;
+                }
 
-
-            mapa.on(
-                "zoomend",
-                agendarRecalculo
-            );
-
-            mapa.on(
-                "moveend",
-                agendarRecalculo
-            );
-
-            mapa.on(
-                "resize",
-                agendarRecalculo
-            );
-
-
-            window.addEventListener(
-                "resize",
-                agendarRecalculo
-            );
-
+                candidatos.push({
+                    wrapper: wrapper,
+                    rotulo: rotulo,
+                    prioridade: prioridade,
+                    caixa: caixa
+                });
+            });
 
             /*
-             * O mapa precisa estar completamente renderizado
-             * antes da primeira leitura dos bounding boxes.
+             * Maior quantidade de medições = maior prioridade.
              */
-            setTimeout(
-                recalcularRotulos,
-                100
-            );
+            candidatos.sort(function(a, b) {
 
-            setTimeout(
-                recalcularRotulos,
-                300
-            );
+                if (b.prioridade !== a.prioridade) {
+                    return b.prioridade - a.prioridade;
+                }
 
-            setTimeout(
-                recalcularRotulos,
-                700
-            );
+                return 0;
+            });
 
-        }}
+            var aceitos = [];
 
+            /*
+             * Pequena margem adicional para evitar que
+             * cartões fiquem visualmente "grudados".
+             */
+            var margem = 5;
 
-        configurarDesobstrucao();
+            candidatos.forEach(function(item) {
 
-    }})();
-    </script>
-    """
+                var caixa = item.rotulo.getBoundingClientRect();
 
-    m.get_root().html.add_child(
-        Element(declutter_js)
-    )
+                var conflito = false;
+
+                for (var i = 0; i < aceitos.length; i++) {
+
+                    if (
+                        caixasSeSobrepoem(
+                            caixa,
+                            aceitos[i],
+                            margem
+                        )
+                    ) {
+                        conflito = true;
+                        break;
+                    }
+                }
+
+                if (conflito) {
+
+                    /*
+                     * O marcador continua existindo.
+                     * Apenas o cartão é ocultado.
+                     */
+                    item.rotulo.style.visibility = "hidden";
+
+                } else {
+
+                    item.rotulo.style.visibility = "visible";
+
+                    aceitos.push(caixa);
+                }
+            });
+        }
+
+        var agendamento = null;
+
+        function agendarRecalculo() {
+
+            if (agendamento) {
+                clearTimeout(agendamento);
+            }
+
+            agendamento = setTimeout(function() {
+
+                recalcularRotulos();
+
+                agendamento = null;
+
+            }, 80);
+        }
+
+        /*
+         * Recalcula quando o usuário movimenta ou
+         * aproxima/afasta o mapa.
+         */
+        map.on("zoomend", agendarRecalculo);
+        map.on("moveend", agendarRecalculo);
+        map.on("resize", agendarRecalculo);
+
+        /*
+         * Recalcula também se a janela do navegador
+         * mudar de tamanho.
+         */
+        window.addEventListener(
+            "resize",
+            agendarRecalculo
+        );
+
+        /*
+         * Primeira execução e novas execuções após
+         * o carregamento dos marcadores.
+         */
+        setTimeout(recalcularRotulos, 150);
+        setTimeout(recalcularRotulos, 400);
+        setTimeout(recalcularRotulos, 800);
+    }
+
+    iniciarDeclutter();
+
+})();
+</script>
+"""
+
+declutter_js = declutter_js.replace(
+    "MAP_NAME_PLACEHOLDER",
+    map_name
+)
+
+m.get_root().html.add_child(
+    Element(declutter_js)
+)
 
 
 # ============================================================
