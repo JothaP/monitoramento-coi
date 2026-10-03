@@ -3475,7 +3475,7 @@ declutter_js = """
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "-18px";
+                rotulo.style.top = "-80px";
                 rotulo.style.transform =
                     "translate(-50%, -100%)";
 
