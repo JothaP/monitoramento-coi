@@ -16,6 +16,7 @@ import time
 import plotly.express as px
 from branca.element import Element
 from html import escape
+import unicodedata
 
 
 # ============================================================
@@ -77,7 +78,8 @@ COLUNAS_PADRAO = [
     "Latitude",
     "Longitude",
     "Pressao_MCA",
-    "Observacao"
+    "Observacao",
+    "Matricula"
 ]
 
 
@@ -93,6 +95,7 @@ COR_ALTA_PRESSAO = "#A11FFF"
 def classificar_pressao(pressao):
 
     try:
+
         valor = float(pressao)
 
     except (TypeError, ValueError):
@@ -176,24 +179,40 @@ def conectar_google_sheets():
                 "Latitude",
                 "Longitude",
                 "Pressao_MCA",
-                "Observacao"
+                "Observacao",
+                "Matricula"
             ])
 
         else:
 
-            cabecalho_atual = dados_iniciais[0]
+            cabecalho_atual = [
+                str(c).strip()
+                for c in dados_iniciais[0]
+            ]
 
+            # Garante a coluna Observacao
             if (
                 len(cabecalho_atual) >= 7
-                and "Observacao" not in [
-                    str(c).strip()
-                    for c in cabecalho_atual
-                ]
+                and "Observacao" not in cabecalho_atual
+                and "Observação" not in cabecalho_atual
             ):
 
                 ws.update(
                     "H1",
                     [["Observacao"]]
+                )
+
+            # Garante a coluna Matricula na coluna I.
+            # Compatibilidade com instalações antigas
+            # que ainda possuem somente 8 colunas.
+            if (
+                "Matricula" not in cabecalho_atual
+                and "Matrícula" not in cabecalho_atual
+            ):
+
+                ws.update(
+                    "I1",
+                    [["Matricula"]]
                 )
 
     except Exception:
@@ -235,6 +254,7 @@ def normalizar_coluna(nome: str) -> str:
     mapeamento = {
 
         "id": "ID",
+
         "data": "Data",
 
         "municipio": "Municipio",
@@ -257,13 +277,53 @@ def normalizar_coluna(nome: str) -> str:
 
         "observacao": "Observacao",
         "observação": "Observacao",
-        "obs": "Observacao"
+        "obs": "Observacao",
+
+        "matricula": "Matricula",
+        "matrícula": "Matricula",
+        "matrícula ": "Matricula",
+        "mat": "Matricula"
     }
 
     return mapeamento.get(
         nome,
         nome.title()
     )
+
+
+def normalizar_texto_local(
+    valor,
+    padrao=""
+) -> str:
+
+    if valor is None:
+
+        return padrao
+
+    texto = str(
+        valor
+    ).strip()
+
+    if not texto or texto.lower() in (
+        "nan",
+        "none",
+        "nat"
+    ):
+
+        return padrao
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto
+    )
+
+    texto = "".join(
+        caractere
+        for caractere in texto
+        if not unicodedata.combining(caractere)
+    )
+
+    return texto.upper().strip()
 
 
 def parse_float(
@@ -501,25 +561,26 @@ def carregar_dados() -> pd.DataFrame:
         normalizar_data
     )
 
-    df["Municipio"] = (
-        df["Municipio"]
-        .astype(str)
-        .str.strip()
-        .replace({
-            "": "Teresina",
-            "nan": "Teresina",
-            "None": "Teresina"
-        })
+    # ========================================================
+    # NORMALIZAÇÃO DE MUNICÍPIO
+    # ========================================================
+    df["Municipio"] = df["Municipio"].apply(
+        lambda x:
+        normalizar_texto_local(
+            x,
+            padrao="TERESINA"
+        )
     )
 
-    df["Bairro"] = (
-        df["Bairro"]
-        .astype(str)
-        .str.strip()
-        .replace({
-            "nan": "",
-            "None": ""
-        })
+    # ========================================================
+    # NORMALIZAÇÃO DE BAIRRO
+    # ========================================================
+    df["Bairro"] = df["Bairro"].apply(
+        lambda x:
+        normalizar_texto_local(
+            x,
+            padrao=""
+        )
     )
 
     df["Latitude"] = df[
@@ -562,6 +623,19 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
+    # ========================================================
+    # MATRÍCULA
+    # ========================================================
+    df["Matricula"] = (
+        df["Matricula"]
+        .astype(str)
+        .str.strip()
+        .replace({
+            "nan": "",
+            "None": ""
+        })
+    )
+
     df = df[
         df["Bairro"]
         .astype(str)
@@ -583,6 +657,7 @@ def limpar_cache():
 
 def adicionar_ponto(
     municipio: str,
+    matricula: str,
     bairro: str,
     lat: float,
     lon: float,
@@ -593,15 +668,30 @@ def adicionar_ponto(
 
     novo_id = gerar_id()
 
+    municipio_normalizado = normalizar_texto_local(
+        municipio,
+        padrao="TERESINA"
+    )
+
+    bairro_normalizado = normalizar_texto_local(
+        bairro,
+        padrao=""
+    )
+
+    matricula_normalizada = str(
+        matricula or ""
+    ).strip()
+
     worksheet.append_row([
         str(novo_id),
         str(data_str),
-        str(municipio),
-        str(bairro),
+        municipio_normalizado,
+        bairro_normalizado,
         float(lat),
         float(lon),
         float(pressao),
-        str(observacao)
+        str(observacao),
+        matricula_normalizada
     ])
 
     time.sleep(0.3)
@@ -643,6 +733,8 @@ def adicionar_lote_seguro(
                 else ""
             )
 
+            # Matrícula permanece fora da chave
+            # de duplicidade.
             chave = (
                 str(r["Data"]).strip(),
                 str(
@@ -671,7 +763,8 @@ def adicionar_lote_seguro(
             lat_val,
             lon_val,
             pres_val,
-            obs_val
+            obs_val,
+            mat_val
         ) = linha
 
         lat_f = (
@@ -711,12 +804,19 @@ def adicionar_lote_seguro(
             [
                 str(i),
                 str(d),
-                str(mun),
-                str(b),
+                normalizar_texto_local(
+                    mun,
+                    padrao="TERESINA"
+                ),
+                normalizar_texto_local(
+                    b,
+                    padrao=""
+                ),
                 float(lat),
                 float(lon),
                 float(p),
-                str(o)
+                str(o),
+                str(mat).strip()
             ]
 
             for (
@@ -727,7 +827,8 @@ def adicionar_lote_seguro(
                 lat,
                 lon,
                 p,
-                o
+                o,
+                mat
             ) in linhas_novas
         ]
 
@@ -750,6 +851,7 @@ def adicionar_lote_seguro(
 def atualizar_ponto(
     id_registro: str,
     municipio: str,
+    matricula: str,
     bairro: str,
     lat: float,
     lon: float,
@@ -771,16 +873,23 @@ def atualizar_ponto(
         linha = celula.row
 
         worksheet.update(
-            f"A{linha}:H{linha}",
+            f"A{linha}:I{linha}",
             [[
                 str(id_registro),
                 str(data_str),
-                str(municipio),
-                str(bairro),
+                normalizar_texto_local(
+                    municipio,
+                    padrao="TERESINA"
+                ),
+                normalizar_texto_local(
+                    bairro,
+                    padrao=""
+                ),
                 float(lat),
                 float(lon),
                 float(pressao),
-                str(observacao)
+                str(observacao),
+                str(matricula).strip()
             ]]
         )
 
@@ -867,6 +976,18 @@ def gerar_kml(df):
                     else ""
                 )
 
+                matricula_text = (
+                    f"\nMatrícula: "
+                    f"{row.get('Matricula', '')}"
+                    if str(
+                        row.get(
+                            "Matricula",
+                            ""
+                        )
+                    ).strip()
+                    else ""
+                )
+
                 kml.newpoint(
                     name=str(
                         row.get(
@@ -879,6 +1000,8 @@ def gerar_kml(df):
                         f"{row.get('Municipio', '')}\n"
                         f"Bairro: "
                         f"{row.get('Bairro', '')}\n"
+                        f"Matrícula: "
+                        f"{row.get('Matricula', '')}\n"
                         f"Pressão: "
                         f"{row.get('Pressao_MCA', '')} MCA"
                         f"{obs_text}"
@@ -973,6 +1096,11 @@ def modal_novo_ponto():
             value="Teresina"
         )
 
+        matricula = st.text_input(
+            "Matrícula",
+            placeholder="Ex: 123456789"
+        )
+
         bairro = st.text_input(
             "Bairro *",
             placeholder="Ex: Centro"
@@ -1041,8 +1169,15 @@ def modal_novo_ponto():
             else:
 
                 novo_id = adicionar_ponto(
-                    municipio.strip(),
-                    bairro.strip(),
+                    normalizar_texto_local(
+                        municipio,
+                        padrao="TERESINA"
+                    ),
+                    matricula.strip(),
+                    normalizar_texto_local(
+                        bairro,
+                        padrao=""
+                    ),
                     lat_n,
                     lon_n,
                     pressao,
@@ -1102,6 +1237,13 @@ def modal_editar_ponto(
                 "Município *",
                 value=str(
                     reg_edit["Municipio"]
+                )
+            )
+
+            matricula_e = st.text_input(
+                "Matrícula",
+                value=str(
+                    reg_edit["Matricula"]
                 )
             )
 
@@ -1200,8 +1342,15 @@ def modal_editar_ponto(
 
                     if atualizar_ponto(
                         id_registro,
-                        municipio_e.strip(),
-                        bairro_e.strip(),
+                        normalizar_texto_local(
+                            municipio_e,
+                            padrao="TERESINA"
+                        ),
+                        matricula_e.strip(),
+                        normalizar_texto_local(
+                            bairro_e,
+                            padrao=""
+                        ),
                         lat_n,
                         lon_n,
                         pressao_e,
@@ -1246,7 +1395,8 @@ def modal_previa_upload():
             "Latitude",
             "Longitude",
             "Pressao_MCA",
-            "Observacao"
+            "Observacao",
+            "Matricula"
         ]
     )
 
@@ -1255,6 +1405,7 @@ def modal_previa_upload():
             [
                 "Data",
                 "Municipio",
+                "Matricula",
                 "Bairro",
                 "Latitude",
                 "Longitude",
@@ -1475,6 +1626,60 @@ with st.sidebar:
         key="filtro_bairro"
     )
 
+    # ========================================================
+    # FILTRO DE MATRÍCULA
+    # ========================================================
+    matriculas_base = (
+        df_data[
+            (
+                df_data["Municipio"] == mun_sel
+            )
+            &
+            (
+                df_data["Bairro"] == bairro_sel
+            )
+        ]
+        if (
+            mun_sel != "Todos"
+            and bairro_sel != "Todos"
+            and not df_data.empty
+        )
+        else (
+            df_data[
+                df_data["Municipio"] == mun_sel
+            ]
+            if (
+                mun_sel != "Todos"
+                and not df_data.empty
+            )
+            else df_data
+        )
+    )
+
+    matriculas_opts = (
+        ["Todas"]
+        +
+        sorted(
+            [
+                str(x).strip()
+                for x in matriculas_base["Matricula"]
+                .dropna()
+                .unique()
+                if str(x).strip()
+                and str(x).strip().lower()
+                not in ("nan", "none")
+            ]
+        )
+        if not matriculas_base.empty
+        else ["Todas"]
+    )
+
+    matricula_sel = st.selectbox(
+        "Matrícula",
+        matriculas_opts,
+        key="filtro_matricula"
+    )
+
     faixa_sel = st.selectbox(
         "Faixa de Pressão",
         [
@@ -1513,17 +1718,21 @@ with st.sidebar:
         )
     )
 
+    # ========================================================
+    # MODELO XLSX
+    # ========================================================
     df_modelo = pd.DataFrame(
         [{
             "Data": datetime.now().strftime(
                 "%d/%m/%Y"
             ),
-            "Municipio": "Teresina",
-            "Bairro": "Centro",
+            "Municipio": "TERESINA",
+            "Bairro": "CENTRO",
             "Latitude": -5.0892,
             "Longitude": -42.8019,
             "Pressao_MCA": 2.5,
-            "Observacao": "Exemplo de observação"
+            "Observacao": "EXEMPLO DE OBSERVAÇÃO",
+            "Matricula": "123456789"
         }],
         columns=COLUNAS_PADRAO[1:]
     )
@@ -1555,6 +1764,9 @@ with st.sidebar:
         use_container_width=True
     )
 
+    # ========================================================
+    # UPLOAD
+    # ========================================================
     if arquivo_upload is not None:
 
         if (
@@ -1577,6 +1789,13 @@ with st.sidebar:
                     df_up = pd.read_excel(
                         arquivo_upload
                     )
+
+                # Normaliza os nomes das colunas.
+                # Aceita Matricula, Matrícula, MATRICULA, etc.
+                df_up.columns = [
+                    normalizar_coluna(c)
+                    for c in df_up.columns
+                ]
 
                 lote_para_enviar = []
 
@@ -1601,22 +1820,35 @@ with st.sidebar:
                             .data_final_selecionada
                         )
 
-                    muni = str(
+                    muni = normalizar_texto_local(
                         row.get(
                             "Municipio",
-                            row.get(
-                                "Município",
-                                "Teresina"
-                            )
-                        )
-                    ).strip()
+                            "TERESINA"
+                        ),
+                        padrao="TERESINA"
+                    )
 
-                    bair = str(
+                    bair = normalizar_texto_local(
                         row.get(
                             "Bairro",
                             ""
+                        ),
+                        padrao=""
+                    )
+
+                    matricula_val = str(
+                        row.get(
+                            "Matricula",
+                            ""
                         )
                     ).strip()
+
+                    if matricula_val.lower() in (
+                        "nan",
+                        "none"
+                    ):
+
+                        matricula_val = ""
 
                     lat_val = normalizar_coordenada(
                         row.get(
@@ -1637,10 +1869,7 @@ with st.sidebar:
                     pres_val = parse_float(
                         row.get(
                             "Pressao_MCA",
-                            row.get(
-                                "Pressão_MCA",
-                                0.0
-                            )
+                            0.0
                         ),
                         0.0
                     )
@@ -1648,15 +1877,16 @@ with st.sidebar:
                     obs_val = str(
                         row.get(
                             "Observacao",
-                            row.get(
-                                "Observação",
-                                row.get(
-                                    "Obs",
-                                    ""
-                                )
-                            )
+                            ""
                         )
                     ).strip()
+
+                    if obs_val.lower() in (
+                        "nan",
+                        "none"
+                    ):
+
+                        obs_val = ""
 
                     if (
                         bair
@@ -1672,7 +1902,8 @@ with st.sidebar:
                             float(lat_val),
                             float(lon_val),
                             float(pres_val),
-                            obs_val
+                            obs_val,
+                            matricula_val
                         ])
 
                 if lote_para_enviar:
@@ -1690,8 +1921,8 @@ with st.sidebar:
                     st.warning(
                         "⚠️ Nenhum registro válido encontrado. "
                         "Verifique se os nomes das colunas são: "
-                        "Data, Municipio, Bairro, Latitude, Longitude, "
-                        "Pressao_MCA, Observacao."
+                        "Data, Municipio, Matricula, Bairro, Latitude, "
+                        "Longitude, Pressao_MCA, Observacao."
                     )
 
             except Exception as e:
@@ -1964,6 +2195,19 @@ if bairro_sel != "Todos":
     ]
 
 
+# ============================================================
+# FILTRO PRINCIPAL POR MATRÍCULA
+# ============================================================
+if matricula_sel != "Todas":
+
+    df_filtrado = df_filtrado[
+        df_filtrado["Matricula"]
+        .astype(str)
+        .str.strip()
+        == matricula_sel
+    ]
+
+
 if faixa_sel == "Sem Pressão (0 MCA)":
 
     df_filtrado = df_filtrado[
@@ -2134,12 +2378,7 @@ with c_map2:
 
 with c_map3:
 
-    # ========================================================
-    # CORREÇÃO:
-    #
-    # O controle agora fica disponível nos DOIS modos.
-    # ========================================================
-    mostrar_rotulos = st.checkbox(
+    st.checkbox(
         "Exibir rótulos dos bairros",
         value=True,
         key="mostrar_rotulos_bp",
@@ -2149,6 +2388,8 @@ with c_map3:
             "No modo individual mostra a medição daquele ponto."
         )
     )
+
+    mostrar_rotulos = st.session_state.mostrar_rotulos_bp
 
 
 with c_map4:
@@ -2252,15 +2493,6 @@ def gerar_pin_svg(
 
         escala = 1.0
 
-    # --------------------------------------------------------
-    # O SVG possui:
-    #
-    # - corpo colorido;
-    # - borda branca;
-    # - círculo branco central.
-    #
-    # O desenho é sempre visível, independente do navegador.
-    # --------------------------------------------------------
     return f"""
     <svg
         class="bp-pin-svg"
@@ -2321,14 +2553,21 @@ if not df_filtrado.empty:
 
         validos["Municipio"] = (
             validos["Municipio"]
-            .fillna("Município não informado")
+            .fillna("MUNICIPIO NAO INFORMADO")
             .astype(str)
             .str.strip()
         )
 
         validos["Bairro"] = (
             validos["Bairro"]
-            .fillna("Bairro não informado")
+            .fillna("BAIRRO NAO INFORMADO")
+            .astype(str)
+            .str.strip()
+        )
+
+        validos["Matricula"] = (
+            validos["Matricula"]
+            .fillna("")
             .astype(str)
             .str.strip()
         )
@@ -2365,6 +2604,13 @@ if not df_filtrado.empty:
                 municipio = str(
                     registro["Municipio"]
                 )
+
+                matricula = str(
+                    registro.get(
+                        "Matricula",
+                        ""
+                    )
+                ).strip()
 
                 data_registro = str(
                     registro["Data"]
@@ -2412,9 +2658,18 @@ if not df_filtrado.empty:
                     <div style="
                         font-size:11px;
                         color:#6b7280;
-                        margin-bottom:12px;
+                        margin-bottom:8px;
                     ">
                         {escape(municipio)}
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        margin-bottom:10px;
+                    ">
+                        <b>Matrícula:</b>
+                        {escape(matricula) if matricula else "Não informada"}
                     </div>
 
                     <div style="
@@ -2456,9 +2711,10 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                # ------------------------------------------------
+                # --------------------------------------------
                 # RÓTULO INDIVIDUAL
-                # ------------------------------------------------
+                # Matrícula NÃO entra aqui.
+                # --------------------------------------------
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -2508,9 +2764,6 @@ if not df_filtrado.empty:
                     </div>
                     """
 
-                # ------------------------------------------------
-                # SOMENTE PIN
-                # ------------------------------------------------
                 else:
 
                     marker_html = f"""
@@ -2666,6 +2919,27 @@ if not df_filtrado.empty:
                         .replace(".", ",")
                     )
 
+                    matricula_reg = str(
+                        registro.get(
+                            "Matricula",
+                            ""
+                        )
+                    ).strip()
+
+                    matricula_html = ""
+
+                    if matricula_reg:
+
+                        matricula_html = f"""
+                        <div style="
+                            color:#6b7280;
+                            margin-top:2px;
+                        ">
+                            Matrícula:
+                            {escape(matricula_reg)}
+                        </div>
+                        """
+
                     linhas_medicoes.append(
                         f"""
                         <div style="
@@ -2688,6 +2962,8 @@ if not df_filtrado.empty:
                             ">
                                 ID: {escape(str(registro['ID']))}
                             </div>
+
+                            {matricula_html}
 
                         </div>
                         """
@@ -2926,12 +3202,6 @@ if not df_filtrado.empty:
 map_style_html = """
 <style>
 
-    /*
-     * ========================================================
-     * CONTAINER DOS MARCADORES
-     * ========================================================
-     */
-
     .leaflet-marker-icon.pressao-bairro-marker,
     .leaflet-marker-icon.pressao-individual-marker {
 
@@ -2947,12 +3217,6 @@ map_style_html = """
     }
 
 
-    /*
-     * ========================================================
-     * WRAPPER
-     * ========================================================
-     */
-
     .pressao-bairro-marker .bp-marker-wrapper,
     .pressao-individual-marker .bp-marker-wrapper {
 
@@ -2965,17 +3229,6 @@ map_style_html = """
         font-family: Arial, sans-serif;
     }
 
-
-    /*
-     * ========================================================
-     * SVG DO PIN
-     *
-     * O SVG é o elemento visual principal.
-     *
-     * Não utilizamos mais rotação CSS nem pseudo-elemento
-     * para desenhar o pin.
-     * ========================================================
-     */
 
     .bp-pin-svg {
 
@@ -2991,24 +3244,12 @@ map_style_html = """
     }
 
 
-    /*
-     * ========================================================
-     * GARANTIA DE VISIBILIDADE DO PIN
-     * ========================================================
-     */
-
     .pressao-bairro-marker .bp-pin-svg,
     .pressao-individual-marker .bp-pin-svg {
 
         z-index: 1100 !important;
     }
 
-
-    /*
-     * ========================================================
-     * RÓTULOS
-     * ========================================================
-     */
 
     .bp-label-card {
 
@@ -3058,20 +3299,11 @@ map_style_html = """
     }
 
 
-    /*
-     * O cartão recebe a cor do próprio pin.
-     */
     .bp-marker-wrapper {
 
         --bp-color: #64748b;
     }
 
-
-    /*
-     * ========================================================
-     * TÍTULO
-     * ========================================================
-     */
 
     .bp-label-title {
 
@@ -3090,12 +3322,6 @@ map_style_html = """
         color: #111827;
     }
 
-
-    /*
-     * ========================================================
-     * LINHA DE DADOS
-     * ========================================================
-     */
 
     .bp-label-data {
 
@@ -3139,14 +3365,6 @@ map_style_html = """
     }
 
 
-    /*
-     * ========================================================
-     * RÓTULO INDIVIDUAL
-     *
-     * Um pouco menor que o rótulo de bairro.
-     * ========================================================
-     */
-
     .bp-label-card-individual {
 
         width: 145px;
@@ -3169,23 +3387,11 @@ map_style_html = """
     }
 
 
-    /*
-     * ========================================================
-     * RÓTULO DE BAIRRO
-     * ========================================================
-     */
-
     .bp-label-card-bairro {
 
         width: 158px;
     }
 
-
-    /*
-     * ========================================================
-     * TOOLTIP PADRÃO
-     * ========================================================
-     */
 
     .pressao-bairro-marker .leaflet-tooltip,
     .pressao-individual-marker .leaflet-tooltip {
@@ -3226,11 +3432,6 @@ declutter_js = """
         var map = MAP_NAME_PLACEHOLDER;
 
 
-        /*
-         * ----------------------------------------------------
-         * Verifica colisão entre dois retângulos.
-         * ----------------------------------------------------
-         */
         function caixasSeSobrepoem(
             a,
             b,
@@ -3246,12 +3447,6 @@ declutter_js = """
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Verifica se o rótulo está dentro da área visível
-         * do mapa.
-         * ----------------------------------------------------
-         */
         function estaDentroDoMapa(
             caixa,
             areaMapa,
@@ -3267,11 +3462,6 @@ declutter_js = """
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Define uma posição candidata.
-         * ----------------------------------------------------
-         */
         function aplicarPosicao(
             rotulo,
             posicao
@@ -3356,11 +3546,6 @@ declutter_js = """
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Calcula o melhor posicionamento.
-         * ----------------------------------------------------
-         */
         function recalcularRotulos() {
 
             var container = map.getContainer();
@@ -3375,16 +3560,6 @@ declutter_js = """
                 container.getBoundingClientRect();
 
 
-            /*
-             * CORREÇÃO:
-             *
-             * Agora o algoritmo considera:
-             *
-             * - pins de bairro
-             * - pins de medições individuais
-             *
-             * simultaneamente.
-             */
             var marcadores =
                 container.querySelectorAll(
                     ".pressao-bairro-marker .bp-marker-wrapper, " +
@@ -3401,11 +3576,6 @@ declutter_js = """
             var candidatos = [];
 
 
-            /*
-             * ------------------------------------------------
-             * Prepara os rótulos.
-             * ------------------------------------------------
-             */
             marcadores.forEach(
                 function(wrapper) {
 
@@ -3421,11 +3591,6 @@ declutter_js = """
                     }
 
 
-                    /*
-                     * Recupera a cor do marcador
-                     * diretamente do SVG, quando necessário,
-                     * para manter o cartão coerente.
-                     */
                     var svg =
                         wrapper.querySelector(
                             ".bp-pin-svg"
@@ -3485,9 +3650,6 @@ declutter_js = """
                     }
 
 
-                    /*
-                     * Identifica se é individual.
-                     */
                     var individual =
                         wrapper.classList.contains(
                             "bp-individual-marker-wrapper"
@@ -3512,20 +3674,6 @@ declutter_js = """
             );
 
 
-            /*
-             * ------------------------------------------------
-             * Ordem de prioridade:
-             *
-             * 1. Bairros
-             * 2. Maior quantidade de medições
-             *
-             * Para individuais, prioridade = 1.
-             *
-             * Assim, quando um bairro consolidado e uma
-             * medição individual estiverem próximos,
-             * o bairro tende a preservar seu rótulo.
-             * ------------------------------------------------
-             */
             candidatos.sort(
                 function(a, b) {
 
@@ -3565,11 +3713,6 @@ declutter_js = """
             );
 
 
-            /*
-             * ------------------------------------------------
-             * Posições disponíveis.
-             * ------------------------------------------------
-             */
             var posicoes = [
 
                 "top",
@@ -3594,23 +3737,12 @@ declutter_js = """
             var aceitos = [];
 
 
-            /*
-             * Distância mínima entre rótulos.
-             */
             var margem = 5;
 
 
-            /*
-             * Margem interna do mapa.
-             */
             var margemMapa = 4;
 
 
-            /*
-             * ------------------------------------------------
-             * Processa cada rótulo.
-             * ------------------------------------------------
-             */
             candidatos.forEach(
                 function(item) {
 
@@ -3638,9 +3770,6 @@ declutter_js = """
                             .getBoundingClientRect();
 
 
-                        /*
-                         * Fora do mapa?
-                         */
                         if (
                             !estaDentroDoMapa(
                                 caixa,
@@ -3656,10 +3785,6 @@ declutter_js = """
                         var conflito = false;
 
 
-                        /*
-                         * Verifica colisão com rótulos
-                         * anteriormente aceitos.
-                         */
                         for (
                             var i = 0;
                             i < aceitos.length;
@@ -3698,13 +3823,6 @@ declutter_js = """
                     }
 
 
-                    /*
-                     * IMPORTANTE:
-                     *
-                     * somente o rótulo é ocultado.
-                     *
-                     * O SVG do pin permanece.
-                     */
                     if (!encontrouPosicao) {
 
                         item.rotulo.style.visibility =
@@ -3717,11 +3835,6 @@ declutter_js = """
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Agendamento.
-         * ----------------------------------------------------
-         */
         var agendamento = null;
 
 
@@ -3758,11 +3871,6 @@ declutter_js = """
         }
 
 
-        /*
-         * ----------------------------------------------------
-         * Eventos do Leaflet.
-         * ----------------------------------------------------
-         */
         map.on(
             "zoomend",
             agendarRecalculo
@@ -3787,11 +3895,6 @@ declutter_js = """
         );
 
 
-        /*
-         * ----------------------------------------------------
-         * Primeiras execuções.
-         * ----------------------------------------------------
-         */
         setTimeout(
             recalcularRotulos,
             100
@@ -3993,6 +4096,7 @@ if not df_filtrado.empty:
             "ID",
             "Data",
             "Municipio",
+            "Matricula",
             "Bairro",
             "Latitude",
             "Longitude",
