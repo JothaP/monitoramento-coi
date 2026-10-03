@@ -2503,8 +2503,8 @@ def gerar_pin_svg(
         style="
             position:absolute;
             left:50%;
-            top:50%;
-            transform:translate(-50%,-50%);
+            bottom:0;
+            transform:translateX(-50%);
             overflow:visible;
             pointer-events:auto;
             z-index:1100;
@@ -2724,7 +2724,7 @@ if not df_filtrado.empty:
                         style="
                             position:relative;
                             width:42px;
-                            height:42px;
+                            height:70px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
@@ -2773,7 +2773,7 @@ if not df_filtrado.empty:
                         style="
                             position:relative;
                             width:42px;
-                            height:42px;
+                            height:70px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
@@ -2797,11 +2797,11 @@ if not df_filtrado.empty:
                         html=marker_html,
                         icon_size=(
                             42,
-                            42
+                            70
                         ),
                         icon_anchor=(
                             21,
-                            21
+                            70
                         ),
                         class_name=(
                             "pressao-individual-marker"
@@ -3100,7 +3100,7 @@ if not df_filtrado.empty:
                         style="
                             position:relative;
                             width:44px;
-                            height:44px;
+                            height:75px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
@@ -3150,7 +3150,7 @@ if not df_filtrado.empty:
                         style="
                             position:relative;
                             width:44px;
-                            height:44px;
+                            height:75px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
@@ -3174,11 +3174,11 @@ if not df_filtrado.empty:
                         html=marker_html,
                         icon_size=(
                             44,
-                            44
+                            75
                         ),
                         icon_anchor=(
                             22,
-                            22
+                            75
                         ),
                         class_name=(
                             "pressao-bairro-marker"
@@ -3475,7 +3475,7 @@ declutter_js = """
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "-28px";
+                rotulo.style.top = "2px";
                 rotulo.style.transform =
                     "translate(-50%, -100%)";
 
@@ -3484,7 +3484,7 @@ declutter_js = """
             else if (posicao === "bottom") {
 
                 rotulo.style.left = "50%";
-                rotulo.style.top = "60px";
+                rotulo.style.top = "78px";
                 rotulo.style.transform =
                     "translate(-50%, 0)";
 
@@ -3492,8 +3492,8 @@ declutter_js = """
 
             else if (posicao === "right") {
 
-                rotulo.style.left = "56px";
-                rotulo.style.top = "50%";
+                rotulo.style.left = "52px";
+                rotulo.style.top = "35px";
                 rotulo.style.transform =
                     "translate(0, -50%)";
 
@@ -3501,8 +3501,8 @@ declutter_js = """
 
             else if (posicao === "left") {
 
-                rotulo.style.left = "-16px";
-                rotulo.style.top = "50%";
+                rotulo.style.left = "-12px";
+                rotulo.style.top = "35px";
                 rotulo.style.transform =
                     "translate(-100%, -50%)";
 
@@ -3510,8 +3510,8 @@ declutter_js = """
 
             else if (posicao === "top-right") {
 
-                rotulo.style.left = "52px";
-                rotulo.style.top = "-28px";
+                rotulo.style.left = "48px";
+                rotulo.style.top = "2px";
                 rotulo.style.transform =
                     "translate(0, -100%)";
 
@@ -3519,8 +3519,8 @@ declutter_js = """
 
             else if (posicao === "top-left") {
 
-                rotulo.style.left = "-12px";
-                rotulo.style.top = "-28px";
+                rotulo.style.left = "-8px";
+                rotulo.style.top = "2px";
                 rotulo.style.transform =
                     "translate(-100%, -100%)";
 
@@ -3528,8 +3528,8 @@ declutter_js = """
 
             else if (posicao === "bottom-right") {
 
-                rotulo.style.left = "52px";
-                rotulo.style.top = "60px";
+                rotulo.style.left = "48px";
+                rotulo.style.top = "78px";
                 rotulo.style.transform =
                     "translate(0, 0)";
 
@@ -3537,8 +3537,8 @@ declutter_js = """
 
             else if (posicao === "bottom-left") {
 
-                rotulo.style.left = "-12px";
-                rotulo.style.top = "60px";
+                rotulo.style.left = "-8px";
+                rotulo.style.top = "78px";
                 rotulo.style.transform =
                     "translate(-100%, 0)";
 
