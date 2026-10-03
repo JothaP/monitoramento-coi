@@ -86,14 +86,6 @@ COR_ALTA_PRESSAO = "#A11FFF"
 
 
 def classificar_pressao(pressao):
-    """
-    Retorna a classificação e a cor correspondente à pressão.
-
-    IMPORTANTE:
-    A lógica de tratamento permanece em 15 MCA.
-    A alteração para 10 MCA solicitada pelo usuário é somente
-    visual na legenda da página.
-    """
     try:
         valor = float(pressao)
     except (TypeError, ValueError):
@@ -1305,9 +1297,6 @@ with st.sidebar:
         "Baixa Pressão • Tempo Real"
     )
 
-    # ========================================================
-    # NOVO FILTRO POR PERÍODO
-    # ========================================================
     st.markdown(
         "#### 📅 Selecionar Período"
     )
@@ -1364,9 +1353,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # FILTROS
-    # ========================================================
     st.markdown(
         "#### 🔍 Filtros"
     )
@@ -1456,7 +1442,7 @@ with st.sidebar:
             "Todas",
             "Sem Pressão (0 MCA)",
             "Baixa Pressão (> 0 e ≤ 5 MCA)",
-            "Em Atenção (> 5 e ≤ 15 MCA)",
+            "Em Atenção (> 5 e ≤ 10 MCA)",
             "Alta Pressão (> 15 MCA)"
         ],
         key="filtro_pressao"
@@ -1464,9 +1450,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # AÇÕES E DADOS
-    # ========================================================
     st.markdown(
         "#### ➕ Ações e Dados"
     )
@@ -1687,9 +1670,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # EXPORTAÇÃO
-    # ========================================================
     st.markdown(
         "#### 📥 Exportar Dados"
     )
@@ -1742,9 +1722,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
-    # ATUALIZAÇÃO
-    # ========================================================
     st.markdown(
         "#### ⏱️ Atualização"
     )
@@ -1966,8 +1943,9 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
         )
     ]
 
-elif faixa_sel == "Em Atenção (> 5 e ≤ 15 MCA)":
+elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
+    # Mantém 15 MCA na lógica de tratamento.
     df_filtrado = df_filtrado[
         (
             df_filtrado["Pressao_MCA"] > 5
@@ -2048,7 +2026,7 @@ if not df_filtrado.empty:
     )
 
     k4.metric(
-        "Em Atenção (> 5 e ≤ 15 MCA)",
+        "Em Atenção (> 5 e ≤ 10 MCA)",
         em_atencao
     )
 
@@ -2422,9 +2400,6 @@ if not df_filtrado.empty:
                     else "medições"
                 )
 
-                # ------------------------------------------------
-                # DETALHES DO POPUP
-                # ------------------------------------------------
                 pressao_min = float(
                     grupo["Pressao_MCA"].min()
                 )
@@ -2616,12 +2591,6 @@ if not df_filtrado.empty:
                 # =================================================
                 if mostrar_rotulos:
 
-                    # O wrapper agora possui uma classe própria e
-                    # prioridade numérica baseada na quantidade de
-                    # medições do bairro.
-                    #
-                    # Isso será utilizado pelo algoritmo JS de
-                    # desobstrução dos rótulos.
                     marker_html = f"""
                     <div
                         class="bp-marker-wrapper"
@@ -2635,7 +2604,6 @@ if not df_filtrado.empty:
                         "
                     >
 
-                        <!-- PIN -->
                         <div style="
                             position:absolute;
                             left:0;
@@ -2685,7 +2653,6 @@ if not df_filtrado.empty:
 
                         </div>
 
-                        <!-- RÓTULO -->
                         <div
                             class="bp-label-card"
                             style="
@@ -2767,9 +2734,6 @@ if not df_filtrado.empty:
 
                 else:
 
-                    # ------------------------------------------------
-                    # SOMENTE PIN
-                    # ------------------------------------------------
                     marker_html = f"""
                     <div style="
                         width:42px;
@@ -2836,9 +2800,7 @@ if not df_filtrado.empty:
                         html=marker_html,
                         icon_size=icon_size,
                         icon_anchor=icon_anchor,
-                        class_name=(
-                            "pressao-bairro-marker"
-                        )
+                        class_name="pressao-bairro-marker"
                     ),
                     popup=folium.Popup(
                         popup,
@@ -2855,28 +2817,12 @@ if not df_filtrado.empty:
 
 
 # ============================================================
-# SISTEMA DE DESOBSTRUÇÃO DOS RÓTULOS
+# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
 # ============================================================
 #
-# Objetivo:
-#
-# - Evitar que os cards dos bairros se sobreponham.
-# - Dar prioridade aos bairros com maior quantidade de medições.
-# - Esconder apenas o rótulo conflitante.
-# - Manter o pin sempre visível.
-# - Recalcular depois de zoom/movimentação.
-#
-# O algoritmo trabalha na posição REAL dos elementos na tela,
-# portanto a decisão muda naturalmente conforme o usuário
-# movimenta ou aproxima/afasta o mapa.
-# ============================================================
-if (
-    modo_visualizacao == "Por bairro"
-    and mostrar_rotulos
-):
-
-# ============================================================
-# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS DOS BAIRROS
+# Este bloco fica FORA de qualquer if Python.
+# Quando não houver rótulos, o JavaScript simplesmente
+# não encontrará .bp-marker-wrapper e não fará nada.
 # ============================================================
 
 map_name = m.get_name()
@@ -2902,7 +2848,6 @@ declutter_js = """
                 a.bottom + margem < b.top ||
                 a.top - margem > b.bottom
             );
-
         }
 
         function recalcularRotulos() {
@@ -2922,7 +2867,6 @@ declutter_js = """
             }
 
             var areaMapa = container.getBoundingClientRect();
-
             var candidatos = [];
 
             marcadores.forEach(function(wrapper) {
@@ -2935,28 +2879,18 @@ declutter_js = """
                     return;
                 }
 
-                /*
-                 * Mostra temporariamente o rótulo para
-                 * conseguirmos calcular sua posição real.
-                 */
                 rotulo.style.display = "block";
                 rotulo.style.visibility = "hidden";
 
                 var caixa = rotulo.getBoundingClientRect();
 
-                /*
-                 * Ignora rótulos completamente fora da
-                 * área visível do mapa.
-                 */
                 if (
                     caixa.right < areaMapa.left ||
                     caixa.left > areaMapa.right ||
                     caixa.bottom < areaMapa.top ||
                     caixa.top > areaMapa.bottom
                 ) {
-
                     rotulo.style.visibility = "hidden";
-
                     return;
                 }
 
@@ -2974,18 +2908,10 @@ declutter_js = """
                 candidatos.push({
                     wrapper: wrapper,
                     rotulo: rotulo,
-                    prioridade: prioridade,
-                    caixa: caixa
+                    prioridade: prioridade
                 });
-
             });
 
-            /*
-             * Ordena os bairros pela quantidade de medições.
-             *
-             * Mais medições = maior prioridade para manter
-             * o rótulo visível.
-             */
             candidatos.sort(function(a, b) {
 
                 if (b.prioridade !== a.prioridade) {
@@ -2993,20 +2919,14 @@ declutter_js = """
                 }
 
                 return 0;
-
             });
 
             var aceitos = [];
-
-            /*
-             * Espaçamento adicional entre os cartões.
-             */
             var margem = 5;
 
             candidatos.forEach(function(item) {
 
                 var caixa = item.rotulo.getBoundingClientRect();
-
                 var conflito = false;
 
                 for (
@@ -3022,21 +2942,13 @@ declutter_js = """
                             margem
                         )
                     ) {
-
                         conflito = true;
-
                         break;
                     }
-
                 }
 
                 if (conflito) {
 
-                    /*
-                     * Esconde somente o rótulo.
-                     *
-                     * O pin continua completamente visível.
-                     */
                     item.rotulo.style.visibility = "hidden";
 
                 } else {
@@ -3044,11 +2956,8 @@ declutter_js = """
                     item.rotulo.style.visibility = "visible";
 
                     aceitos.push(caixa);
-
                 }
-
             });
-
         }
 
         var agendamento = null;
@@ -3069,15 +2978,8 @@ declutter_js = """
                 },
                 80
             );
-
         }
 
-        /*
-         * Recalcula os rótulos quando o usuário:
-         * - aproxima o zoom;
-         * - afasta o zoom;
-         * - arrasta o mapa;
-         */
         map.on(
             "zoomend",
             agendarRecalculo
@@ -3093,22 +2995,11 @@ declutter_js = """
             agendarRecalculo
         );
 
-        /*
-         * Recalcula também quando a janela do navegador
-         * muda de tamanho.
-         */
         window.addEventListener(
             "resize",
             agendarRecalculo
         );
 
-        /*
-         * Executa algumas vezes após o carregamento.
-         *
-         * Isso é importante porque os marcadores do Folium
-         * podem ser inseridos alguns instantes depois
-         * da criação do mapa.
-         */
         setTimeout(
             recalcularRotulos,
             150
@@ -3123,7 +3014,6 @@ declutter_js = """
             recalcularRotulos,
             800
         );
-
     }
 
     iniciarDeclutter();
@@ -3144,11 +3034,6 @@ m.get_root().html.add_child(
 
 # ============================================================
 # LEGENDA DAS CORES
-# ============================================================
-#
-# ATENÇÃO:
-# A legenda abaixo é apenas apresentação visual.
-# A lógica interna continua usando 15 MCA.
 # ============================================================
 legend_html = f"""
 <div style="
@@ -3179,7 +3064,6 @@ legend_html = f"""
     <div style="
         white-space: nowrap;
     ">
-
         <span style="
             display:inline-block;
             width:9px;
@@ -3191,13 +3075,11 @@ legend_html = f"""
         "></span>
 
         Sem Pressão (0 MCA)
-
     </div>
 
     <div style="
         white-space: nowrap;
     ">
-
         <span style="
             display:inline-block;
             width:9px;
@@ -3209,13 +3091,11 @@ legend_html = f"""
         "></span>
 
         Baixa Pressão (&gt; 0 e ≤ 5 MCA)
-
     </div>
 
     <div style="
         white-space: nowrap;
     ">
-
         <span style="
             display:inline-block;
             width:9px;
@@ -3227,13 +3107,11 @@ legend_html = f"""
         "></span>
 
         Em Atenção (&gt; 5 e ≤ 10 MCA)
-
     </div>
 
     <div style="
         white-space: nowrap;
     ">
-
         <span style="
             display:inline-block;
             width:9px;
@@ -3245,7 +3123,6 @@ legend_html = f"""
         "></span>
 
         Alta Pressão (&gt; 15 MCA)
-
     </div>
 
 </div>
