@@ -2875,8 +2875,8 @@ if (
     and mostrar_rotulos
 ):
 
-    # ============================================================
-# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
+# ============================================================
+# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS DOS BAIRROS
 # ============================================================
 
 map_name = m.get_name()
@@ -2895,12 +2895,14 @@ declutter_js = """
         var map = MAP_NAME_PLACEHOLDER;
 
         function caixasSeSobrepoem(a, b, margem) {
+
             return !(
                 a.right + margem < b.left ||
                 a.left - margem > b.right ||
                 a.bottom + margem < b.top ||
                 a.top - margem > b.bottom
             );
+
         }
 
         function recalcularRotulos() {
@@ -2925,15 +2927,17 @@ declutter_js = """
 
             marcadores.forEach(function(wrapper) {
 
-                var rotulo = wrapper.querySelector(".bp-label-card");
+                var rotulo = wrapper.querySelector(
+                    ".bp-label-card"
+                );
 
                 if (!rotulo) {
                     return;
                 }
 
                 /*
-                 * Primeiro mostramos todos temporariamente.
-                 * Assim conseguimos medir corretamente cada cartão.
+                 * Mostra temporariamente o rótulo para
+                 * conseguirmos calcular sua posição real.
                  */
                 rotulo.style.display = "block";
                 rotulo.style.visibility = "hidden";
@@ -2941,8 +2945,8 @@ declutter_js = """
                 var caixa = rotulo.getBoundingClientRect();
 
                 /*
-                 * Ignora rótulos que estejam completamente
-                 * fora da área visível do mapa.
+                 * Ignora rótulos completamente fora da
+                 * área visível do mapa.
                  */
                 if (
                     caixa.right < areaMapa.left ||
@@ -2950,12 +2954,16 @@ declutter_js = """
                     caixa.bottom < areaMapa.top ||
                     caixa.top > areaMapa.bottom
                 ) {
+
                     rotulo.style.visibility = "hidden";
+
                     return;
                 }
 
                 var prioridade = parseInt(
-                    wrapper.getAttribute("data-bp-priority") || "0",
+                    wrapper.getAttribute(
+                        "data-bp-priority"
+                    ) || "0",
                     10
                 );
 
@@ -2969,10 +2977,14 @@ declutter_js = """
                     prioridade: prioridade,
                     caixa: caixa
                 });
+
             });
 
             /*
-             * Maior quantidade de medições = maior prioridade.
+             * Ordena os bairros pela quantidade de medições.
+             *
+             * Mais medições = maior prioridade para manter
+             * o rótulo visível.
              */
             candidatos.sort(function(a, b) {
 
@@ -2981,13 +2993,13 @@ declutter_js = """
                 }
 
                 return 0;
+
             });
 
             var aceitos = [];
 
             /*
-             * Pequena margem adicional para evitar que
-             * cartões fiquem visualmente "grudados".
+             * Espaçamento adicional entre os cartões.
              */
             var margem = 5;
 
@@ -2997,7 +3009,11 @@ declutter_js = """
 
                 var conflito = false;
 
-                for (var i = 0; i < aceitos.length; i++) {
+                for (
+                    var i = 0;
+                    i < aceitos.length;
+                    i++
+                ) {
 
                     if (
                         caixasSeSobrepoem(
@@ -3006,16 +3022,20 @@ declutter_js = """
                             margem
                         )
                     ) {
+
                         conflito = true;
+
                         break;
                     }
+
                 }
 
                 if (conflito) {
 
                     /*
-                     * O marcador continua existindo.
-                     * Apenas o cartão é ocultado.
+                     * Esconde somente o rótulo.
+                     *
+                     * O pin continua completamente visível.
                      */
                     item.rotulo.style.visibility = "hidden";
 
@@ -3024,8 +3044,11 @@ declutter_js = """
                     item.rotulo.style.visibility = "visible";
 
                     aceitos.push(caixa);
+
                 }
+
             });
+
         }
 
         var agendamento = null;
@@ -3036,26 +3059,43 @@ declutter_js = """
                 clearTimeout(agendamento);
             }
 
-            agendamento = setTimeout(function() {
+            agendamento = setTimeout(
+                function() {
 
-                recalcularRotulos();
+                    recalcularRotulos();
 
-                agendamento = null;
+                    agendamento = null;
 
-            }, 80);
+                },
+                80
+            );
+
         }
 
         /*
-         * Recalcula quando o usuário movimenta ou
-         * aproxima/afasta o mapa.
+         * Recalcula os rótulos quando o usuário:
+         * - aproxima o zoom;
+         * - afasta o zoom;
+         * - arrasta o mapa;
          */
-        map.on("zoomend", agendarRecalculo);
-        map.on("moveend", agendarRecalculo);
-        map.on("resize", agendarRecalculo);
+        map.on(
+            "zoomend",
+            agendarRecalculo
+        );
+
+        map.on(
+            "moveend",
+            agendarRecalculo
+        );
+
+        map.on(
+            "resize",
+            agendarRecalculo
+        );
 
         /*
-         * Recalcula também se a janela do navegador
-         * mudar de tamanho.
+         * Recalcula também quando a janela do navegador
+         * muda de tamanho.
          */
         window.addEventListener(
             "resize",
@@ -3063,12 +3103,27 @@ declutter_js = """
         );
 
         /*
-         * Primeira execução e novas execuções após
-         * o carregamento dos marcadores.
+         * Executa algumas vezes após o carregamento.
+         *
+         * Isso é importante porque os marcadores do Folium
+         * podem ser inseridos alguns instantes depois
+         * da criação do mapa.
          */
-        setTimeout(recalcularRotulos, 150);
-        setTimeout(recalcularRotulos, 400);
-        setTimeout(recalcularRotulos, 800);
+        setTimeout(
+            recalcularRotulos,
+            150
+        );
+
+        setTimeout(
+            recalcularRotulos,
+            400
+        );
+
+        setTimeout(
+            recalcularRotulos,
+            800
+        );
+
     }
 
     iniciarDeclutter();
