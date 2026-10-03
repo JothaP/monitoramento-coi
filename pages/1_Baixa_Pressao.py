@@ -3486,7 +3486,7 @@ declutter_js = """
 
     } else {
 
-        rotulo.style.top = "-80px";
+        rotulo.style.top = "-180px";
 
     }
 
