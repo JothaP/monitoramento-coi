@@ -72,26 +72,56 @@ def conectar_google_sheets():
     credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(SPREADSHEET_ID)
+
     try:
         ws = sh.worksheet("mapeamento_pressao")
     except Exception:
         try:
-            ws = sh.add_worksheet(title="mapeamento_pressao", rows="1000", cols="20")
+            ws = sh.add_worksheet(
+                title="mapeamento_pressao",
+                rows="1000",
+                cols="20"
+            )
         except Exception:
             ws = sh.sheet1
-            
+
     try:
         dados_iniciais = ws.get_all_values()
+
         if not dados_iniciais or len(dados_iniciais) == 0:
-            ws.append_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"])
+            ws.append_row([
+                "Data",
+                "Município",
+                "Pontos",
+                "Latitude",
+                "Longitude",
+                "MCA",
+                "Observação"
+            ])
         else:
             cabecalho_atual = dados_iniciais[0]
-            if len(cabecalho_atual) >= 6 and "Município" not in [str(c).strip() for c in cabecalho_atual]:
-                ws.insert_row(["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"], index=1)
+
+            if (
+                len(cabecalho_atual) >= 6
+                and "Município" not in [str(c).strip() for c in cabecalho_atual]
+            ):
+                ws.insert_row(
+                    [
+                        "Data",
+                        "Município",
+                        "Pontos",
+                        "Latitude",
+                        "Longitude",
+                        "MCA",
+                        "Observação"
+                    ],
+                    index=1
+                )
     except Exception:
         pass
-        
+
     return ws
+
 
 try:
     worksheet = conectar_google_sheets()
@@ -104,58 +134,96 @@ except Exception as e:
 # ============================================================
 def normalizar_coluna(nome: str) -> str:
     nome = str(nome).strip().lower()
+
     mapeamento = {
         "data": "Data",
-        "municipio": "Município", "município": "Município",
-        "pontos": "Pontos", "ponto": "Pontos",
-        "latitude": "Latitude", "lat": "Latitude", 
-        "longitude": "Longitude", "lon": "Longitude", "long": "Longitude",
-        "mca": "MCA", "pressao": "MCA", "pressão": "MCA",
-        "observacao": "Observacao", "observação": "Observacao", "obs": "Observacao"
+        "municipio": "Município",
+        "município": "Município",
+        "pontos": "Pontos",
+        "ponto": "Pontos",
+        "latitude": "Latitude",
+        "lat": "Latitude",
+        "longitude": "Longitude",
+        "lon": "Longitude",
+        "long": "Longitude",
+        "mca": "MCA",
+        "pressao": "MCA",
+        "pressão": "MCA",
+        "observacao": "Observacao",
+        "observação": "Observacao",
+        "obs": "Observacao"
     }
+
     return mapeamento.get(nome, nome.title())
+
 
 def parse_float(valor, default=None):
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return default
+
     if isinstance(valor, (int, float)):
         return float(valor)
+
     try:
         texto = str(valor).strip()
+
         if not texto or texto.lower() in ("nan", "none", "nat", ""):
             return default
+
         texto = texto.replace(",", ".").replace(" ", "")
+
         return float(texto)
+
     except (ValueError, TypeError):
         return default
 
+
 def normalizar_coordenada(valor, tipo: str = "lat") -> Optional[float]:
     num = parse_float(valor, default=None)
+
     if num is None:
         return None
+
     if tipo == "lat" and not (-90.0 <= num <= 90.0):
         return None
+
     if tipo == "lon" and not (-180.0 <= num <= 180.0):
         return None
+
     if num == 0.0:
         return None
+
     return round(float(num), 6)
+
 
 def normalizar_data(valor) -> str:
     if valor is None or (isinstance(valor, float) and pd.isna(valor)):
         return ""
+
     if isinstance(valor, (datetime, date)):
         return valor.strftime("%d/%m/%Y")
+
     texto = str(valor).strip()
+
     if not texto or texto.lower() in ("nan", "none", "nat", ""):
         return ""
-    formatos = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"]
+
+    formatos = [
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%Y-%m-%d",
+        "%d-%m-%Y",
+        "%Y/%m/%d"
+    ]
+
     for fmt in formatos:
         try:
             return datetime.strptime(texto, fmt).strftime("%d/%m/%Y")
         except ValueError:
             continue
+
     return texto
+
 
 def carregar_dados() -> pd.DataFrame:
     try:
@@ -171,115 +239,262 @@ def carregar_dados() -> pd.DataFrame:
     cabecalhos = [normalizar_coluna(c) for c in cabecalhos_raw]
 
     registros = []
+
     for idx_linha, linha in enumerate(valores[1:], start=0):
         if not any(str(c).strip() for c in linha):
             continue
+
         reg = {"_linha_real": idx_linha}
+
         for i, col in enumerate(cabecalhos):
             reg[col] = linha[i] if i < len(linha) else ""
+
         registros.append(reg)
 
     if not registros:
         return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
     df = pd.DataFrame(registros)
+
     for col in COLUNAS_PADRAO:
         if col not in df.columns:
             df[col] = ""
 
     df["Data"] = df["Data"].apply(normalizar_data)
-    df["Município"] = df["Município"].astype(str).str.strip().replace({"nan": "", "None": ""})
-    df["Pontos"] = df["Pontos"].astype(str).str.strip().replace({"nan": "", "None": ""})
-    df["Latitude"] = df["Latitude"].apply(lambda x: normalizar_coordenada(x, "lat"))
-    df["Longitude"] = df["Longitude"].apply(lambda x: normalizar_coordenada(x, "lon"))
-    df["MCA"] = df["MCA"].apply(lambda x: parse_float(x, 0.0) or 0.0)
-    df["Observacao"] = df["Observacao"].astype(str).str.strip().replace({"nan": "", "None": ""})
+
+    df["Município"] = (
+        df["Município"]
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+
+    df["Pontos"] = (
+        df["Pontos"]
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+
+    df["Latitude"] = df["Latitude"].apply(
+        lambda x: normalizar_coordenada(x, "lat")
+    )
+
+    df["Longitude"] = df["Longitude"].apply(
+        lambda x: normalizar_coordenada(x, "lon")
+    )
+
+    df["MCA"] = df["MCA"].apply(
+        lambda x: parse_float(x, 0.0) or 0.0
+    )
+
+    df["Observacao"] = (
+        df["Observacao"]
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+
     df = df[df["Pontos"].astype(str).str.strip() != ""]
 
     colunas_finais = COLUNAS_PADRAO + ["_linha_real"]
+
     return df[colunas_finais].reset_index(drop=True)
+
 
 def limpar_cache():
     st.cache_data.clear()
 
-def adicionar_ponto(data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str):
-    worksheet.append_row([str(data_str), str(municipio), str(pontos), float(lat), float(lon), float(mca), str(obs)])
+
+def adicionar_ponto(
+    data_str: str,
+    municipio: str,
+    pontos: str,
+    lat: float,
+    lon: float,
+    mca: float,
+    obs: str
+):
+    worksheet.append_row([
+        str(data_str),
+        str(municipio),
+        str(pontos),
+        float(lat),
+        float(lon),
+        float(mca),
+        str(obs)
+    ])
+
     time.sleep(0.3)
     limpar_cache()
+
 
 def adicionar_lote_seguro(linhas_dados: list):
     if not linhas_dados:
         return 0
-    
+
     df_atual = carregar_dados()
+
     chaves_existentes = set()
+
     if not df_atual.empty:
         for _, r in df_atual.iterrows():
-            lat_f = f"{float(r['Latitude']):.6f}" if pd.notnull(r['Latitude']) else ""
-            lon_f = f"{float(r['Longitude']):.6f}" if pd.notnull(r['Longitude']) else ""
-            chave = (str(r["Data"]).strip(), str(r["Município"]).strip().lower(), str(r["Pontos"]).strip().lower(), lat_f, lon_f)
+            lat_f = (
+                f"{float(r['Latitude']):.6f}"
+                if pd.notnull(r['Latitude'])
+                else ""
+            )
+
+            lon_f = (
+                f"{float(r['Longitude']):.6f}"
+                if pd.notnull(r['Longitude'])
+                else ""
+            )
+
+            chave = (
+                str(r["Data"]).strip(),
+                str(r["Município"]).strip().lower(),
+                str(r["Pontos"]).strip().lower(),
+                lat_f,
+                lon_f
+            )
+
             chaves_existentes.add(chave)
 
     linhas_novas = []
+
     for linha in linhas_dados:
         d_val, mun_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
+
         lat_f = f"{float(lat_val):.6f}"
         lon_f = f"{float(lon_val):.6f}"
-        chave_nova = (str(d_val).strip(), str(mun_val).strip().lower(), str(p_val).strip().lower(), lat_f, lon_f)
-        
+
+        chave_nova = (
+            str(d_val).strip(),
+            str(mun_val).strip().lower(),
+            str(p_val).strip().lower(),
+            lat_f,
+            lon_f
+        )
+
         if chave_nova not in chaves_existentes:
             linhas_novas.append(linha)
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
-        dados_formatados = [[d, mun, p, float(lat), float(lon), float(mca), obs] for d, mun, p, lat, lon, mca, obs in linhas_novas]
-        worksheet.append_rows(dados_formatados, value_input_option='USER_ENTERED')
+        dados_formatados = [
+            [
+                d,
+                mun,
+                p,
+                float(lat),
+                float(lon),
+                float(mca),
+                obs
+            ]
+            for d, mun, p, lat, lon, mca, obs in linhas_novas
+        ]
+
+        worksheet.append_rows(
+            dados_formatados,
+            value_input_option="USER_ENTERED"
+        )
+
         time.sleep(0.3)
         limpar_cache()
+
         return len(linhas_novas)
+
     return 0
 
-def atualizar_ponto(linha_real: int, data_str: str, municipio: str, pontos: str, lat: float, lon: float, mca: float, obs: str) -> bool:
+
+def atualizar_ponto(
+    linha_real: int,
+    data_str: str,
+    municipio: str,
+    pontos: str,
+    lat: float,
+    lon: float,
+    mca: float,
+    obs: str
+) -> bool:
+
     try:
         target_row = linha_real + 2
-        worksheet.update(f"A{target_row}:G{target_row}", [[str(data_str), str(municipio), str(pontos), float(lat), float(lon), float(mca), str(obs)]])
+
+        worksheet.update(
+            f"A{target_row}:G{target_row}",
+            [[
+                str(data_str),
+                str(municipio),
+                str(pontos),
+                float(lat),
+                float(lon),
+                float(mca),
+                str(obs)
+            ]]
+        )
+
         time.sleep(0.3)
         limpar_cache()
+
         return True
+
     except Exception as e:
         st.error(f"Erro ao atualizar: {e}")
         return False
 
+
 def excluir_pontos_lote(linhas_reais: list) -> bool:
     try:
-        linhas_ordenadas = sorted([r + 2 for r in linhas_reais], reverse=True)
+        linhas_ordenadas = sorted(
+            [r + 2 for r in linhas_reais],
+            reverse=True
+        )
+
         for r in linhas_ordenadas:
             worksheet.delete_rows(r)
+
         time.sleep(0.3)
         limpar_cache()
+
         return True
+
     except Exception as e:
         st.error(f"Erro ao excluir: {e}")
         return False
 
+
 def data_para_str(d: date) -> str:
     return d.strftime("%d/%m/%Y")
 
+
 def gerar_kml(df):
     kml = simplekml.Kml()
+
     for _, row in df.iterrows():
         lat = row.get("Latitude")
         lon = row.get("Longitude")
+
         if pd.notnull(lat) and pd.notnull(lon):
             try:
                 kml.newpoint(
                     name=str(row.get("Pontos", "Ponto")),
-                    description=f"Data: {row.get('Data', '')}\nMunicípio: {row.get('Município', '')}\nPonto: {row.get('Pontos', '')}\nMCA: {row.get('MCA', '')}\nObservação: {row.get('Observacao', '')}",
+                    description=(
+                        f"Data: {row.get('Data', '')}\n"
+                        f"Município: {row.get('Município', '')}\n"
+                        f"Ponto: {row.get('Pontos', '')}\n"
+                        f"MCA: {row.get('MCA', '')}\n"
+                        f"Observação: {row.get('Observacao', '')}"
+                    ),
                     coords=[(float(lon), float(lat))]
                 )
+
             except (ValueError, TypeError):
                 continue
+
     return kml.kml()
+
 
 # ============================================================
 # SESSION STATE
@@ -288,145 +503,333 @@ hoje = date.today()
 
 if "data_inicial_selecionada" not in st.session_state:
     st.session_state.data_inicial_selecionada = hoje
+
 if "data_final_selecionada" not in st.session_state:
     st.session_state.data_final_selecionada = hoje
+
 if "clicked_lat" not in st.session_state:
     st.session_state.clicked_lat = None
+
 if "clicked_lon" not in st.session_state:
     st.session_state.clicked_lon = None
+
 if "modo_adicionar_mapa" not in st.session_state:
     st.session_state.modo_adicionar_mapa = False
+
 if "dados_upload_pendentes" not in st.session_state:
     st.session_state.dados_upload_pendentes = None
+
 if "nome_arquivo_pendente" not in st.session_state:
     st.session_state.nome_arquivo_pendente = None
+
 if "file_uploader_key" not in st.session_state:
     st.session_state.file_uploader_key = 0
+
 
 # ============================================================
 # DIALOGS (POP-UPS DE CADASTRO, EDIÇÃO E PRÉ-VISUALIZAÇÃO DE UPLOAD)
 # ============================================================
 @st.dialog("➕ Cadastrar Ponto de Pressão")
 def modal_novo_ponto():
-    lat_default = st.session_state.clicked_lat if st.session_state.clicked_lat is not None else 0.0
-    lon_default = st.session_state.clicked_lon if st.session_state.clicked_lon is not None else 0.0
+
+    lat_default = (
+        st.session_state.clicked_lat
+        if st.session_state.clicked_lat is not None
+        else 0.0
+    )
+
+    lon_default = (
+        st.session_state.clicked_lon
+        if st.session_state.clicked_lon is not None
+        else 0.0
+    )
 
     with st.form("form_novo_ponto_modal", clear_on_submit=True):
-        data_cadastro = st.date_input("Data do Registro", value=st.session_state.data_final_selecionada, format="DD/MM/YYYY")
-        municipio = st.text_input("Município *", placeholder="Ex: Teresina")
-        pontos = st.text_input("Pontos / Local *", placeholder="Ex: Ponto A-01")
+
+        data_cadastro = st.date_input(
+            "Data do Registro",
+            value=st.session_state.data_final_selecionada,
+            format="DD/MM/YYYY"
+        )
+
+        municipio = st.text_input(
+            "Município *",
+            placeholder="Ex: Teresina"
+        )
+
+        pontos = st.text_input(
+            "Pontos / Local *",
+            placeholder="Ex: Ponto A-01"
+        )
 
         c1, c2 = st.columns(2)
-        with c1:
-            lat = st.text_input("Latitude * (aceita vírgula ou ponto)", value=str(lat_default))
-        with c2:
-            lon = st.text_input("Longitude * (aceita vírgula ou ponto)", value=str(lon_default))
 
-        mca = st.number_input("MCA *", format="%.2f", value=0.00, min_value=0.0, step=0.1)
-        obs = st.text_input("Observação", placeholder="Ex: Válvula regulada")
-        enviado = st.form_submit_button("Cadastrar Ponto", type="primary", use_container_width=True)
+        with c1:
+            lat = st.text_input(
+                "Latitude * (aceita vírgula ou ponto)",
+                value=str(lat_default)
+            )
+
+        with c2:
+            lon = st.text_input(
+                "Longitude * (aceita vírgula ou ponto)",
+                value=str(lon_default)
+            )
+
+        mca = st.number_input(
+            "MCA *",
+            format="%.2f",
+            value=0.00,
+            min_value=0.0,
+            step=0.1
+        )
+
+        obs = st.text_input(
+            "Observação",
+            placeholder="Ex: Válvula regulada"
+        )
+
+        enviado = st.form_submit_button(
+            "Cadastrar Ponto",
+            type="primary",
+            use_container_width=True
+        )
 
         if enviado:
+
             lat_n = normalizar_coordenada(lat, "lat")
             lon_n = normalizar_coordenada(lon, "lon")
+
             if not municipio.strip():
                 st.error("O campo 'Município' é obrigatório.")
+
             elif not pontos.strip():
                 st.error("O campo 'Pontos' é obrigatório.")
+
             elif lat_n is None or lon_n is None:
-                st.error("Coordenadas inválidas. Verifique os valores de Latitude e Longitude.")
+                st.error(
+                    "Coordenadas inválidas. Verifique os valores de Latitude e Longitude."
+                )
+
             else:
-                adicionar_ponto(data_para_str(data_cadastro), municipio.strip(), pontos.strip(), lat_n, lon_n, mca, obs.strip())
+                adicionar_ponto(
+                    data_para_str(data_cadastro),
+                    municipio.strip(),
+                    pontos.strip(),
+                    lat_n,
+                    lon_n,
+                    mca,
+                    obs.strip()
+                )
+
                 st.success("Ponto cadastrado com sucesso!")
+
                 st.session_state.clicked_lat = None
                 st.session_state.clicked_lon = None
+
                 st.rerun()
+
 
 @st.dialog("✏️ Editar Ponto de Pressão")
 def modal_editar_ponto(linha_real: int):
+
     df_all = carregar_dados()
+
     reg_edit = df_all[df_all["_linha_real"] == linha_real]
+
     if not reg_edit.empty:
+
         reg_edit = reg_edit.iloc[0]
+
         try:
-            data_parsed = datetime.strptime(str(reg_edit["Data"]), "%d/%m/%Y").date()
+            data_parsed = datetime.strptime(
+                str(reg_edit["Data"]),
+                "%d/%m/%Y"
+            ).date()
+
         except ValueError:
             data_parsed = hoje
 
         with st.form("form_edicao_modal"):
-            data_e = st.date_input("Data do Registro", value=data_parsed, format="DD/MM/YYYY")
-            municipio_e = st.text_input("Município *", value=str(reg_edit["Município"]))
-            pontos_e = st.text_input("Pontos *", value=str(reg_edit["Pontos"]))
+
+            data_e = st.date_input(
+                "Data do Registro",
+                value=data_parsed,
+                format="DD/MM/YYYY"
+            )
+
+            municipio_e = st.text_input(
+                "Município *",
+                value=str(reg_edit["Município"])
+            )
+
+            pontos_e = st.text_input(
+                "Pontos *",
+                value=str(reg_edit["Pontos"])
+            )
+
             c1, c2 = st.columns(2)
+
             with c1:
-                lat_e = st.text_input("Latitude *", value=str(reg_edit["Latitude"] or LAT_BASE))
+                lat_e = st.text_input(
+                    "Latitude *",
+                    value=str(reg_edit["Latitude"] or LAT_BASE)
+                )
+
             with c2:
-                lon_e = st.text_input("Longitude *", value=str(reg_edit["Longitude"] or LON_BASE))
-            mca_e = st.number_input("MCA *", format="%.2f", value=float(reg_edit["MCA"] or 0.0), min_value=0.0, step=0.1)
-            obs_e = st.text_input("Observação", value=str(reg_edit["Observacao"]))
+                lon_e = st.text_input(
+                    "Longitude *",
+                    value=str(reg_edit["Longitude"] or LON_BASE)
+                )
+
+            mca_e = st.number_input(
+                "MCA *",
+                format="%.2f",
+                value=float(reg_edit["MCA"] or 0.0),
+                min_value=0.0,
+                step=0.1
+            )
+
+            obs_e = st.text_input(
+                "Observação",
+                value=str(reg_edit["Observacao"])
+            )
 
             col_salvar, col_canc = st.columns(2)
+
             with col_salvar:
-                salvar_edicao = st.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
+                salvar_edicao = st.form_submit_button(
+                    "💾 Salvar",
+                    type="primary",
+                    use_container_width=True
+                )
+
             with col_canc:
-                cancelar_edicao = st.form_submit_button("❌ Cancelar", use_container_width=True)
+                cancelar_edicao = st.form_submit_button(
+                    "❌ Cancelar",
+                    use_container_width=True
+                )
 
             if salvar_edicao:
+
                 lat_n = normalizar_coordenada(lat_e, "lat")
                 lon_n = normalizar_coordenada(lon_e, "lon")
+
                 if not municipio_e.strip():
                     st.error("O campo 'Município' é obrigatório.")
+
                 elif lat_n is None or lon_n is None:
                     st.error("Coordenadas inválidas.")
+
                 else:
-                    if atualizar_ponto(linha_real, data_para_str(data_e), municipio_e.strip(), pontos_e, lat_n, lon_n, mca_e, obs_e):
+
+                    if atualizar_ponto(
+                        linha_real,
+                        data_para_str(data_e),
+                        municipio_e.strip(),
+                        pontos_e,
+                        lat_n,
+                        lon_n,
+                        mca_e,
+                        obs_e
+                    ):
                         st.success("Atualizado com sucesso!")
                         st.rerun()
+
             if cancelar_edicao:
                 st.rerun()
+
     else:
         st.warning("Registro não encontrado.")
 
+
 @st.dialog("📋 Pré-visualização da Planilha")
 def modal_previa_upload():
-    st.write(f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente}**")
-    df_preview = pd.DataFrame(st.session_state.dados_upload_pendentes, columns=["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"])
-    st.dataframe(df_preview, use_container_width=True)
-    st.info(f"Total de registros válidos prontos para envio: **{len(df_preview)}**")
+
+    st.write(
+        f"Arquivo carregado: **{st.session_state.nome_arquivo_pendente}**"
+    )
+
+    df_preview = pd.DataFrame(
+        st.session_state.dados_upload_pendentes,
+        columns=[
+            "Data",
+            "Município",
+            "Pontos",
+            "Latitude",
+            "Longitude",
+            "MCA",
+            "Observacao"
+        ]
+    )
+
+    st.dataframe(
+        df_preview,
+        use_container_width=True
+    )
+
+    st.info(
+        f"Total de registros válidos prontos para envio: **{len(df_preview)}**"
+    )
 
     col_btn1, col_btn2 = st.columns(2)
+
     with col_btn1:
-        if st.button("Confirmar e Enviar", type="primary", use_container_width=True):
-            with st.spinner("Enviando registros com segurança para o Google Sheets..."):
-                qtd_inserida = adicionar_lote_seguro(st.session_state.dados_upload_pendentes)
-            
+
+        if st.button(
+            "Confirmar e Enviar",
+            type="primary",
+            use_container_width=True
+        ):
+
+            with st.spinner(
+                "Enviando registros com segurança para o Google Sheets..."
+            ):
+                qtd_inserida = adicionar_lote_seguro(
+                    st.session_state.dados_upload_pendentes
+                )
+
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
             st.session_state.file_uploader_key += 1
 
             if qtd_inserida > 0:
-                st.success(f"✅ {qtd_inserida} novos registros importados com sucesso!")
+                st.success(
+                    f"✅ {qtd_inserida} novos registros importados com sucesso!"
+                )
             else:
-                st.info("ℹ️ Todos os registros da planilha já existiam no sistema. Nenhuma duplicação foi feita.")
+                st.info(
+                    "ℹ️ Todos os registros da planilha já existiam no sistema. "
+                    "Nenhuma duplicação foi feita."
+                )
+
             time.sleep(1)
             st.rerun()
 
     with col_btn2:
-        if st.button("Cancelar", use_container_width=True):
+
+        if st.button(
+            "Cancelar",
+            use_container_width=True
+        ):
             st.session_state.dados_upload_pendentes = None
             st.session_state.nome_arquivo_pendente = None
             st.session_state.file_uploader_key += 1
             st.rerun()
 
+
 # ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
+
     st.markdown("### 🗺️ COI - Mapeamento")
     st.caption("⚙️ Painel Operacional")
 
     st.markdown("#### 📅 Selecionar Período")
+
     c_data_ini, c_data_fim = st.columns(2)
+
     with c_data_ini:
         data_inicial = st.date_input(
             "Data inicial",
@@ -434,6 +837,7 @@ with st.sidebar:
             format="DD/MM/YYYY",
             key="calendario_data_inicial"
         )
+
     with c_data_fim:
         data_final = st.date_input(
             "Data final",
@@ -446,74 +850,147 @@ with st.sidebar:
     st.session_state.data_final_selecionada = data_final
 
     periodo_valido = data_inicial <= data_final
+
     if not periodo_valido:
-        st.error("A data inicial não pode ser maior que a data final.")
+
+        st.error(
+            "A data inicial não pode ser maior que a data final."
+        )
+
     elif data_inicial == data_final:
-        st.info(f"Exibindo dados de **{data_para_str(data_inicial)}**")
-    else:
+
         st.info(
-            f"Exibindo dados de **{data_para_str(data_inicial)}** a **{data_para_str(data_final)}**"
+            f"Exibindo dados de **{data_para_str(data_inicial)}**"
+        )
+
+    else:
+
+        st.info(
+            f"Exibindo dados de **{data_para_str(data_inicial)}** "
+            f"a **{data_para_str(data_final)}**"
         )
 
     st.divider()
 
     st.markdown("#### 🔍 Filtros")
+
     df_all = carregar_dados()
+
     if not df_all.empty and periodo_valido:
+
         df_all["DataObjFiltro"] = pd.to_datetime(
-    df_all["Data"], format="%d/%m/%Y", errors="coerce"
-)
+            df_all["Data"],
+            format="%d/%m/%Y",
+            errors="coerce"
+        )
 
-data_inicial_dt = pd.Timestamp(data_inicial)
-data_final_dt = pd.Timestamp(data_final)
+        # Correção: comparação entre Timestamp e Timestamp
+        data_inicial_dt = pd.Timestamp(data_inicial)
+        data_final_dt = pd.Timestamp(data_final)
 
-df_data = df_all[
-    (df_all["DataObjFiltro"] >= data_inicial_dt)
-    & (df_all["DataObjFiltro"] <= data_final_dt)
-].copy()
+        df_data = df_all[
+            (df_all["DataObjFiltro"] >= data_inicial_dt)
+            & (df_all["DataObjFiltro"] <= data_final_dt)
+        ].copy()
+
     else:
-        df_data = df_all.iloc[0:0].copy() if not df_all.empty else df_all
 
-    municipios_opts = ["Todos"] + sorted(df_data["Município"].dropna().unique().tolist()) if not df_data.empty else ["Todos"]
-    municipio_sel = st.selectbox("Município", municipios_opts, key="filtro_municipio")
+        df_data = (
+            df_all.iloc[0:0].copy()
+            if not df_all.empty
+            else df_all
+        )
 
-    df_data_mun = df_data[df_data["Município"] == municipio_sel] if municipio_sel != "Todos" else df_data
+    municipios_opts = (
+        ["Todos"]
+        + sorted(
+            df_data["Município"].dropna().unique().tolist()
+        )
+        if not df_data.empty
+        else ["Todos"]
+    )
 
-    pontos_opts = ["Todos"] + sorted(df_data_mun["Pontos"].dropna().unique().tolist()) if not df_data_mun.empty else ["Todos"]
-    ponto_sel = st.selectbox("Ponto", pontos_opts, key="filtro_ponto")
+    municipio_sel = st.selectbox(
+        "Município",
+        municipios_opts,
+        key="filtro_municipio"
+    )
+
+    df_data_mun = (
+        df_data[df_data["Município"] == municipio_sel]
+        if municipio_sel != "Todos"
+        else df_data
+    )
+
+    pontos_opts = (
+        ["Todos"]
+        + sorted(
+            df_data_mun["Pontos"].dropna().unique().tolist()
+        )
+        if not df_data_mun.empty
+        else ["Todos"]
+    )
+
+    ponto_sel = st.selectbox(
+        "Ponto",
+        pontos_opts,
+        key="filtro_ponto"
+    )
 
     faixa_sel = st.selectbox(
         "Faixa de MCA",
-        ["Todas", "Críticos (0 MCA)", "Atenção (≤ 5 MCA)", "Normais (> 5 MCA)"],
+        [
+            "Todas",
+            "Críticos (0 MCA)",
+            "Atenção (≤ 5 MCA)",
+            "Normais (> 5 MCA)"
+        ],
         key="filtro_mca"
     )
 
     st.divider()
 
     st.markdown("#### ➕ Ações e Dados")
-    if st.button("Adicionar Novo Ponto", type="primary", use_container_width=True):
+
+    if st.button(
+        "Adicionar Novo Ponto",
+        type="primary",
+        use_container_width=True
+    ):
         modal_novo_ponto()
 
     arquivo_upload = st.file_uploader(
-        "📂 Enviar Planilha (XLSX/CSV)", 
-        type=["xlsx", "csv"], 
+        "📂 Enviar Planilha (XLSX/CSV)",
+        type=["xlsx", "csv"],
         key=f"upload_mapeamento_{st.session_state.file_uploader_key}"
     )
-    
-    df_modelo = pd.DataFrame([{
-        "Data": datetime.now().strftime("%d/%m/%Y"),
-        "Município": "Teresina",
-        "Pontos": "Ponto Exemplo 01",
-        "Latitude": -5.0892,
-        "Longitude": -42.8019,
-        "MCA": 12.5,
-        "Observacao": "Exemplo de preenchimento"
-    }], columns=COLUNAS_PADRAO)
-    
+
+    df_modelo = pd.DataFrame(
+        [{
+            "Data": datetime.now().strftime("%d/%m/%Y"),
+            "Município": "Teresina",
+            "Pontos": "Ponto Exemplo 01",
+            "Latitude": -5.0892,
+            "Longitude": -42.8019,
+            "MCA": 12.5,
+            "Observacao": "Exemplo de preenchimento"
+        }],
+        columns=COLUNAS_PADRAO
+    )
+
     output_modelo = io.BytesIO()
-    with pd.ExcelWriter(output_modelo, engine='openpyxl') as writer:
-        df_modelo.to_excel(writer, index=False, sheet_name='Modelo')
-    
+
+    with pd.ExcelWriter(
+        output_modelo,
+        engine="openpyxl"
+    ) as writer:
+
+        df_modelo.to_excel(
+            writer,
+            index=False,
+            sheet_name="Modelo"
+        )
+
     st.download_button(
         label="📥 Baixar Planilha Modelo",
         data=output_modelo.getvalue(),
@@ -521,39 +998,130 @@ df_data = df_all[
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-    
+
     if arquivo_upload is not None:
-        if st.session_state.nome_arquivo_pendente != arquivo_upload.name:
+
+        if (
+            st.session_state.nome_arquivo_pendente
+            != arquivo_upload.name
+        ):
+
             try:
-                if arquivo_upload.name.endswith('.csv'):
+
+                if arquivo_upload.name.endswith(".csv"):
+
                     df_up = pd.read_csv(arquivo_upload)
+
                 else:
-                    df_up = pd.read_excel(arquivo_upload, engine='openpyxl')
-                
+
+                    df_up = pd.read_excel(
+                        arquivo_upload,
+                        engine="openpyxl"
+                    )
+
                 lote_para_enviar = []
+
                 for _, row in df_up.iterrows():
-                    raw_data = row.get("Data", row.get("date", ""))
+
+                    raw_data = row.get(
+                        "Data",
+                        row.get("date", "")
+                    )
+
                     data_val = normalizar_data(raw_data)
+
                     if not data_val:
                         data_val = data_para_str(data_final)
 
-                    municipio_val = str(row.get("Município", row.get("Municipio", row.get("cidade", ""))))
-                    ponto_val = str(row.get("Pontos", row.get("Ponto", "")))
-                    lat_val = normalizar_coordenada(row.get("Latitude", row.get("Lat")), "lat")
-                    lon_val = normalizar_coordenada(row.get("Longitude", row.get("Lon")), "lon")
-                    mca_val = parse_float(row.get("MCA", row.get("Pressao", 0.0)), 0.0)
-                    obs_val = str(row.get("Observação", row.get("Observacao", "")))
-                    
-                    if municipio_val.strip() and ponto_val.strip() and lat_val is not None and lon_val is not None:
-                        lote_para_enviar.append([data_val, municipio_val.strip(), ponto_val.strip(), float(lat_val), float(lon_val), float(mca_val), obs_val])
+                    municipio_val = str(
+                        row.get(
+                            "Município",
+                            row.get(
+                                "Municipio",
+                                row.get("cidade", "")
+                            )
+                        )
+                    )
+
+                    ponto_val = str(
+                        row.get(
+                            "Pontos",
+                            row.get("Ponto", "")
+                        )
+                    )
+
+                    lat_val = normalizar_coordenada(
+                        row.get(
+                            "Latitude",
+                            row.get("Lat")
+                        ),
+                        "lat"
+                    )
+
+                    lon_val = normalizar_coordenada(
+                        row.get(
+                            "Longitude",
+                            row.get("Lon")
+                        ),
+                        "lon"
+                    )
+
+                    mca_val = parse_float(
+                        row.get(
+                            "MCA",
+                            row.get("Pressao", 0.0)
+                        ),
+                        0.0
+                    )
+
+                    obs_val = str(
+                        row.get(
+                            "Observação",
+                            row.get("Observacao", "")
+                        )
+                    )
+
+                    if (
+                        municipio_val.strip()
+                        and ponto_val.strip()
+                        and lat_val is not None
+                        and lon_val is not None
+                    ):
+
+                        lote_para_enviar.append([
+                            data_val,
+                            municipio_val.strip(),
+                            ponto_val.strip(),
+                            float(lat_val),
+                            float(lon_val),
+                            float(mca_val),
+                            obs_val
+                        ])
 
                 if lote_para_enviar:
-                    st.session_state.dados_upload_pendentes = lote_para_enviar
-                    st.session_state.nome_arquivo_pendente = arquivo_upload.name
+
+                    st.session_state.dados_upload_pendentes = (
+                        lote_para_enviar
+                    )
+
+                    st.session_state.nome_arquivo_pendente = (
+                        arquivo_upload.name
+                    )
+
                 else:
-                    st.warning("⚠️ Nenhum registro válido encontrado. Verifique se os nomes das colunas são: Data, Município, Pontos, Latitude, Longitude, MCA, Observação.")
+
+                    st.warning(
+                        "⚠️ Nenhum registro válido encontrado. "
+                        "Verifique se os nomes das colunas são: "
+                        "Data, Município, Pontos, Latitude, Longitude, "
+                        "MCA, Observação."
+                    )
+
             except Exception as e:
-                st.error(f"❌ Erro ao processar arquivo: {e}")
+
+                st.error(
+                    f"❌ Erro ao processar arquivo: {e}"
+                )
 
     if st.session_state.dados_upload_pendentes is not None:
         modal_previa_upload()
@@ -561,41 +1129,91 @@ df_data = df_all[
     st.divider()
 
     st.markdown("#### 📥 Exportar Dados")
+
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+
+    with pd.ExcelWriter(
+        output,
+        engine="openpyxl"
+    ) as writer:
+
         if not df_all.empty:
-            df_all[COLUNAS_PADRAO].to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
+
+            df_all[
+                COLUNAS_PADRAO
+            ].to_excel(
+                writer,
+                index=False,
+                sheet_name="Mapeamento_Pressao"
+            )
+
         else:
-            pd.DataFrame(columns=COLUNAS_PADRAO).to_excel(writer, index=False, sheet_name='Mapeamento_Pressao')
+
+            pd.DataFrame(
+                columns=COLUNAS_PADRAO
+            ).to_excel(
+                writer,
+                index=False,
+                sheet_name="Mapeamento_Pressao"
+            )
+
     excel_data = output.getvalue()
-    
+
     st.download_button(
         label="📊 Baixar em Excel (XLSX)",
         data=excel_data,
-        file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        file_name=(
+            f"mapeamento_pressao_"
+            f"{datetime.now().strftime('%Y%m%d')}.xlsx"
+        ),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
 
-    kml_string = gerar_kml(df_all) if not df_all.empty else simplekml.Kml().kml()
+    kml_string = (
+        gerar_kml(df_all)
+        if not df_all.empty
+        else simplekml.Kml().kml()
+    )
+
     st.download_button(
         label="🗺️ Baixar Mapa (KML/KMZ)",
         data=kml_string,
-        file_name=f"mapeamento_pressao_{datetime.now().strftime('%Y%m%d')}.kml",
+        file_name=(
+            f"mapeamento_pressao_"
+            f"{datetime.now().strftime('%Y%m%d')}.kml"
+        ),
         mime="application/vnd.google-earth.kml+xml",
         use_container_width=True
     )
 
     st.divider()
-    st.markdown("#### ⏱️ Atualização")
-    intervalo = st.select_slider("Intervalo (segundos)", options=[0, 15, 30, 60, 120], value=60)
-    if intervalo > 0:
-        st_autorefresh(interval=intervalo * 1000, key="autorefresh")
 
-    st.markdown("<br>" * 2, unsafe_allow_html=True)
+    st.markdown("#### ⏱️ Atualização")
+
+    intervalo = st.select_slider(
+        "Intervalo (segundos)",
+        options=[0, 15, 30, 60, 120],
+        value=60
+    )
+
+    if intervalo > 0:
+        st_autorefresh(
+            interval=intervalo * 1000,
+            key="autorefresh"
+        )
+
+    st.markdown(
+        "<br>" * 2,
+        unsafe_allow_html=True
+    )
+
     st.divider()
 
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+    if st.button(
+        "🏠 Voltar ao Menu Principal",
+        use_container_width=True
+    ):
         st.switch_page("app.py")
 
     st.divider()
@@ -612,6 +1230,7 @@ df_data = df_all[
     st.session_state.modo_escuro_mp = modo_escuro_mp
 
     if modo_escuro_mp:
+
         st.markdown(
             """
             <style>
@@ -652,33 +1271,33 @@ df_data = df_all[
                     color: #f0f0f0 !important;
                 }
 
-/* Botões normais e botões de download */
-.stButton > button,
-.stDownloadButton > button {
-    background-color: #000000 !important;
-    color: #ffffff !important;
-    border: 1px solid #444c56 !important;
-}
+                /* Botões normais e botões de download */
+                .stButton > button,
+                .stDownloadButton > button {
+                    background-color: #000000 !important;
+                    color: #ffffff !important;
+                    border: 1px solid #444c56 !important;
+                }
 
-/* Texto interno dos botões */
-.stButton > button *,
-.stDownloadButton > button * {
-    color: #ffffff !important;
-}
+                /* Texto interno dos botões */
+                .stButton > button *,
+                .stDownloadButton > button * {
+                    color: #ffffff !important;
+                }
 
-/* Efeito ao passar o mouse */
-.stButton > button:hover,
-.stDownloadButton > button:hover {
-    background-color: #000000 !important;
-    color: #ff0000 !important;
-    border-color: #ff0000 !important;
-}
+                /* Efeito ao passar o mouse */
+                .stButton > button:hover,
+                .stDownloadButton > button:hover {
+                    background-color: #000000 !important;
+                    color: #ff0000 !important;
+                    border-color: #ff0000 !important;
+                }
 
-/* Texto interno no hover */
-.stButton > button:hover *,
-.stDownloadButton > button:hover * {
-    color: #ff0000 !important;
-}
+                /* Texto interno no hover */
+                .stButton > button:hover *,
+                .stDownloadButton > button:hover * {
+                    color: #ff0000 !important;
+                }
 
                 [data-testid="stDataFrame"] {
                     color: #f0f0f0;
@@ -688,69 +1307,171 @@ df_data = df_all[
             unsafe_allow_html=True,
         )
 
+
 # ============================================================
 # ÁREA PRINCIPAL
 # ============================================================
 st.title("🗺️ Painel de Mapeamento de Pressão - COI")
+
 if periodo_valido:
+
     if data_inicial == data_final:
-        st.caption(f"Visualizando dados da data: **{data_para_str(data_inicial)}**")
-    else:
+
         st.caption(
-            f"Visualizando dados do período: **{data_para_str(data_inicial)} a {data_para_str(data_final)}**"
+            f"Visualizando dados da data: "
+            f"**{data_para_str(data_inicial)}**"
         )
+
+    else:
+
+        st.caption(
+            f"Visualizando dados do período: "
+            f"**{data_para_str(data_inicial)} "
+            f"a {data_para_str(data_final)}**"
+        )
+
 else:
-    st.caption("Período inválido. Ajuste as datas para visualizar os dados.")
+
+    st.caption(
+        "Período inválido. Ajuste as datas para visualizar os dados."
+    )
+
 
 df = carregar_dados()
+
 if not df.empty and periodo_valido:
+
     df["DataObjFiltro"] = pd.to_datetime(
-        df["Data"], format="%d/%m/%Y", errors="coerce"
+        df["Data"],
+        format="%d/%m/%Y",
+        errors="coerce"
     )
+
+    # Correção: comparação entre Timestamp e Timestamp
+    data_inicial_dt = pd.Timestamp(data_inicial)
+    data_final_dt = pd.Timestamp(data_final)
+
     df_filtrado = df[
-        (df["DataObjFiltro"].dt.date >= data_inicial)
-        & (df["DataObjFiltro"].dt.date <= data_final)
+        (df["DataObjFiltro"] >= data_inicial_dt)
+        & (df["DataObjFiltro"] <= data_final_dt)
     ].copy()
+
 else:
-    df_filtrado = df.iloc[0:0].copy() if not df.empty else df.copy()
+
+    df_filtrado = (
+        df.iloc[0:0].copy()
+        if not df.empty
+        else df.copy()
+    )
+
 
 if municipio_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Município"] == municipio_sel]
+    df_filtrado = df_filtrado[
+        df_filtrado["Município"] == municipio_sel
+    ]
+
 
 if ponto_sel != "Todos":
-    df_filtrado = df_filtrado[df_filtrado["Pontos"] == ponto_sel]
+    df_filtrado = df_filtrado[
+        df_filtrado["Pontos"] == ponto_sel
+    ]
+
 
 if faixa_sel == "Críticos (0 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["MCA"] == 0]
+
+    df_filtrado = df_filtrado[
+        df_filtrado["MCA"] == 0
+    ]
+
 elif faixa_sel == "Atenção (≤ 5 MCA)":
-    df_filtrado = df_filtrado[(df_filtrado["MCA"] > 0) & (df_filtrado["MCA"] <= 5)]
+
+    df_filtrado = df_filtrado[
+        (df_filtrado["MCA"] > 0)
+        & (df_filtrado["MCA"] <= 5)
+    ]
+
 elif faixa_sel == "Normais (> 5 MCA)":
-    df_filtrado = df_filtrado[df_filtrado["MCA"] > 5]
+
+    df_filtrado = df_filtrado[
+        df_filtrado["MCA"] > 5
+    ]
+
 
 if not df_filtrado.empty:
+
     total = len(df_filtrado)
-    criticos = len(df_filtrado[df_filtrado["MCA"] == 0])
-    atencao = len(df_filtrado[(df_filtrado["MCA"] > 0) & (df_filtrado["MCA"] <= 5)])
-    normais = len(df_filtrado[df_filtrado["MCA"] > 5])
+
+    criticos = len(
+        df_filtrado[
+            df_filtrado["MCA"] == 0
+        ]
+    )
+
+    atencao = len(
+        df_filtrado[
+            (df_filtrado["MCA"] > 0)
+            & (df_filtrado["MCA"] <= 5)
+        ]
+    )
+
+    normais = len(
+        df_filtrado[
+            df_filtrado["MCA"] > 5
+        ]
+    )
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Total de Ocorrências", total)
-    k2.metric("Críticos (0 MCA)", criticos)
-    k3.metric("Em Atenção (≤ 5 MCA)", atencao)
-    k4.metric("Normais (> 5 MCA)", normais)
+
+    k1.metric(
+        "Total de Ocorrências",
+        total
+    )
+
+    k2.metric(
+        "Críticos (0 MCA)",
+        criticos
+    )
+
+    k3.metric(
+        "Em Atenção (≤ 5 MCA)",
+        atencao
+    )
+
+    k4.metric(
+        "Normais (> 5 MCA)",
+        normais
+    )
+
 else:
+
     if periodo_valido:
+
         if data_inicial == data_final:
-            st.info(f"Nenhum ponto registrado para a data {data_para_str(data_inicial)} com os filtros selecionados.")
-        else:
+
             st.info(
-                f"Nenhum ponto registrado no período de {data_para_str(data_inicial)} "
-                f"a {data_para_str(data_final)} com os filtros selecionados."
+                f"Nenhum ponto registrado para a data "
+                f"{data_para_str(data_inicial)} "
+                f"com os filtros selecionados."
             )
+
+        else:
+
+            st.info(
+                f"Nenhum ponto registrado no período de "
+                f"{data_para_str(data_inicial)} "
+                f"a {data_para_str(data_final)} "
+                f"com os filtros selecionados."
+            )
+
     else:
-        st.info("Ajuste o período selecionado para visualizar os dados.")
+
+        st.info(
+            "Ajuste o período selecionado para visualizar os dados."
+        )
+
 
 st.divider()
+
 
 # ============================================================
 # MAPA COM SELETOR DE TIPO DE MAPA
@@ -758,7 +1479,9 @@ st.divider()
 st.subheader("🗺️ Mapa de Mapeamento de Pressão")
 
 c_map1, c_map2, c_map3 = st.columns([2, 2, 2])
+
 with c_map1:
+
     tipo_mapa = st.selectbox(
         "🗺️ Tipo de Mapa",
         options=[
@@ -768,54 +1491,144 @@ with c_map1:
         ],
         key="seletor_tipo_mapa"
     )
+
+
 with c_map2:
-    mostrar_rotulos = st.checkbox("Exibir rótulos", value=False)
+
+    mostrar_rotulos = st.checkbox(
+        "Exibir rótulos",
+        value=False
+    )
+
+
 with c_map3:
+
     st.session_state.modo_adicionar_mapa = st.checkbox(
         "📍 Modo adicionar ponto",
         value=st.session_state.modo_adicionar_mapa
     )
 
-if not df_filtrado.empty and df_filtrado["Latitude"].notna().any():
-    centro_lat = float(df_filtrado["Latitude"].mean())
-    centro_lon = float(df_filtrado["Longitude"].mean())
+
+if (
+    not df_filtrado.empty
+    and df_filtrado["Latitude"].notna().any()
+):
+
+    centro_lat = float(
+        df_filtrado["Latitude"].mean()
+    )
+
+    centro_lon = float(
+        df_filtrado["Longitude"].mean()
+    )
+
     zoom = 13
+
 else:
-    centro_lat, centro_lon = LAT_BASE, LON_BASE
+
+    centro_lat = LAT_BASE
+    centro_lon = LON_BASE
     zoom = 12
 
-m = folium.Map(location=[centro_lat, centro_lon], zoom_start=zoom, tiles=None)
+
+m = folium.Map(
+    location=[centro_lat, centro_lon],
+    zoom_start=zoom,
+    tiles=None
+)
+
 
 if "Satélite" in tipo_mapa:
+
     folium.TileLayer(
-        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attr='Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-        name='Satélite (Esri World Imagery)'
+        tiles=(
+            "https://server.arcgisonline.com/"
+            "ArcGIS/rest/services/World_Imagery/"
+            "MapServer/tile/{z}/{y}/{x}"
+        ),
+        attr=(
+            "Esri &mdash; Source: Esri, i-cubed, USDA, "
+            "USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, "
+            "IGP, UPR-EGP, and the GIS User Community"
+        ),
+        name="Satélite (Esri World Imagery)"
     ).add_to(m)
+
+
 elif "Terreno" in tipo_mapa:
-    folium.TileLayer('OpenTopoMap', name='Terreno (OpenTopoMap)').add_to(m)
+
+    folium.TileLayer(
+        "OpenTopoMap",
+        name="Terreno (OpenTopoMap)"
+    ).add_to(m)
+
+
 else:
-    folium.TileLayer('OpenStreetMap', name='Mapa Padrão (OpenStreetMap)').add_to(m)
+
+    folium.TileLayer(
+        "OpenStreetMap",
+        name="Mapa Padrão (OpenStreetMap)"
+    ).add_to(m)
+
 
 if not df_filtrado.empty:
-    validos = df_filtrado.dropna(subset=["Latitude", "Longitude"])
+
+    validos = df_filtrado.dropna(
+        subset=["Latitude", "Longitude"]
+    )
+
     for _, row in validos.iterrows():
+
         mca = row["MCA"]
-        cor = "red" if mca == 0 else ("orange" if mca <= 5 else "blue")
-        popup = f"<b>Data:</b> {row['Data']}<br><b>Município:</b> {row['Município']}<br><b>Ponto:</b> {row['Pontos']}<br><b>MCA:</b> {mca}<br><b>Obs:</b> {row['Observacao']}"
-        
-        marker_icon = folium.Icon(color=cor, icon="map-pin", prefix="fa")
+
+        cor = (
+            "red"
+            if mca == 0
+            else (
+                "orange"
+                if mca <= 5
+                else "blue"
+            )
+        )
+
+        popup = (
+            f"<b>Data:</b> {row['Data']}<br>"
+            f"<b>Município:</b> {row['Município']}<br>"
+            f"<b>Ponto:</b> {row['Pontos']}<br>"
+            f"<b>MCA:</b> {mca}<br>"
+            f"<b>Obs:</b> {row['Observacao']}"
+        )
+
+        marker_icon = folium.Icon(
+            color=cor,
+            icon="map-pin",
+            prefix="fa"
+        )
+
         folium.Marker(
-            location=[row["Latitude"], row["Longitude"]],
-            popup=folium.Popup(popup, max_width=250),
+            location=[
+                row["Latitude"],
+                row["Longitude"]
+            ],
+            popup=folium.Popup(
+                popup,
+                max_width=250
+            ),
             tooltip=f"{row['Pontos']} ({mca} MCA)",
             icon=marker_icon
         ).add_to(m)
 
         if mostrar_rotulos:
-            texto_rotulo = f"{row['Pontos']} — {mca} MCA"
+
+            texto_rotulo = (
+                f"{row['Pontos']} — {mca} MCA"
+            )
+
             folium.map.Marker(
-                [row["Latitude"], row["Longitude"]],
+                [
+                    row["Latitude"],
+                    row["Longitude"]
+                ],
                 icon=folium.DivIcon(
                     icon_size=(200, 40),
                     icon_anchor=(-12, 18),
@@ -839,92 +1652,198 @@ if not df_filtrado.empty:
                 )
             ).add_to(m)
 
-map_data = st_folium(m, width="100%", height=520, returned_objects=["last_clicked"], key="mapa_principal_map")
 
-if st.session_state.modo_adicionar_mapa and map_data and map_data.get("last_clicked"):
+map_data = st_folium(
+    m,
+    width="100%",
+    height=520,
+    returned_objects=["last_clicked"],
+    key="mapa_principal_map"
+)
+
+
+if (
+    st.session_state.modo_adicionar_mapa
+    and map_data
+    and map_data.get("last_clicked")
+):
+
     clicked = map_data["last_clicked"]
+
     if clicked:
-        st.session_state.clicked_lat = round(clicked["lat"], 6)
-        st.session_state.clicked_lon = round(clicked["lng"], 6)
+
+        st.session_state.clicked_lat = round(
+            clicked["lat"],
+            6
+        )
+
+        st.session_state.clicked_lon = round(
+            clicked["lng"],
+            6
+        )
+
         modal_novo_ponto()
+
 
 st.divider()
 
+
 # ============================================================
-# TABELA E GERENCIAMENTO (EDIÇÃO E EXCLUSÃO MÚLTIPLA COM CHAVE REAL)
+# TABELA E GERENCIAMENTO
+# (EDIÇÃO E EXCLUSÃO MÚLTIPLA COM CHAVE REAL)
 # ============================================================
 st.subheader("📋 Registro de Pontos Mapeados")
 
 if not df_filtrado.empty:
-    # Prepara o dataframe mantendo a coluna oculta _linha_real para rastreamento exato
-    df_show = df_filtrado[COLUNAS_PADRAO + ["_linha_real"]].copy()
-    df_show.insert(0, "Selecionar", False)
-    
+
+    # Prepara o dataframe mantendo a coluna oculta
+    # _linha_real para rastreamento exato
+    df_show = df_filtrado[
+        COLUNAS_PADRAO + ["_linha_real"]
+    ].copy()
+
+    df_show.insert(
+        0,
+        "Selecionar",
+        False
+    )
+
     edited_df = st.data_editor(
         df_show,
         use_container_width=True,
         height=350,
         disabled=COLUNAS_PADRAO + ["_linha_real"],
         key="editor_tabela_map_unificado",
-        hide_index=True,          # opcional, fica mais limpo
+        hide_index=True,
     )
 
-    # ===== EXCLUSÃO (corrigida) =====
-    selecionados = edited_df[edited_df["Selecionar"] == True]
-    
+    # ===== EXCLUSÃO =====
+    selecionados = edited_df[
+        edited_df["Selecionar"] == True
+    ]
+
     c_edit, c_del = st.columns([2, 2])
-    
+
     with c_edit:
+
         # ===== EDIÇÃO mais segura =====
         # Cria opções únicas e legíveis
         opcoes_map = {}
-        opcoes_lista = ["-- Selecione o Ponto --"]
-        
+        opcoes_lista = [
+            "-- Selecione o Ponto --"
+        ]
+
         for _, row in df_filtrado.iterrows():
-            label = f"{row['Pontos']}  |  {row['Município']}  |  MCA: {row['MCA']}"
+
+            label = (
+                f"{row['Pontos']}  |  "
+                f"{row['Município']}  |  "
+                f"MCA: {row['MCA']}"
+            )
+
             # garante unicidade mesmo com nomes repetidos
             while label in opcoes_map:
                 label += " "
+
             opcoes_lista.append(label)
-            opcoes_map[label] = int(row["_linha_real"])
-        
+
+            opcoes_map[label] = int(
+                row["_linha_real"]
+            )
+
         ponto_para_editar = st.selectbox(
             "Selecionar Ponto para Editar",
             options=opcoes_lista,
             key="select_edicao_ponto_preciso"
         )
-        
-        if ponto_para_editar != "-- Selecione o Ponto --":
-            if st.button("✏️ Abrir Edição do Ponto Selecionado", type="primary", use_container_width=True):
-                linha_real_alvo = opcoes_map[ponto_para_editar]
-                modal_editar_ponto(linha_real_alvo)
 
-    with c_del:
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        if not selecionados.empty:
+        if (
+            ponto_para_editar
+            != "-- Selecione o Ponto --"
+        ):
+
             if st.button(
-                f"🗑️ Excluir Selecionados ({len(selecionados)})",
+                "✏️ Abrir Edição do Ponto Selecionado",
                 type="primary",
                 use_container_width=True
             ):
-                # Agora pega diretamente a coluna _linha_real (sem iloc errado)
-                linhas_reais_para_excluir = selecionados["_linha_real"].astype(int).tolist()
-                
-                if excluir_pontos_lote(linhas_reais_para_excluir):
-                    st.success(f"🗑️ {len(linhas_reais_para_excluir)} registro(s) excluído(s) com sucesso!")
+
+                linha_real_alvo = opcoes_map[
+                    ponto_para_editar
+                ]
+
+                modal_editar_ponto(
+                    linha_real_alvo
+                )
+
+    with c_del:
+
+        st.markdown(
+            "<br>",
+            unsafe_allow_html=True
+        )
+
+        if not selecionados.empty:
+
+            if st.button(
+                f"🗑️ Excluir Selecionados "
+                f"({len(selecionados)})",
+                type="primary",
+                use_container_width=True
+            ):
+
+                # Agora pega diretamente a coluna
+                # _linha_real
+                linhas_reais_para_excluir = (
+                    selecionados["_linha_real"]
+                    .astype(int)
+                    .tolist()
+                )
+
+                if excluir_pontos_lote(
+                    linhas_reais_para_excluir
+                ):
+
+                    st.success(
+                        f"🗑️ "
+                        f"{len(linhas_reais_para_excluir)} "
+                        f"registro(s) excluído(s) "
+                        f"com sucesso!"
+                    )
+
                     st.rerun()
+
         else:
-            st.button("🗑️ Excluir Selecionados", disabled=True, use_container_width=True)
+
+            st.button(
+                "🗑️ Excluir Selecionados",
+                disabled=True,
+                use_container_width=True
+            )
 
 else:
+
     if periodo_valido:
+
         if data_inicial == data_final:
-            st.info(f"Nenhum ponto registrado para a data {data_para_str(data_inicial)} com os filtros selecionados.")
-        else:
+
             st.info(
-                f"Nenhum ponto registrado no período de {data_para_str(data_inicial)} "
-                f"a {data_para_str(data_final)} com os filtros selecionados."
+                f"Nenhum ponto registrado para a data "
+                f"{data_para_str(data_inicial)} "
+                f"com os filtros selecionados."
             )
+
+        else:
+
+            st.info(
+                f"Nenhum ponto registrado no período de "
+                f"{data_para_str(data_inicial)} "
+                f"a {data_para_str(data_final)} "
+                f"com os filtros selecionados."
+            )
+
     else:
-        st.info("Ajuste o período selecionado para visualizar os dados.")
+
+        st.info(
+            "Ajuste o período selecionado para visualizar os dados."
+        )
