@@ -461,12 +461,16 @@ with st.sidebar:
     df_all = carregar_dados()
     if not df_all.empty and periodo_valido:
         df_all["DataObjFiltro"] = pd.to_datetime(
-            df_all["Data"], format="%d/%m/%Y", errors="coerce"
-        )
-        df_data = df_all[
-            (df_all["DataObjFiltro"].dt.date >= data_inicial)
-            & (df_all["DataObjFiltro"].dt.date <= data_final)
-        ].copy()
+    df_all["Data"], format="%d/%m/%Y", errors="coerce"
+)
+
+data_inicial_dt = pd.Timestamp(data_inicial)
+data_final_dt = pd.Timestamp(data_final)
+
+df_data = df_all[
+    (df_all["DataObjFiltro"] >= data_inicial_dt)
+    & (df_all["DataObjFiltro"] <= data_final_dt)
+].copy()
     else:
         df_data = df_all.iloc[0:0].copy() if not df_all.empty else df_all
 
