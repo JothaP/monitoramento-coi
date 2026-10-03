@@ -15,7 +15,6 @@ from typing import Optional
 import time
 import plotly.express as px
 from branca.element import Element
-from folium.plugins import MarkerCluster
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -1650,7 +1649,7 @@ st.divider()
 # ============================================================
 st.subheader("🗺️ Mapa de Baixa Pressão")
 
-c_map1, c_map2, c_map3 = st.columns([2, 2, 2])
+c_map1, c_map2, c_map3, c_map4 = st.columns([2, 2.2, 2, 2])
 
 with c_map1:
 
@@ -1666,12 +1665,32 @@ with c_map1:
 
 with c_map2:
 
-    mostrar_rotulos = st.checkbox(
-        "Exibir rótulos",
-        value=False
+    modo_visualizacao = st.selectbox(
+        "📊 Visualização",
+        options=[
+            "Por bairro",
+            "Medições individuais"
+        ],
+        key="modo_visualizacao_mapa_bp",
+        help=(
+            "Por bairro mostra uma visão gerencial consolidada. "
+            "Medições individuais mostra cada ponto registrado."
+        )
     )
 
 with c_map3:
+
+    # Os rótulos são aplicados somente à visão consolidada por bairro.
+    mostrar_rotulos = st.checkbox(
+        "Exibir rótulos dos bairros",
+        value=True,
+        disabled=(modo_visualizacao != "Por bairro"),
+        help=(
+            "Mostra o bairro, a pressão média e a quantidade de medições."
+        )
+    )
+
+with c_map4:
 
     st.session_state.modo_adicionar_mapa = st.checkbox(
         "📍 Modo adicionar ponto",
@@ -1707,7 +1726,8 @@ m = folium.Map(
         centro_lon
     ],
     zoom_start=zoom,
-    tiles=None
+    tiles=None,
+    control_scale=True
 )
 
 
@@ -1743,281 +1763,507 @@ else:
 
 
 # ============================================================
-# MARCADORES DO PERÍODO SELECIONADO
+# VISUALIZAÇÃO DOS MARCADORES
 # ============================================================
 #
-# O agrupamento usa SOMENTE a posição geográfica dos pontos.
-# Cada marcador que entra no cluster carrega a pressão como uma
-# opção JavaScript nativa (pressureValue). Assim, o cálculo do
-# cluster não depende de propriedades Python adicionadas depois
-# da criação do marcador.
+# O usuário pode alternar entre duas leituras do mapa:
 #
-cluster_icon_function = """
-function(cluster) {
-
-    var markers = cluster.getAllChildMarkers();
-
-    var soma = 0;
-    var quantidade = 0;
-
-    markers.forEach(function(marker) {
-
-        var pressao = Number(
-            marker.options.pressureValue
-        );
-
-        if (Number.isFinite(pressao)) {
-            soma += pressao;
-            quantidade += 1;
-        }
-    });
-
-    var media = 0;
-
-    if (quantidade > 0) {
-        media = soma / quantidade;
-    }
-
-    var cor;
-
-    if (media === 0) {
-        cor = "#FF5C60";
-    } else if (media <= 5) {
-        cor = "#F8DC00";
-    } else if (media <= 15) {
-        cor = "#FF8FE1";
-    } else {
-        cor = "#A11FFF";
-    }
-
-    var mediaFormatada = media.toFixed(2);
-
-    var textoQuantidade = (
-        quantidade === 1
-            ? "1 medição"
-            : quantidade + " medições"
-    );
-
-    return L.divIcon({
-
-        html:
-            '<div style="' +
-                'width:78px;' +
-                'height:58px;' +
-                'border-radius:12px;' +
-                'background:' + cor + ';' +
-                'border:3px solid #ffffff;' +
-                'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
-                'display:flex;' +
-                'flex-direction:column;' +
-                'align-items:center;' +
-                'justify-content:center;' +
-                'font-family:Arial,sans-serif;' +
-                'color:#111827;' +
-                'line-height:1.1;' +
-            '">' +
-
-                '<div style="' +
-                    'font-size:16px;' +
-                    'font-weight:700;' +
-                '">' +
-                    mediaFormatada + ' MCA' +
-                '</div>' +
-
-                '<div style="' +
-                    'font-size:10px;' +
-                    'font-weight:600;' +
-                    'margin-top:3px;' +
-                '">' +
-                    textoQuantidade +
-                '</div>' +
-
-            '</div>',
-
-        className: "pressao-cluster",
-
-        iconSize: new L.Point(
-            78,
-            58
-        )
-    });
-}
-"""
-
-cluster = MarkerCluster(
-    name="Agrupamento de Pressão",
-    icon_create_function=cluster_icon_function,
-    options={
-        # Raio maior para que pontos geograficamente próximos
-        # permaneçam agrupados enquanto o mapa estiver afastado.
-        "maxClusterRadius": 80,
-
-        # Ao chegar neste nível de zoom, os pontos deixam de ser
-        # agrupados e passam a aparecer individualmente.
-        "disableClusteringAtZoom": 16,
-
-        "spiderfyOnMaxZoom": True,
-        "showCoverageOnHover": False,
-        "zoomToBoundsOnClick": True,
-        "removeOutsideVisibleBounds": True
-    }
-)
-
-cluster.add_to(m)
-
+# 1) Por bairro:
+#    visão gerencial, com um pin maior representando o conjunto de
+#    medições de cada bairro dentro dos filtros selecionados.
+#
+# 2) Medições individuais:
+#    visão operacional, com um marcador menor para cada medição.
+#
+# O agrupamento por bairro utiliza Município + Bairro para evitar que
+# bairros com o mesmo nome em municípios diferentes sejam misturados.
+# ============================================================
 
 if not df_filtrado.empty:
 
     validos = df_filtrado.dropna(
         subset=["Latitude", "Longitude"]
-    )
+    ).copy()
 
-    for _, row in validos.iterrows():
+    if not validos.empty:
 
-        pressao = float(row["Pressao_MCA"])
-
-        obs = str(
-            row["Observacao"]
-        ).strip()
-
-        classificacao, cor = classificar_pressao(pressao)
-
-        obs_tooltip_text = (
-            f" | Obs: {obs}"
-            if obs
-            else ""
+        validos["Municipio"] = (
+            validos["Municipio"]
+            .fillna("Município não informado")
+            .astype(str)
+            .str.strip()
         )
 
-        tooltip_str = (
-            f"{row['Municipio']} - "
-            f"{row['Bairro']} "
-            f"({pressao} MCA)"
-            f"{obs_tooltip_text}"
+        validos["Bairro"] = (
+            validos["Bairro"]
+            .fillna("Bairro não informado")
+            .astype(str)
+            .str.strip()
         )
 
-        obs_popup_html = (
-            f"<br><b>Obs:</b> {obs}"
-            if obs
-            else ""
-        )
+        validos["Pressao_MCA"] = pd.to_numeric(
+            validos["Pressao_MCA"],
+            errors="coerce"
+        ).fillna(0.0)
 
-        popup = (
-            f"<b>ID:</b> {row['ID']}<br>"
-            f"<b>Data:</b> {row['Data']}<br>"
-            f"<b>Município:</b> {row['Municipio']}<br>"
-            f"<b>Bairro:</b> {row['Bairro']}<br>"
-            f"<b>Pressão:</b> {pressao} MCA"
-            f"{obs_popup_html}"
-        )
+        if modo_visualizacao == "Medições individuais":
 
-        popup += (
-            f"<br><b>Classificação:</b> {classificacao}"
-        )
+            # ----------------------------------------------------
+            # VISÃO OPERACIONAL — MEDIÇÕES INDIVIDUAIS
+            # ----------------------------------------------------
+            for _, registro in validos.iterrows():
 
-        # Marcador individual.
-        marker_html = f"""
-        <div style="
-            width: 22px;
-            height: 28px;
-            display: flex;
-            align-items: flex-start;
-            justify-content: center;
-        ">
-            <svg width="22" height="28" viewBox="0 0 24 30"
-                 xmlns="http://www.w3.org/2000/svg"
-                 style="display:block; overflow:visible;">
-                <path
-                    d="M12 1.5C6.55 1.5 2.25 5.8 2.25 11.15
-                       C2.25 18.15 12 28.5 12 28.5
-                       C12 28.5 21.75 18.15 21.75 11.15
-                       C21.75 5.8 17.45 1.5 12 1.5Z"
-                    fill="{cor}"
-                    stroke="#FFFFFF"
-                    stroke-width="1.5"
-                />
-                <circle
-                    cx="12"
-                    cy="11"
-                    r="3.4"
-                    fill="#FFFFFF"
-                />
-            </svg>
-        </div>
-        """
+                pressao = float(registro["Pressao_MCA"])
+                classificacao, cor = classificar_pressao(pressao)
 
-        # IMPORTANTE:
-        # pressure_value é passado na criação do Marker. O Folium
-        # serializa isso para JavaScript como pressureValue.
-        # Dessa forma o MarkerCluster consegue ler o valor diretamente
-        # de marker.options.pressureValue.
-        folium.Marker(
-            location=[
-                row["Latitude"],
-                row["Longitude"]
-            ],
-            icon=folium.DivIcon(
-                html=marker_html,
-                icon_size=(22, 28),
-                icon_anchor=(11, 28),
-                class_name="pressao-location-marker"
-            ),
-            popup=folium.Popup(
-                popup,
-                max_width=250
-            ),
-            tooltip=tooltip_str,
-            pressure_value=pressao
-        ).add_to(cluster)
+                pressao_formatada = (
+                    f"{pressao:.2f}".replace(".", ",")
+                )
 
-        # Os rótulos continuam fora do cluster para não interferirem
-        # na contagem das medições e continuam funcionando como antes.
-        if mostrar_rotulos:
+                bairro = str(registro["Bairro"])
+                municipio = str(registro["Municipio"])
+                data_registro = str(registro["Data"])
+                observacao = str(registro.get("Observacao", ""))
 
-            obs_rotulo_html = (
-                f"<br><span style='font-weight: normal; "
-                f"color: #4b5563;'>Obs: {obs}</span>"
-                if obs
-                else ""
-            )
-
-            texto_rotulo = (
-                f"{row['Bairro']} — "
-                f"{pressao} MCA"
-            )
-
-            folium.map.Marker(
-                [
-                    row["Latitude"],
-                    row["Longitude"]
-                ],
-                icon=folium.DivIcon(
-                    icon_size=(220, 50),
-                    icon_anchor=(-12, 18),
-                    html=f"""
-                    <div style="
-                        font-family: sans-serif;
-                        font-size: 11px;
-                        font-weight: 600;
-                        color: #1f2937;
-                        background-color: rgba(255, 255, 255, 0.95);
-                        padding: 5px 9px;
-                        border-radius: 6px;
-                        border: 1px solid #cbd5e1;
-                        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                        width: max-content;
-                        white-space: nowrap;
-                    ">
-                        📍 {texto_rotulo}
-                        {obs_rotulo_html}
+                observacao_html = ""
+                if observacao and observacao.lower() != "nan":
+                    observacao_html = f"""
+                    <div style="margin-top:9px;font-size:11px;color:#475569;">
+                        <b>Observação:</b> {observacao}
                     </div>
                     """
+
+                popup_individual = f"""
+                <div style="
+                    width:250px;
+                    font-family:Arial,sans-serif;
+                    color:#111827;
+                ">
+                    <div style="
+                        font-size:16px;
+                        font-weight:800;
+                        margin-bottom:2px;
+                    ">
+                        {bairro}
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#6b7280;
+                        margin-bottom:12px;
+                    ">
+                        {municipio}
+                    </div>
+
+                    <div style="
+                        background:#f8fafc;
+                        border-radius:8px;
+                        padding:9px;
+                        border-left:4px solid {cor};
+                        margin-bottom:10px;
+                    ">
+                        <div style="font-size:10px;color:#64748b;">
+                            PRESSÃO MEDIDA
+                        </div>
+                        <div style="font-size:20px;font-weight:800;">
+                            {pressao_formatada} MCA
+                        </div>
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        line-height:1.55;
+                    ">
+                        <b>Classificação:</b> {classificacao}<br>
+                        <b>Data:</b> {data_registro}<br>
+                        <b>ID:</b> {registro['ID']}
+                    </div>
+
+                    {observacao_html}
+                </div>
+                """
+
+                folium.CircleMarker(
+                    location=[
+                        float(registro["Latitude"]),
+                        float(registro["Longitude"])
+                    ],
+                    radius=6,
+                    color="#FFFFFF",
+                    weight=2,
+                    fill=True,
+                    fill_color=cor,
+                    fill_opacity=0.95,
+                    popup=folium.Popup(
+                        popup_individual,
+                        max_width=290
+                    ),
+                    tooltip=(
+                        f"{bairro} | "
+                        f"{pressao_formatada} MCA | "
+                        f"{classificacao}"
+                    )
+                ).add_to(m)
+
+        else:
+
+            # ----------------------------------------------------
+            # VISÃO GERENCIAL — AGRUPAMENTO POR BAIRRO
+            # ----------------------------------------------------
+            grupos_bairro = validos.groupby(
+                ["Municipio", "Bairro"],
+                dropna=False,
+                sort=True
+            )
+
+            for (municipio, bairro), grupo in grupos_bairro:
+
+                quantidade = int(len(grupo))
+                media = float(grupo["Pressao_MCA"].mean())
+
+                # O ponto do bairro é posicionado no centro médio das
+                # coordenadas das medições pertencentes ao grupo.
+                lat_bairro = float(grupo["Latitude"].mean())
+                lon_bairro = float(grupo["Longitude"].mean())
+
+                classificacao, cor = classificar_pressao(media)
+
+                media_formatada = f"{media:.2f}".replace(".", ",")
+
+                texto_medicoes = (
+                    "medição"
+                    if quantidade == 1
+                    else "medições"
                 )
-            ).add_to(m)
+
+                # ------------------------------------------------
+                # DETALHES DO POPUP
+                # ------------------------------------------------
+                pressao_min = float(grupo["Pressao_MCA"].min())
+                pressao_max = float(grupo["Pressao_MCA"].max())
+
+                min_formatado = f"{pressao_min:.2f}".replace(".", ",")
+                max_formatado = f"{pressao_max:.2f}".replace(".", ",")
+
+                linhas_medicoes = []
+
+                for _, registro in grupo.sort_values(
+                    by=["Data", "ID"],
+                    ascending=[False, True]
+                ).iterrows():
+
+                    pressao_reg = float(registro["Pressao_MCA"])
+
+                    pressao_reg_formatada = (
+                        f"{pressao_reg:.2f}"
+                        .replace(".", ",")
+                    )
+
+                    linhas_medicoes.append(
+                        f"""
+                        <div style="
+                            padding:7px 0;
+                            border-bottom:1px solid #e5e7eb;
+                            font-size:11px;
+                        ">
+                            <div style="
+                                font-weight:700;
+                                color:#111827;
+                            ">
+                                {registro['Data']} · {pressao_reg_formatada} MCA
+                            </div>
+                            <div style="
+                                color:#6b7280;
+                                margin-top:2px;
+                            ">
+                                ID: {registro['ID']}
+                            </div>
+                        </div>
+                        """
+                    )
+
+                detalhes_medicoes = "".join(
+                    linhas_medicoes[:12]
+                )
+
+                if quantidade > 12:
+                    detalhes_medicoes += (
+                        f"""
+                        <div style="
+                            margin-top:7px;
+                            color:#6b7280;
+                            font-size:10px;
+                            text-align:center;
+                        ">
+                            + {quantidade - 12} medições adicionais
+                        </div>
+                        """
+                    )
+
+                popup = f"""
+                <div style="
+                    width:280px;
+                    font-family:Arial,sans-serif;
+                    color:#111827;
+                ">
+                    <div style="
+                        font-size:17px;
+                        font-weight:800;
+                        margin-bottom:2px;
+                    ">
+                        {bairro}
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#6b7280;
+                        margin-bottom:12px;
+                    ">
+                        {municipio}
+                    </div>
+
+                    <div style="
+                        display:flex;
+                        gap:6px;
+                        margin-bottom:10px;
+                    ">
+                        <div style="
+                            flex:1;
+                            background:#f8fafc;
+                            border-radius:8px;
+                            padding:8px;
+                            border-left:4px solid {cor};
+                        ">
+                            <div style="font-size:10px;color:#64748b;">
+                                MÉDIA
+                            </div>
+                            <div style="font-size:18px;font-weight:800;">
+                                {media_formatada} MCA
+                            </div>
+                        </div>
+
+                        <div style="
+                            width:92px;
+                            background:#f8fafc;
+                            border-radius:8px;
+                            padding:8px;
+                        ">
+                            <div style="font-size:10px;color:#64748b;">
+                                MEDIÇÕES
+                            </div>
+                            <div style="font-size:18px;font-weight:800;">
+                                {quantidade}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="
+                        font-size:11px;
+                        color:#475569;
+                        margin-bottom:8px;
+                    ">
+                        Faixa: <b>{classificacao}</b><br>
+                        Mínima: <b>{min_formatado} MCA</b> ·
+                        Máxima: <b>{max_formatado} MCA</b>
+                    </div>
+
+                    <div style="
+                        max-height:220px;
+                        overflow-y:auto;
+                        border-top:1px solid #e5e7eb;
+                    ">
+                        {detalhes_medicoes}
+                    </div>
+                </div>
+                """
+
+                # ------------------------------------------------
+                # MARCADOR PRINCIPAL DO BAIRRO
+                # ------------------------------------------------
+                if mostrar_rotulos:
+
+                    marker_html = f"""
+                    <div style="
+                        position:relative;
+                        width:310px;
+                        height:72px;
+                        font-family:Arial,sans-serif;
+                        pointer-events:auto;
+                    ">
+
+                        <!-- PIN -->
+                        <div style="
+                            position:absolute;
+                            left:0;
+                            top:3px;
+                            width:48px;
+                            height:60px;
+                            z-index:2;
+                        ">
+                            <svg width="48" height="60"
+                                 viewBox="0 0 48 60"
+                                 xmlns="http://www.w3.org/2000/svg"
+                                 style="display:block; overflow:visible;">
+
+                                <path
+                                    d="M24 2
+                                       C11.85 2 2.5 11.35 2.5 22.8
+                                       C2.5 37.4 24 58 24 58
+                                       C24 58 45.5 37.4 45.5 22.8
+                                       C45.5 11.35 36.15 2 24 2Z"
+                                    fill="{cor}"
+                                    stroke="#FFFFFF"
+                                    stroke-width="3"
+                                />
+
+                                <circle
+                                    cx="24"
+                                    cy="22"
+                                    r="9"
+                                    fill="#FFFFFF"
+                                />
+
+                                <circle
+                                    cx="24"
+                                    cy="22"
+                                    r="4"
+                                    fill="{cor}"
+                                />
+                            </svg>
+                        </div>
+
+                        <!-- RÓTULO -->
+                        <div style="
+                            position:absolute;
+                            left:39px;
+                            top:0;
+                            width:260px;
+                            min-height:57px;
+                            background:rgba(255,255,255,0.97);
+                            border:1px solid #d7dee8;
+                            border-left:5px solid {cor};
+                            border-radius:9px;
+                            box-shadow:0 3px 12px rgba(15,23,42,0.22);
+                            padding:7px 11px 7px 13px;
+                            box-sizing:border-box;
+                            color:#111827;
+                        ">
+
+                            <div style="
+                                font-size:13px;
+                                font-weight:800;
+                                line-height:1.15;
+                                white-space:nowrap;
+                                overflow:hidden;
+                                text-overflow:ellipsis;
+                                padding-right:4px;
+                            ">
+                                {bairro}
+                            </div>
+
+                            <div style="
+                                display:flex;
+                                align-items:center;
+                                gap:8px;
+                                margin-top:5px;
+                                font-size:11px;
+                                line-height:1.1;
+                            ">
+                                <span style="font-weight:800;">
+                                    {media_formatada} MCA
+                                </span>
+
+                                <span style="
+                                    width:1px;
+                                    height:13px;
+                                    background:#cbd5e1;
+                                "></span>
+
+                                <span style="color:#475569;">
+                                    {quantidade} {texto_medicoes}
+                                </span>
+                            </div>
+
+                        </div>
+                    </div>
+                    """
+
+                    icon_size = (310, 72)
+                    icon_anchor = (24, 58)
+
+                else:
+
+                    # Quando o usuário desabilita os rótulos, mantém-se
+                    # somente o pin maior no mapa.
+                    marker_html = f"""
+                    <div style="
+                        width:48px;
+                        height:60px;
+                    ">
+                        <svg width="48" height="60"
+                             viewBox="0 0 48 60"
+                             xmlns="http://www.w3.org/2000/svg"
+                             style="display:block; overflow:visible;">
+
+                            <path
+                                d="M24 2
+                                   C11.85 2 2.5 11.35 2.5 22.8
+                                   C2.5 37.4 24 58 24 58
+                                   C24 58 45.5 37.4 45.5 22.8
+                                   C45.5 11.35 36.15 2 24 2Z"
+                                fill="{cor}"
+                                stroke="#FFFFFF"
+                                stroke-width="3"
+                            />
+
+                            <circle
+                                cx="24"
+                                cy="22"
+                                r="9"
+                                fill="#FFFFFF"
+                            />
+
+                            <circle
+                                cx="24"
+                                cy="22"
+                                r="4"
+                                fill="{cor}"
+                            />
+                        </svg>
+                    </div>
+                    """
+
+                    icon_size = (48, 60)
+                    icon_anchor = (24, 58)
+
+                folium.map.Marker(
+                    location=[
+                        lat_bairro,
+                        lon_bairro
+                    ],
+                    icon=folium.DivIcon(
+                        html=marker_html,
+                        icon_size=icon_size,
+                        icon_anchor=icon_anchor,
+                        class_name="pressao-bairro-marker"
+                    ),
+                    popup=folium.Popup(
+                        popup,
+                        max_width=320
+                    ),
+                    tooltip=(
+                        f"{bairro} | "
+                        f"Média: {media_formatada} MCA | "
+                        f"{quantidade} {texto_medicoes}"
+                    )
+                ).add_to(m)
 
 
 # ============================================================
 # LEGENDA DAS CORES
 # ============================================================
+
 legend_html = f"""
 <div style="
     position: fixed;
