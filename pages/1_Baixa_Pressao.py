@@ -2134,16 +2134,19 @@ with c_map2:
 
 with c_map3:
 
+    # ========================================================
+    # CORREÇÃO:
+    #
+    # O controle agora fica disponível nos DOIS modos.
+    # ========================================================
     mostrar_rotulos = st.checkbox(
         "Exibir rótulos dos bairros",
         value=True,
-        disabled=(
-            modo_visualizacao
-            != "Por bairro"
-        ),
+        key="mostrar_rotulos_bp",
         help=(
-            "Mostra o bairro, a pressão média "
-            "e a quantidade de medições."
+            "Mostra informações junto aos pins. "
+            "No modo por bairro mostra pressão média e quantidade. "
+            "No modo individual mostra a medição daquele ponto."
         )
     )
 
@@ -2218,6 +2221,88 @@ else:
         "OpenStreetMap",
         name="Mapa Padrão (OpenStreetMap)"
     ).add_to(m)
+
+
+# ============================================================
+# FUNÇÕES VISUAIS DOS PINS
+# ============================================================
+def gerar_pin_svg(
+    cor: str,
+    tamanho: str = "bairro"
+) -> str:
+
+    """
+    Gera um pin SVG independente do CSS de rotação.
+
+    Isso evita problemas de renderização do pin
+    dentro do DivIcon do Folium.
+    """
+
+    if tamanho == "individual":
+
+        largura = 34
+        altura = 39
+
+        escala = 0.88
+
+    else:
+
+        largura = 40
+        altura = 45
+
+        escala = 1.0
+
+    # --------------------------------------------------------
+    # O SVG possui:
+    #
+    # - corpo colorido;
+    # - borda branca;
+    # - círculo branco central.
+    #
+    # O desenho é sempre visível, independente do navegador.
+    # --------------------------------------------------------
+    return f"""
+    <svg
+        class="bp-pin-svg"
+        width="{largura}"
+        height="{altura}"
+        viewBox="0 0 40 45"
+        xmlns="http://www.w3.org/2000/svg"
+        style="
+            position:absolute;
+            left:50%;
+            top:50%;
+            transform:translate(-50%,-50%);
+            overflow:visible;
+            pointer-events:auto;
+            z-index:1100;
+        "
+    >
+
+        <path
+            d="
+                M20 43
+                C18.5 40.8 5 26.2 5 16
+                C5 7.72 11.72 1 20 1
+                C28.28 1 35 7.72 35 16
+                C35 26.2 21.5 40.8 20 43
+                Z
+            "
+            fill="{cor}"
+            stroke="#ffffff"
+            stroke-width="2"
+            stroke-linejoin="round"
+        />
+
+        <circle
+            cx="20"
+            cy="16"
+            r="5"
+            fill="#ffffff"
+        />
+
+    </svg>
+    """
 
 
 # ============================================================
@@ -2371,17 +2456,104 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                folium.CircleMarker(
+                # ------------------------------------------------
+                # RÓTULO INDIVIDUAL
+                # ------------------------------------------------
+                if mostrar_rotulos:
+
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-individual-marker-wrapper"
+                        data-bp-priority="1"
+                        style="
+                            position:relative;
+                            width:42px;
+                            height:42px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
+
+                        {gerar_pin_svg(
+                            cor,
+                            "individual"
+                        )}
+
+                        <div
+                            class="bp-label-card bp-label-card-individual"
+                            data-bp-default="top"
+                        >
+
+                            <div class="bp-label-title">
+                                {escape(bairro)}
+                            </div>
+
+                            <div class="bp-label-data">
+
+                                <span class="bp-label-pressure">
+                                    {pressao_formatada} MCA
+                                </span>
+
+                                <span class="bp-label-separator"></span>
+
+                                <span>
+                                    {escape(classificacao)}
+                                </span>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+                    """
+
+                # ------------------------------------------------
+                # SOMENTE PIN
+                # ------------------------------------------------
+                else:
+
+                    marker_html = f"""
+                    <div
+                        class="bp-marker-wrapper bp-individual-marker-wrapper"
+                        data-bp-priority="1"
+                        style="
+                            position:relative;
+                            width:42px;
+                            height:42px;
+                            overflow:visible;
+                            font-family:Arial,sans-serif;
+                            pointer-events:auto;
+                        "
+                    >
+
+                        {gerar_pin_svg(
+                            cor,
+                            "individual"
+                        )}
+
+                    </div>
+                    """
+
+                folium.map.Marker(
                     location=[
                         float(registro["Latitude"]),
                         float(registro["Longitude"])
                     ],
-                    radius=5,
-                    color="#FFFFFF",
-                    weight=2,
-                    fill=True,
-                    fill_color=cor,
-                    fill_opacity=0.95,
+                    icon=folium.DivIcon(
+                        html=marker_html,
+                        icon_size=(
+                            42,
+                            42
+                        ),
+                        icon_anchor=(
+                            21,
+                            21
+                        ),
+                        class_name=(
+                            "pressao-individual-marker"
+                        )
+                    ),
                     popup=folium.Popup(
                         popup_individual,
                         max_width=290
@@ -2641,46 +2813,31 @@ if not df_filtrado.empty:
                 """
 
                 # =================================================
-                # NOVO SISTEMA VISUAL DOS BAIRROS
+                # MARCADOR DO BAIRRO
                 # =================================================
-                #
-                # O pin agora é independente do rótulo.
-                #
-                # O elemento do Leaflet possui apenas 40x40 px.
-                # O rótulo pode ultrapassar esse espaço graças
-                # ao overflow: visible.
-                #
-                # Isso evita que o tamanho do rótulo interfira
-                # na posição real do marcador.
-                # =================================================
-
                 if mostrar_rotulos:
 
                     marker_html = f"""
                     <div
-                        class="bp-marker-wrapper"
+                        class="bp-marker-wrapper bp-bairro-marker-wrapper"
                         data-bp-priority="{quantidade}"
                         style="
                             position:relative;
-                            width:40px;
-                            height:40px;
+                            width:44px;
+                            height:44px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
                         "
                     >
 
-                        <div
-                            class="bp-pin"
-                            style="
-                                --bp-color:{cor};
-                            "
-                        >
-                            <span class="bp-pin-center"></span>
-                        </div>
+                        {gerar_pin_svg(
+                            cor,
+                            "bairro"
+                        )}
 
                         <div
-                            class="bp-label-card"
+                            class="bp-label-card bp-label-card-bairro"
                             data-bp-default="top"
                         >
 
@@ -2708,52 +2865,29 @@ if not df_filtrado.empty:
                     </div>
                     """
 
-                    icon_size = (
-                        40,
-                        40
-                    )
-
-                    icon_anchor = (
-                        20,
-                        20
-                    )
-
                 else:
 
                     marker_html = f"""
                     <div
-                        class="bp-marker-wrapper"
+                        class="bp-marker-wrapper bp-bairro-marker-wrapper"
+                        data-bp-priority="{quantidade}"
                         style="
                             position:relative;
-                            width:40px;
-                            height:40px;
+                            width:44px;
+                            height:44px;
                             overflow:visible;
                             font-family:Arial,sans-serif;
                             pointer-events:auto;
                         "
                     >
 
-                        <div
-                            class="bp-pin"
-                            style="
-                                --bp-color:{cor};
-                            "
-                        >
-                            <span class="bp-pin-center"></span>
-                        </div>
+                        {gerar_pin_svg(
+                            cor,
+                            "bairro"
+                        )}
 
                     </div>
                     """
-
-                    icon_size = (
-                        40,
-                        40
-                    )
-
-                    icon_anchor = (
-                        20,
-                        20
-                    )
 
                 folium.map.Marker(
                     location=[
@@ -2762,13 +2896,26 @@ if not df_filtrado.empty:
                     ],
                     icon=folium.DivIcon(
                         html=marker_html,
-                        icon_size=icon_size,
-                        icon_anchor=icon_anchor,
-                        class_name="pressao-bairro-marker"
+                        icon_size=(
+                            44,
+                            44
+                        ),
+                        icon_anchor=(
+                            22,
+                            22
+                        ),
+                        class_name=(
+                            "pressao-bairro-marker"
+                        )
                     ),
                     popup=folium.Popup(
                         popup,
                         max_width=320
+                    ),
+                    tooltip=(
+                        f"{bairro} | "
+                        f"{media_formatada} MCA | "
+                        f"{quantidade} {texto_medicoes}"
                     )
                 ).add_to(m)
 
@@ -2776,133 +2923,94 @@ if not df_filtrado.empty:
 # ============================================================
 # ESTILO DOS PINS E RÓTULOS
 # ============================================================
-#
-# Este CSS é independente do layout do Streamlit.
-# Atua somente dentro do mapa Leaflet.
-# ============================================================
 map_style_html = """
 <style>
 
     /*
-     * O container do marcador não pode cortar
-     * o rótulo que ultrapassa seus 40x40 px.
+     * ========================================================
+     * CONTAINER DOS MARCADORES
+     * ========================================================
      */
-    .leaflet-marker-icon.pressao-bairro-marker {
+
+    .leaflet-marker-icon.pressao-bairro-marker,
+    .leaflet-marker-icon.pressao-individual-marker {
+
         background: transparent !important;
+
         border: 0 !important;
+
         overflow: visible !important;
+
+        padding: 0 !important;
+
+        margin: 0 !important;
     }
 
 
     /*
-     * Wrapper do pin.
+     * ========================================================
+     * WRAPPER
+     * ========================================================
      */
-    .pressao-bairro-marker .bp-marker-wrapper {
+
+    .pressao-bairro-marker .bp-marker-wrapper,
+    .pressao-individual-marker .bp-marker-wrapper {
+
         position: relative !important;
-        width: 40px !important;
-        height: 40px !important;
+
         overflow: visible !important;
+
+        pointer-events: auto !important;
+
+        font-family: Arial, sans-serif;
     }
 
 
     /*
-     * Pin principal.
+     * ========================================================
+     * SVG DO PIN
      *
-     * Mantemos o tamanho pequeno para não poluir
-     * o mapa quando vários bairros estão próximos.
-     */
-    .pressao-bairro-marker .bp-pin {
-
-        position: absolute;
-
-        left: 50%;
-        top: 50%;
-
-        width: 29px;
-        height: 29px;
-
-        transform: translate(-50%, -50%);
-
-        background: var(--bp-color);
-
-        border: 2px solid #ffffff;
-
-        border-radius: 50%;
-
-        box-sizing: border-box;
-
-        box-shadow:
-            0 2px 6px rgba(15, 23, 42, 0.35);
-
-        z-index: 20;
-
-        pointer-events: auto;
-    }
-
-
-    /*
-     * Pequeno "bico" inferior do pin.
-     */
-    .pressao-bairro-marker .bp-pin::after {
-
-        content: "";
-
-        position: absolute;
-
-        left: 50%;
-        bottom: -6px;
-
-        width: 11px;
-        height: 11px;
-
-        background: var(--bp-color);
-
-        border-right: 2px solid #ffffff;
-        border-bottom: 2px solid #ffffff;
-
-        transform:
-            translateX(-50%)
-            rotate(45deg);
-
-        box-sizing: border-box;
-
-        z-index: -1;
-    }
-
-
-    /*
-     * Centro branco do pin.
-     */
-    .pressao-bairro-marker .bp-pin-center {
-
-        position: absolute;
-
-        left: 50%;
-        top: 50%;
-
-        width: 9px;
-        height: 9px;
-
-        transform: translate(-50%, -50%);
-
-        background: #ffffff;
-
-        border-radius: 50%;
-
-        box-shadow:
-            0 0 0 1px rgba(15, 23, 42, 0.08);
-
-        z-index: 30;
-    }
-
-
-    /*
-     * RÓTULO
+     * O SVG é o elemento visual principal.
      *
-     * O JavaScript altera apenas left/top/transform
-     * para encontrar a melhor posição.
+     * Não utilizamos mais rotação CSS nem pseudo-elemento
+     * para desenhar o pin.
+     * ========================================================
      */
-    .pressao-bairro-marker .bp-label-card {
+
+    .bp-pin-svg {
+
+        display: block !important;
+
+        visibility: visible !important;
+
+        opacity: 1 !important;
+
+        overflow: visible !important;
+
+        pointer-events: auto !important;
+    }
+
+
+    /*
+     * ========================================================
+     * GARANTIA DE VISIBILIDADE DO PIN
+     * ========================================================
+     */
+
+    .pressao-bairro-marker .bp-pin-svg,
+    .pressao-individual-marker .bp-pin-svg {
+
+        z-index: 1100 !important;
+    }
+
+
+    /*
+     * ========================================================
+     * RÓTULOS
+     * ========================================================
+     */
+
+    .bp-label-card {
 
         position: absolute;
 
@@ -2916,7 +3024,7 @@ map_style_html = """
 
         border: 1px solid #d7dee8;
 
-        border-left: 3px solid var(--bp-color);
+        border-left: 3px solid var(--bp-color, #64748b);
 
         border-radius: 6px;
 
@@ -2927,9 +3035,9 @@ map_style_html = """
 
         font-family: Arial, sans-serif;
 
-        display: block !important;
+        display: block;
 
-        opacity: 1 !important;
+        opacity: 1;
 
         visibility: visible;
 
@@ -2946,18 +3054,26 @@ map_style_html = """
             top 0.12s ease,
             transform 0.12s ease;
 
-        /*
-         * Evita que um rótulo seja cortado
-         * por containers internos.
-         */
         overflow: hidden;
     }
 
 
     /*
-     * Título do bairro.
+     * O cartão recebe a cor do próprio pin.
      */
-    .pressao-bairro-marker .bp-label-title {
+    .bp-marker-wrapper {
+
+        --bp-color: #64748b;
+    }
+
+
+    /*
+     * ========================================================
+     * TÍTULO
+     * ========================================================
+     */
+
+    .bp-label-title {
 
         font-size: 11px;
 
@@ -2976,9 +3092,12 @@ map_style_html = """
 
 
     /*
-     * Linha inferior do rótulo.
+     * ========================================================
+     * LINHA DE DADOS
+     * ========================================================
      */
-    .pressao-bairro-marker .bp-label-data {
+
+    .bp-label-data {
 
         display: flex;
 
@@ -2998,7 +3117,7 @@ map_style_html = """
     }
 
 
-    .pressao-bairro-marker .bp-label-pressure {
+    .bp-label-pressure {
 
         font-weight: 800;
 
@@ -3006,11 +3125,12 @@ map_style_html = """
     }
 
 
-    .pressao-bairro-marker .bp-label-separator {
+    .bp-label-separator {
 
         display: inline-block;
 
         width: 1px;
+
         height: 10px;
 
         background: #cbd5e1;
@@ -3020,10 +3140,56 @@ map_style_html = """
 
 
     /*
-     * Garante que tooltip padrão do Leaflet
-     * não seja usado como substituto do nosso rótulo.
+     * ========================================================
+     * RÓTULO INDIVIDUAL
+     *
+     * Um pouco menor que o rótulo de bairro.
+     * ========================================================
      */
-    .pressao-bairro-marker .leaflet-tooltip {
+
+    .bp-label-card-individual {
+
+        width: 145px;
+
+        padding: 5px 7px;
+    }
+
+
+    .bp-label-card-individual .bp-label-title {
+
+        font-size: 10px;
+    }
+
+
+    .bp-label-card-individual .bp-label-data {
+
+        font-size: 8.5px;
+
+        gap: 5px;
+    }
+
+
+    /*
+     * ========================================================
+     * RÓTULO DE BAIRRO
+     * ========================================================
+     */
+
+    .bp-label-card-bairro {
+
+        width: 158px;
+    }
+
+
+    /*
+     * ========================================================
+     * TOOLTIP PADRÃO
+     * ========================================================
+     */
+
+    .pressao-bairro-marker .leaflet-tooltip,
+    .pressao-individual-marker .leaflet-tooltip {
+
         display: none !important;
     }
 
@@ -3038,36 +3204,6 @@ m.get_root().html.add_child(
 # ============================================================
 # DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
 # ============================================================
-#
-# NOVA ESTRUTURA:
-#
-# 1. Todos os pins continuam visíveis.
-#
-# 2. Os rótulos são ordenados pela quantidade
-#    de medições do bairro.
-#
-# 3. Para cada bairro são testadas até 8 posições:
-#
-#       1. cima
-#       2. baixo
-#       3. direita
-#       4. esquerda
-#       5. cima-direita
-#       6. cima-esquerda
-#       7. baixo-direita
-#       8. baixo-esquerda
-#
-# 4. A primeira posição sem conflito é usada.
-#
-# 5. Se nenhuma posição estiver disponível,
-#    somente o rótulo é escondido.
-#
-# 6. O pin continua visível.
-#
-# 7. O cálculo é repetido após zoom, movimento
-#    e redimensionamento.
-# ============================================================
-
 map_name = m.get_name()
 
 declutter_js = """
@@ -3133,10 +3269,7 @@ declutter_js = """
 
         /*
          * ----------------------------------------------------
-         * Define uma posição candidata para o rótulo.
-         *
-         * O ponto de referência é o centro do wrapper,
-         * que corresponde ao centro do pin.
+         * Define uma posição candidata.
          * ----------------------------------------------------
          */
         function aplicarPosicao(
@@ -3144,17 +3277,11 @@ declutter_js = """
             posicao
         ) {
 
-            /*
-             * Remove estilos anteriores.
-             */
             rotulo.style.left = "";
             rotulo.style.top = "";
             rotulo.style.transform = "";
 
 
-            /*
-             * CIMA
-             */
             if (posicao === "top") {
 
                 rotulo.style.left = "50%";
@@ -3164,10 +3291,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * BAIXO
-             */
             else if (posicao === "bottom") {
 
                 rotulo.style.left = "50%";
@@ -3177,10 +3300,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * DIREITA
-             */
             else if (posicao === "right") {
 
                 rotulo.style.left = "46px";
@@ -3190,10 +3309,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * ESQUERDA
-             */
             else if (posicao === "left") {
 
                 rotulo.style.left = "-6px";
@@ -3203,10 +3318,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * CIMA-DIREITA
-             */
             else if (posicao === "top-right") {
 
                 rotulo.style.left = "42px";
@@ -3216,10 +3327,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * CIMA-ESQUERDA
-             */
             else if (posicao === "top-left") {
 
                 rotulo.style.left = "-2px";
@@ -3229,10 +3336,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * BAIXO-DIREITA
-             */
             else if (posicao === "bottom-right") {
 
                 rotulo.style.left = "42px";
@@ -3242,10 +3345,6 @@ declutter_js = """
 
             }
 
-
-            /*
-             * BAIXO-ESQUERDA
-             */
             else if (posicao === "bottom-left") {
 
                 rotulo.style.left = "-2px";
@@ -3276,9 +3375,20 @@ declutter_js = """
                 container.getBoundingClientRect();
 
 
+            /*
+             * CORREÇÃO:
+             *
+             * Agora o algoritmo considera:
+             *
+             * - pins de bairro
+             * - pins de medições individuais
+             *
+             * simultaneamente.
+             */
             var marcadores =
                 container.querySelectorAll(
-                    ".pressao-bairro-marker .bp-marker-wrapper"
+                    ".pressao-bairro-marker .bp-marker-wrapper, " +
+                    ".pressao-individual-marker .bp-marker-wrapper"
                 );
 
 
@@ -3293,9 +3403,7 @@ declutter_js = """
 
             /*
              * ------------------------------------------------
-             * Primeira passagem:
-             *
-             * prepara todos os rótulos e captura prioridade.
+             * Prepara os rótulos.
              * ------------------------------------------------
              */
             marcadores.forEach(
@@ -3307,10 +3415,6 @@ declutter_js = """
                         );
 
 
-                    /*
-                     * Marcadores sem rótulo:
-                     * continuam normalmente no mapa.
-                     */
                     if (!rotulo) {
 
                         return;
@@ -3318,10 +3422,41 @@ declutter_js = """
 
 
                     /*
-                     * Todos os rótulos começam visíveis
-                     * para que o browser consiga medir
-                     * corretamente seus tamanhos.
+                     * Recupera a cor do marcador
+                     * diretamente do SVG, quando necessário,
+                     * para manter o cartão coerente.
                      */
+                    var svg =
+                        wrapper.querySelector(
+                            ".bp-pin-svg"
+                        );
+
+
+                    if (svg) {
+
+                        var path =
+                            svg.querySelector(
+                                "path"
+                            );
+
+                        if (path) {
+
+                            var corPin =
+                                path.getAttribute(
+                                    "fill"
+                                );
+
+                            if (corPin) {
+
+                                wrapper.style.setProperty(
+                                    "--bp-color",
+                                    corPin
+                                );
+                            }
+                        }
+                    }
+
+
                     rotulo.style.display =
                         "block";
 
@@ -3329,9 +3464,6 @@ declutter_js = """
                         "hidden";
 
 
-                    /*
-                     * Começamos pelo topo.
-                     */
                     aplicarPosicao(
                         rotulo,
                         "top"
@@ -3353,6 +3485,15 @@ declutter_js = """
                     }
 
 
+                    /*
+                     * Identifica se é individual.
+                     */
+                    var individual =
+                        wrapper.classList.contains(
+                            "bp-individual-marker-wrapper"
+                        );
+
+
                     candidatos.push({
 
                         wrapper: wrapper,
@@ -3360,6 +3501,8 @@ declutter_js = """
                         rotulo: rotulo,
 
                         prioridade: prioridade,
+
+                        individual: individual,
 
                         ordem: candidatos.length
 
@@ -3371,15 +3514,32 @@ declutter_js = """
 
             /*
              * ------------------------------------------------
-             * Ordenação:
+             * Ordem de prioridade:
              *
-             * maior quantidade de medições primeiro.
+             * 1. Bairros
+             * 2. Maior quantidade de medições
              *
-             * Em caso de empate, mantém a ordem original.
+             * Para individuais, prioridade = 1.
+             *
+             * Assim, quando um bairro consolidado e uma
+             * medição individual estiverem próximos,
+             * o bairro tende a preservar seu rótulo.
              * ------------------------------------------------
              */
             candidatos.sort(
                 function(a, b) {
+
+                    if (
+                        a.individual
+                        !==
+                        b.individual
+                    ) {
+
+                        return a.individual
+                            ? 1
+                            : -1;
+                    }
+
 
                     if (
                         b.prioridade
@@ -3394,11 +3554,13 @@ declutter_js = """
                         );
                     }
 
+
                     return (
                         a.ordem
                         -
                         b.ordem
                     );
+
                 }
             );
 
@@ -3406,9 +3568,6 @@ declutter_js = """
             /*
              * ------------------------------------------------
              * Posições disponíveis.
-             *
-             * A ordem prioriza primeiro as posições
-             * mais naturais em torno do pin.
              * ------------------------------------------------
              */
             var posicoes = [
@@ -3432,16 +3591,11 @@ declutter_js = """
             ];
 
 
-            /*
-             * ------------------------------------------------
-             * Rótulos já aceitos.
-             * ------------------------------------------------
-             */
             var aceitos = [];
 
 
             /*
-             * Margem mínima entre dois rótulos.
+             * Distância mínima entre rótulos.
              */
             var margem = 5;
 
@@ -3454,7 +3608,7 @@ declutter_js = """
 
             /*
              * ------------------------------------------------
-             * Processa cada rótulo pela ordem de prioridade.
+             * Processa cada rótulo.
              * ------------------------------------------------
              */
             candidatos.forEach(
@@ -3463,9 +3617,6 @@ declutter_js = """
                     var encontrouPosicao = false;
 
 
-                    /*
-                     * Testa cada posição.
-                     */
                     for (
                         var p = 0;
                         p < posicoes.length;
@@ -3482,19 +3633,13 @@ declutter_js = """
                         );
 
 
-                        /*
-                         * getBoundingClientRect()
-                         * precisa ser chamado depois da
-                         * aplicação da posição.
-                         */
                         var caixa =
                             item.rotulo
                             .getBoundingClientRect();
 
 
                         /*
-                         * Se estiver fora do mapa,
-                         * tenta outra posição.
+                         * Fora do mapa?
                          */
                         if (
                             !estaDentroDoMapa(
@@ -3512,8 +3657,8 @@ declutter_js = """
 
 
                         /*
-                         * Compara com os rótulos
-                         * que já foram aceitos.
+                         * Verifica colisão com rótulos
+                         * anteriormente aceitos.
                          */
                         for (
                             var i = 0;
@@ -3536,10 +3681,6 @@ declutter_js = """
                         }
 
 
-                        /*
-                         * Se não houver conflito,
-                         * essa posição é aceita.
-                         */
                         if (!conflito) {
 
                             item.rotulo.style.visibility =
@@ -3558,15 +3699,11 @@ declutter_js = """
 
 
                     /*
-                     * ------------------------------------------------
-                     * Nenhuma posição disponível.
+                     * IMPORTANTE:
                      *
-                     * Importante:
+                     * somente o rótulo é ocultado.
                      *
-                     * escondemos APENAS o rótulo.
-                     *
-                     * O pin continua totalmente visível.
-                     * ------------------------------------------------
+                     * O SVG do pin permanece.
                      */
                     if (!encontrouPosicao) {
 
@@ -3582,8 +3719,7 @@ declutter_js = """
 
         /*
          * ----------------------------------------------------
-         * Agendamento para evitar executar o algoritmo
-         * dezenas de vezes durante uma movimentação.
+         * Agendamento.
          * ----------------------------------------------------
          */
         var agendamento = null;
@@ -3602,11 +3738,6 @@ declutter_js = """
             agendamento = setTimeout(
                 function() {
 
-                    /*
-                     * Duas passagens ajudam a garantir que
-                     * o Leaflet já terminou de reposicionar
-                     * os elementos.
-                     */
                     recalcularRotulos();
 
 
@@ -3650,9 +3781,6 @@ declutter_js = """
         );
 
 
-        /*
-         * Redimensionamento da janela.
-         */
         window.addEventListener(
             "resize",
             agendarRecalculo
@@ -3662,9 +3790,6 @@ declutter_js = """
         /*
          * ----------------------------------------------------
          * Primeiras execuções.
-         *
-         * O mapa do Streamlit/Folium pode terminar de montar
-         * depois que este script começa.
          * ----------------------------------------------------
          */
         setTimeout(
@@ -3693,9 +3818,6 @@ declutter_js = """
     }
 
 
-    /*
-     * Inicia o sistema.
-     */
     iniciarDeclutter();
 
 })();
