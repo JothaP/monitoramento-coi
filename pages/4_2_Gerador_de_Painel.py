@@ -131,19 +131,248 @@ ZONA_POR_BAIRRO = {
 
 
 BASE_POR_CIDADE = {
-    "PAULISTANA": "PAULISTANA",
-    "PICOS": "PICOS",
-    "FLORIANO": "FLORIANO",
-    "SÃO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
-    "SAO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
-    "BOM JESUS": "BOM JESUS",
-    "OEIRAS": "OEIRAS",
-    "PIRIPIRI": "PIRIPIRI",
-    "PARNAÍBA": "PARNAIBA",
-    "PARNAIBA": "PARNAIBA",
-    "SÃO JOÃO DO PIAUÍ": "SAO JOAO DO PIAUI",
-    "SAO JOAO DO PIAUI": "SAO JOAO DO PIAUI",
-    "TERESINA": "MEIO NORTE",
+    'ACAUA': 'PAULISTANA',
+    'AGRICOLANDIA': 'MEIO NORTE',
+    'AGUA BRANCA': 'MEIO NORTE',
+    'ALAGOINHA': 'PICOS',
+    'ALAGOINHA DO PIAUI': 'PICOS',
+    'ALEGRETE DO PIAUI': 'PICOS',
+    'ALTO LONGA': 'MEIO NORTE',
+    'ALTOS': 'MEIO NORTE',
+    'ALVORADA DO GURGUEIA': 'FLORIANO',
+    'AMARANTE': 'FLORIANO',
+    'ANGICAL DO PIAUI': 'MEIO NORTE',
+    'ANISIO DE ABREU': 'SAO RAIMUNDO NONATO',
+    'AROAZES': 'MEIO NORTE',
+    'AROEIRAS DO ITAIM': 'PICOS',
+    'ARRAIAL': 'FLORIANO',
+    'ASSUNCAO DO PIAUI': 'MEIO NORTE',
+    'AVELINO LOPES': 'BOM JESUS',
+    'BAIXA GRANDE DO RIBEIRO': 'FLORIANO',
+    'BARRA D ALCANTARA': 'OEIRAS',
+    'BARRAS': 'PIRIPIRI',
+    'BARREIRAS DO PIAUI': 'BOM JESUS',
+    'BARRO DURO': 'MEIO NORTE',
+    'BATALHA': 'PIRIPIRI',
+    'BELA VISTA DO PIAUI': 'SAO JOAO DO PIAUI',
+    'BELEM DO PIAUI': 'PICOS',
+    'BENEDITINOS': 'MEIO NORTE',
+    'BERTOLINIA': 'FLORIANO',
+    'BOA HORA': 'PIRIPIRI',
+    'BOCAINA': 'PICOS',
+    'BOM JESUS': 'BOM JESUS',
+    'BOM PRINCIPIO DO PIAUI': 'PARNAIBA',
+    'BONFIM DO PIAUI': 'SAO RAIMUNDO NONATO',
+    'BOQUEIRAO DO PIAUI': 'PIRIPIRI',
+    'BRASILEIRA': 'PIRIPIRI',
+    'BREJO DO PIAUI': 'SAO JOAO DO PIAUI',
+    'BURITI DOS LOPES': 'PARNAIBA',
+    'BURITI DOS MONTES': 'MEIO NORTE',
+    'CABECEIRAS  DO PIAUI': 'PIRIPIRI',
+    'CAJAZEIRAS DO PIAUI': 'OEIRAS',
+    'CAJUEIRO DA PRAIA': 'PARNAIBA',
+    'CAMPINAS DO PIAUI': 'SAO JOAO DO PIAUI',
+    'CAMPO ALEGRE DO FIDALGO': 'SAO JOAO DO PIAUI',
+    'CAMPO GRANDE DO PIAUI': 'PICOS',
+    'CAMPO LARGO DO PIAUI': 'PIRIPIRI',
+    'CANAVIEIRA': 'FLORIANO',
+    'CANTO DO BURITI': 'SAO JOAO DO PIAUI',
+    'CAPITAO DE CAMPOS': 'PIRIPIRI',
+    'CAPITAO GERVASIO OLIVEIRA': 'SAO JOAO DO PIAUI',
+    'CARACOL': 'SAO RAIMUNDO NONATO',
+    'CARAUBAS DO PIAUI': 'PARNAIBA',
+    'CARIDADE': 'PAULISTANA',
+    'CARIDADE DO PIAUI': 'PAULISTANA',
+    'CASTELO DO PIAUI': 'MEIO NORTE',
+    'COCAL': 'PARNAIBA',
+    'COCAL DE TELHA': 'PIRIPIRI',
+    'COCAL DOS ALVES': 'PARNAIBA',
+    'COIVARAS': 'MEIO NORTE',
+    'COLONIA DO GURGUEIA': 'BOM JESUS',
+    'COLONIA DO PIAUI': 'OEIRAS',
+    'CONCEICAO DO CANINDE': 'SAO JOAO DO PIAUI',
+    'CORONEL JOSE DIAS': 'SAO RAIMUNDO NONATO',
+    'CORRENTE': 'BOM JESUS',
+    'CRISTALANDIA': 'BOM JESUS',
+    'CRISTINO CASTRO': 'BOM JESUS',
+    'CURIMATA': 'BOM JESUS',
+    'CURRAIS': 'BOM JESUS',
+    'CURRAL NOVO PI': 'PAULISTANA',
+    'CURRALINHOS': 'MEIO NORTE',
+    'DEMERVAL LOBAO': 'MEIO NORTE',
+    'DIRCEU ARCOVERDE': 'SAO RAIMUNDO NONATO',
+    'DOM EXPEDITO LOPES': 'PICOS',
+    'DOM INOCENCIO': 'SAO RAIMUNDO NONATO',
+    'DOMINGOS MOURAO': 'PIRIPIRI',
+    'ELESBAO VELOSO': 'MEIO NORTE',
+    'ELIZEU MARTINS': 'BOM JESUS',
+    'ESPERANTINA': 'PIRIPIRI',
+    'FARTURA DO PIAUI': 'SAO RAIMUNDO NONATO',
+    'FLORES DO PIAUI': 'FLORIANO',
+    'FLORESTA DO PIAUI': 'OEIRAS',
+    'FLORIANO': 'FLORIANO',
+    'FRANCINOPOLIS': 'OEIRAS',
+    'FRANCISCO AYRES': 'FLORIANO',
+    'FRANCISCO AIRES': 'FLORIANO',
+    'FRANCISCO MACEDO': 'PICOS',
+    'FRANCISCO SANTOS': 'PICOS',
+    'FRONTEIRAS': 'PICOS',
+    'GEMINIANO': 'PICOS',
+    'GILBUES': 'BOM JESUS',
+    'GUADALUPE': 'FLORIANO',
+    'GUARIBAS': 'SAO RAIMUNDO NONATO',
+    'HUGO NAPOLEAO': 'MEIO NORTE',
+    'ILHA GRANDE': 'PARNAIBA',
+    'INHUMA': 'OEIRAS',
+    'IPIRANGA': 'OEIRAS',
+    'ISAIAS COELHO': 'PAULISTANA',
+    'ITAINOPOLIS': 'PICOS',
+    'ITAUEIRA': 'FLORIANO',
+    'JACOBINA DO PIAUI': 'PAULISTANA',
+    'JAICOS': 'PICOS',
+    'JARDIM MULATO': 'MEIO NORTE',
+    'JATOBA DO PIAUI': 'MEIO NORTE',
+    'JERUMENHA': 'FLORIANO',
+    'JOAO COSTA': 'SAO RAIMUNDO NONATO',
+    'JOAQUIM PIRES': 'PARNAIBA',
+    'JOCA MARQUES': 'PARNAIBA',
+    'JOSE DE FREITAS': 'MEIO NORTE',
+    'JUAZEIRO DO PIAUI': 'MEIO NORTE',
+    'JULIO BORGES': 'BOM JESUS',
+    'JUREMA': 'SAO RAIMUNDO NONATO',
+    'LAGOA ALEGRE': 'PIRIPIRI',
+    'LAGOA DE SAO FRANCISCO': 'PIRIPIRI',
+    'LAGOA DO BARRO DO PIAUI': 'SAO JOAO DO PIAUI',
+    'LAGOA DO PIAUI': 'MEIO NORTE',
+    'LAGOA DO SITIO': 'OEIRAS',
+    'LAGOINHA DO PIAUI': 'MEIO NORTE',
+    'LUIS CORREIA': 'PARNAIBA',
+    'LUZILANDIA': 'PIRIPIRI',
+    'MADEIRO': 'PIRIPIRI',
+    'MANOEL EMIDIO': 'BOM JESUS',
+    'MARCOS PARENTE': 'FLORIANO',
+    'MASSAPE DO PIAUI': 'PAULISTANA',
+    'MATIAS OLIMPIO': 'PARNAIBA',
+    'MIGUEL ALVES': 'PIRIPIRI',
+    'MIGUEL LEAO': 'MEIO NORTE',
+    'MILTON BRANDAO': 'PIRIPIRI',
+    'MONSENHOR GIL': 'MEIO NORTE',
+    'MONSENHOR HIPOLITO': 'PICOS',
+    'MONTE ALEGRE': 'BOM JESUS',
+    'MORRO CABECA NO TEMPO': 'BOM JESUS',
+    'MORRO DO CHAPEU DO PIAUI': 'SAO RAIMUNDO NONATO',
+    'MURICI DOS PORTELAS': 'PARNAIBA',
+    'NAZARE DO PIAUI': 'FLORIANO',
+    'NAZARIA': 'MEIO NORTE',
+    'NOSSA SENHORA DE NAZARE': 'MEIO NORTE',
+    'NOSSA SRA DOS REMEDIOS': 'PARNAIBA',
+    'NOVA SANTA RITA': 'SAO JOAO DO PIAUI',
+    'NOVO ORIENTE DO PIAU': 'OEIRAS',
+    'NOVO SANTO ANTONIO': 'MEIO NORTE',
+    'OEIRAS': 'OEIRAS',
+    "OLHO D'AGUA DO PIAUI": 'MEIO NORTE',
+    'PADRE MARCOS': 'PICOS',
+    'PAES LANDIM': 'SAO JOAO DO PIAUI',
+    'PAJEU DO PIAUI': 'FLORIANO',
+    'PALMEIRA DO PIAUI': 'BOM JESUS',
+    'PALMEIRAIS': 'MEIO NORTE',
+    'PAQUETA': 'PICOS',
+    'PARNAGUA': 'BOM JESUS',
+    'PARNAIBA': 'PARNAIBA',
+    'PASSAGEM FRANCA': 'MEIO NORTE',
+    'PATOS DO PIAUI': 'PAULISTANA',
+    'PAU D ARCO DO PIAUI': 'MEIO NORTE',
+    'PAULISTANA': 'PAULISTANA',
+    'PAVUSSU': 'FLORIANO',
+    'PEDRO II': 'PIRIPIRI',
+    'PICOS': 'PICOS',
+    'PIMENTEIRAS': 'OEIRAS',
+    'PIO IX': 'PICOS',
+    'PIRACURUCA': 'PARNAIBA',
+    'PIRIPIRI': 'PIRIPIRI',
+    'PORTO': 'PIRIPIRI',
+    'PORTO ALEGRE DO PIAUI': 'FLORIANO',
+    'PRATA DO PIAUI': 'MEIO NORTE',
+    'QUEIMADA NOVA': 'SAO JOAO DO PIAUI',
+    'REDENCAO DO GURGUEIA': 'BOM JESUS',
+    'REGENERACAO': 'FLORIANO',
+    'RIACHO FRIO': 'BOM JESUS',
+    'RIBEIRA DO PIAUI': 'FLORIANO',
+    'RIBEIRO GONCALVES': 'FLORIANO',
+    'RIO GRANDE DO PIAUI': 'FLORIANO',
+    'SANTA CRUZ DO PIAUI': 'OEIRAS',
+    'SANTA CRUZ DOS MILAGRES': 'MEIO NORTE',
+    'SANTA FILOMENA': 'BOM JESUS',
+    'SANTA LUZ': 'BOM JESUS',
+    'SANTA ROSA DO PIAUI': 'OEIRAS',
+    'SANTA TERESA': 'MEIO NORTE',
+    'SANTANA DO PIAUI': 'PICOS',
+    'SANTO ANTONIO DE LISBOA': 'PICOS',
+    'SANTO ANTONIO D MILA': 'MEIO NORTE',
+    'SANTO INACIO DO PIAUI': 'SAO JOAO DO PIAUI',
+    'SAO BRAZ': 'SAO RAIMUNDO NONATO',
+    'SAO FELIX': 'MEIO NORTE',
+    'SAO FRANCISCO DE ASSIS': 'SAO JOAO DO PIAUI',
+    'SAO FRANCISCO DO PIAUI': 'OEIRAS',
+    'SAO GONCALO DO GURGUEIA': 'BOM JESUS',
+    'SAO GONCALO DO PIAUI': 'MEIO NORTE',
+    'SAO JOAO DA CANABRAVA': 'PICOS',
+    'SAO JOAO DA FRONTEIRA': 'PIRIPIRI',
+    'SAO JOAO DA SERRA': 'MEIO NORTE',
+    'SAO JOAO DA VARJOTA': 'OEIRAS',
+    'SAO JOAO DO ARRAIAL': 'PIRIPIRI',
+    'SAO JOAO DO PIAUI': 'SAO JOAO DO PIAUI',
+    'SAO JOSE DO DIVINO': 'PARNAIBA',
+    'SAO JOSE DO PEIXE': 'SAO JOAO DO PIAUI',
+    'SAO JOSE DO PIAUI': 'OEIRAS',
+    'SAO JOSE DA TENDA': 'SAO RAIMUNDO NONATO',
+    'SAO JULIAO': 'PICOS',
+    'SAO LOURENCO': 'SAO RAIMUNDO NONATO',
+    'SAO LUIS DO PIAUI': 'PICOS',
+    'SAO MIGUEL DA BAIXA GRANDE': 'MEIO NORTE',
+    'SAO MIGUEL DO FIDALGO': 'SAO JOAO DO PIAUI',
+    'SAO MIGUEL TAPUIO': 'MEIO NORTE',
+    'SAO PEDRO': 'MEIO NORTE',
+    'SAO RAIMUNDO NONATO': 'SAO RAIMUNDO NONATO',
+    'SEBASTIAO BARROS': 'BOM JESUS',
+    'SEBASTIAO LEAL': 'FLORIANO',
+    'SIGEFREDO PACHECO': 'MEIO NORTE',
+    'SIMOES': 'PAULISTANA',
+    'SIMPLICIO MENDES': 'SAO JOAO DO PIAUI',
+    'SOCORRO DO PIAUI': 'SAO JOAO DO PIAUI',
+    'SUSSUAPARA': 'PICOS',
+    'TAMBORIL DO PIAUI': 'SAO RAIMUNDO NONATO',
+    'TANQUE DO PIAUI': 'OEIRAS',
+    'TERESINA': 'MEIO NORTE',
+    'UNIAO': 'MEIO NORTE',
+    'URUCUI': 'FLORIANO',
+    'VALENCA': 'OEIRAS',
+    'VARZEA BRANCA': 'SAO RAIMUNDO NONATO',
+    'VARZEA GRANDE': 'OEIRAS',
+    'VERA MENDES': 'PAULISTANA',
+    'VILA NOVA DO PIAUI': 'PICOS',
+    'WALL FERRAZ': 'OEIRAS',
+    'POV SANTA TERESA': 'MEIO NORTE',
+    'POV CALDEIRAOZINHO': 'SAO RAIMUNDO NONATO',
+    'POVOADO BURITIZINHO': 'MEIO NORTE',
+    'POV COROA DE SAO REMIGIO': 'PARNAIBA',
+    'POVOADO PEDRA': 'MEIO NORTE',
+    'POVOADO APARECIDA': 'PICOS',
+    'POV BARRA DO LONGA': 'PARNAIBA',
+    'POV INGAZEIRA': 'PAULISTANA',
+    'POV SERRA DA SOLTA': 'MEIO NORTE',
+    'POVOADO BARRA GRANDE': 'PARNAIBA',
+    'POVOADO SAO JOAQUIM': 'MEIO NORTE',
+    'POVOADO TRANQUEIRA': 'MEIO NORTE',
+    'POV MOCAMBINHO': 'PARNAIBA',
+    'POV BURITI DO CASTELO': 'MEIO NORTE',
+    'POVOADO MANDACARU': 'PICOS',
+    'POVOADO MATINHA': 'MEIO NORTE',
+    'POV DAVID CALDAS': 'MEIO NORTE',
+    'POV. LAGOA DE BAIXO': 'SAO RAIMUNDO NONATO',
+    'POVOADO RIACHO DOS NEGRO': 'MEIO NORTE',
+    'POVOADO POCAO': 'PARNAIBA',
+    'OLHO D AGUA DO PIAUI': 'MEIO NORTE',
 }
 
 
@@ -374,12 +603,34 @@ def obter_base(cidade):
 
     cidade_n = normalizar_cidade(cidade)
 
+    if not cidade_n:
+        return ""
+
     for chave, base in BASE_POR_CIDADE.items():
 
         if normalizar_cidade(chave) == cidade_n:
             return base
 
     return ""
+
+
+def cidades_da_base(base=None):
+    """Retorna cidades do cadastro oficial; sem base, retorna todas."""
+
+    base_n = normalizar(base) if base else ""
+
+    cidades = []
+
+    for cidade, base_cidade in BASE_POR_CIDADE.items():
+        if not base_n or normalizar(base_cidade) == base_n:
+            cidades.append(cidade)
+
+    # Remove duplicidades após normalização e mantém ordem alfabética.
+    unicas = {}
+    for cidade in cidades:
+        unicas.setdefault(normalizar(cidade), cidade)
+
+    return sorted(unicas.values(), key=normalizar)
 
 
 def localizar_coluna(df, candidatos):
@@ -931,6 +1182,7 @@ def contar_os(series):
 def gerar_tabela_local_periodo(
     df,
     modo,
+    locais_forcados=None,
 ):
 
     dados = df.copy()
@@ -974,12 +1226,26 @@ def gerar_tabela_local_periodo(
     # LOCAIS
     # ========================================================
 
-    locais = sorted(
-        dados["_LOCAL"]
-        .dropna()
-        .astype(str)
-        .unique()
-    )
+    if locais_forcados is not None:
+
+        locais = sorted(
+            [
+                str(local)
+                for local in locais_forcados
+                if str(local).strip()
+            ],
+            key=normalizar,
+        )
+
+    else:
+
+        locais = sorted(
+            dados["_LOCAL"]
+            .dropna()
+            .astype(str)
+            .unique(),
+            key=normalizar,
+        )
 
     # ========================================================
     # PERÍODOS
@@ -1190,7 +1456,27 @@ def gerar_painel(
             dados["_BASE"] == base
         ].copy()
 
-    if dados.empty:
+    # ========================================================
+    # LOCAIS ESPERADOS
+    # ========================================================
+    # API não deve depender da cidade possuir O.S. no arquivo para
+    # aparecer no relatório. O cadastro oficial Base x Cidade define
+    # quais cidades pertencem à base selecionada.
+    #
+    # Assim, ao selecionar uma base, TODAS as cidades daquela base
+    # aparecem; as que não possuem O.S. no período ficam vazias/zeradas.
+    # ========================================================
+
+    locais_forcados = None
+
+    if modulo == "API":
+
+        if base:
+            locais_forcados = cidades_da_base(base)
+        else:
+            locais_forcados = cidades_da_base(None)
+
+    if dados.empty and not locais_forcados:
 
         raise ValueError(
             "Não existem registros para o filtro selecionado."
@@ -1203,6 +1489,7 @@ def gerar_painel(
     tabela = gerar_tabela_local_periodo(
         dados,
         modo,
+        locais_forcados=locais_forcados,
     )
 
     if tabela.empty:
@@ -2070,6 +2357,8 @@ if erro:
 # API — BASE
 # ============================================================
 
+# O cadastro oficial Base x Cidade possui 242 vínculos e é usado
+# exclusivamente para determinar a abrangência de cada base API.
 base_selecionada = None
 
 
@@ -2102,6 +2391,15 @@ if modulo == "API":
 
         base_selecionada = (
             base_escolhida
+        )
+
+        cidades_base = cidades_da_base(
+            base_selecionada
+        )
+
+        st.caption(
+            f"{len(cidades_base)} cidade(s) vinculada(s) à base "
+            f"{base_selecionada}. Todas serão consideradas no relatório."
         )
 
 
