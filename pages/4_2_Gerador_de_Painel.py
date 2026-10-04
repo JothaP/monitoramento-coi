@@ -1245,10 +1245,10 @@ def gerar_planilha_api(
 
     cont_dia = pd.Series(1, index=dados.index, dtype="int64")
     mask_proto = chave_dia["tem_protocolo"]
-    cont_dia.loc[mask_proto] = ~chave_dia.loc[mask_proto].duplicated(
+    cont_dia.loc[mask_proto] = (~chave_dia.loc[mask_proto].duplicated(
         subset=["base", "cidade", "data", "protocolo"],
         keep="first",
-    )
+    )).astype("int64")
     dados["_CONTAGEM_DIA"] = cont_dia.astype(int)
 
     chave_mes = pd.DataFrame({
@@ -1261,10 +1261,10 @@ def gerar_planilha_api(
 
     cont_mes = pd.Series(1, index=dados.index, dtype="int64")
     mask_proto_mes = chave_mes["tem_protocolo"]
-    cont_mes.loc[mask_proto_mes] = ~chave_mes.loc[mask_proto_mes].duplicated(
+    cont_mes.loc[mask_proto_mes] = (~chave_mes.loc[mask_proto_mes].duplicated(
         subset=["base", "cidade", "mes", "protocolo"],
         keep="first",
-    )
+    )).astype("int64")
     dados["_CONTAGEM_MES"] = cont_mes.astype(int)
 
     # ------------------------------------------------------------
