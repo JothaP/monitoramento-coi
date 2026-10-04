@@ -6,18 +6,17 @@ from datetime import datetime, date
 
 import pandas as pd
 import numpy as np
-
 from PIL import Image, ImageDraw, ImageFont
 
 
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO
 # ============================================================
 
 st.set_page_config(
     page_title="Relatório de Falta de Água - COI",
-    page_icon="💧",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -28,27 +27,31 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
 
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
-    }
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+        }
 
-    .titulo-principal {
-        font-size: 2rem;
-        font-weight: 700;
-        margin-bottom: 0.2rem;
-    }
+        .module-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #123B5D;
+            margin-bottom: 4px;
+        }
 
-    .subtitulo {
-        color: #666;
-        margin-bottom: 1.5rem;
-    }
+        .module-subtitle {
+            color: #667085;
+            font-size: 14px;
+            margin-bottom: 18px;
+        }
 
-    .stButton > button {
-        width: 100%;
-    }
-
+        div[data-testid="stDownloadButton"] button {
+            width: 100%;
+        }
     </style>
     """,
     unsafe_allow_html=True,
@@ -56,71 +59,116 @@ st.markdown(
 
 
 # ============================================================
-# MAPA DE BAIRROS / ZONAS
-# ============================================================
-# Mantido no código por compatibilidade com o restante do
-# projeto. NÃO é utilizado na geração do relatório THE/TIM.
+# MAPAS EXISTENTES
 # ============================================================
 
 ZONA_POR_BAIRRO = {
-    # Mantenha aqui o seu dicionário original ZONA_POR_BAIRRO.
-    #
-    # Exemplo:
-    #
-    # "CENTRO": "ZONA CENTRO",
-    # "MOCAMBINHO": "ZONA NORTE",
-    #
-    # O relatório atual não utiliza essa informação.
+    # NORTE
+    "ÁGUA MINERAL": "NORTE",
+    "ALEGRE": "NORTE",
+    "BUENOS AIRES": "NORTE",
+    "CABRAL": "NORTE",
+    "EMBRAPA": "NORTE",
+    "MOCAMBINHO": "NORTE",
+    "MORRO DA ESPERANÇA": "NORTE",
+    "PARQUE BRASIL": "NORTE",
+    "PRIMAVERA": "NORTE",
+    "REAL COMPAGRE": "NORTE",
+    "SANTA MARIA": "NORTE",
+    "SANTO ANTÔNIO": "NORTE",
+    "VALE QUEM TEM": "NORTE",
+
+    # SUL
+    "AREIAS": "SUL",
+    "CATUMBI": "SUL",
+    "CERÂMICA CIL": "SUL",
+    "CRISTO REI": "SUL",
+    "LOURIVAL PARENTE": "SUL",
+    "MACAÚBA": "SUL",
+    "MONTE CASTELO": "SUL",
+    "MORADA NOVA": "SUL",
+    "NOSSA SENHORA DAS GRAÇAS": "SUL",
+    "PARQUE PIAUÍ": "SUL",
+    "PROMORAR": "SUL",
+    "SACARCA": "SUL",
+    "SANTA LUZIA": "SUL",
+    "TABULETA": "SUL",
+    "TRÊS ANDARES": "SUL",
+
+    # LESTE
+    "ÁGUA BRANCA": "LESTE",
+    "CAMPESTRE": "LESTE",
+    "FÁTIMA": "LESTE",
+    "FLORES": "LESTE",
+    "HORTO": "LESTE",
+    "ININGA": "LESTE",
+    "JOCKEY": "LESTE",
+    "JÓQUEI": "LESTE",
+    "MORADA DO SOL": "LESTE",
+    "NOSSA SENHORA DE FÁTIMA": "LESTE",
+    "NOIVOS": "LESTE",
+    "PLANALTO": "LESTE",
+    "SAMAPI": "LESTE",
+    "SÃO CRISTÓVÃO": "LESTE",
+    "SÃO JOÃO": "LESTE",
+    "URUGUAI": "LESTE",
+
+    # SUDESTE
+    "DIRCEU": "SUDESTE",
+    "ITARARÉ": "SUDESTE",
+    "RENASCENÇA": "SUDESTE",
+    "REDONDA": "SUDESTE",
+    "TODOS OS SANTOS": "SUDESTE",
+    "USINA SANTANA": "SUDESTE",
+
+    # CENTRO
+    "CENTRO": "CENTRO",
+    "ILHOTAS": "CENTRO",
+    "MATINHA": "CENTRO",
+    "MARQUÊS": "CENTRO",
+    "MONTE CASTELO": "CENTRO",
 }
 
-
-# ============================================================
-# BASES POR CIDADE - API
-# ============================================================
 
 BASE_POR_CIDADE = {
-    # Mantenha aqui o seu mapeamento original.
-    #
-    # Exemplo:
-    # "TERESINA": "BASE TERESINA",
-    # "PARNAIBA": "BASE PARNAÍBA",
+    "PAULISTANA": "PAULISTANA",
+    "PICOS": "PICOS",
+    "FLORIANO": "FLORIANO",
+    "SÃO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
+    "SAO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
+    "BOM JESUS": "BOM JESUS",
+    "OEIRAS": "OEIRAS",
+    "PIRIPIRI": "PIRIPIRI",
+    "PARNAÍBA": "PARNAIBA",
+    "PARNAIBA": "PARNAIBA",
+    "SÃO JOÃO DO PIAUÍ": "SAO JOAO DO PIAUI",
+    "SAO JOAO DO PIAUI": "SAO JOAO DO PIAUI",
+    "TERESINA": "MEIO NORTE",
 }
 
-
-# ============================================================
-# MESES
-# ============================================================
 
 MESES_PT = {
-    1: "Jan",
-    2: "Fev",
-    3: "Mar",
-    4: "Abr",
-    5: "Mai",
-    6: "Jun",
-    7: "Jul",
-    8: "Ago",
-    9: "Set",
-    10: "Out",
-    11: "Nov",
-    12: "Dez",
+    1: "JAN",
+    2: "FEV",
+    3: "MAR",
+    4: "ABR",
+    5: "MAI",
+    6: "JUN",
+    7: "JUL",
+    8: "AGO",
+    9: "SET",
+    10: "OUT",
+    11: "NOV",
+    12: "DEZ",
 }
 
-
-# ============================================================
-# LOGOS
-# ============================================================
 
 LOGOS = {
-    "API": "assets/logos/logo_aguas_do_piaui.png",
-    "THE": "assets/logos/logo_aguas_de_teresina.png",
-    "TIM": "assets/logos/logo_aguas_de_timon.png",
+    "API": Path("assets/logos/logo_aguas_do_piaui.png"),
+    "THE": Path("assets/logos/logo_aguas_de_teresina.png"),
+    "TIM": Path("assets/logos/logo_aguas_de_timon.png"),
 }
 
-
-# ============================================================
-# NOMES DAS EMPRESAS
-# ============================================================
 
 NOMES_EMPRESAS = {
     "API": "Águas do Piauí",
@@ -129,14 +177,10 @@ NOMES_EMPRESAS = {
 }
 
 
-# ============================================================
-# TÍTULOS
-# ============================================================
-
 TITULOS = {
-    "API": "Relatório de Falta de Água - Águas do Piauí",
-    "THE": "Relatório de Falta de Água - Águas de Teresina",
-    "TIM": "Relatório de Falta de Água - Águas de Timon",
+    "API": "Relatório de Falta de Água — Piauí",
+    "THE": "Relatório de Falta de Água — Teresina",
+    "TIM": "Relatório de Falta de Água — Timon",
 }
 
 
@@ -144,84 +188,137 @@ TITULOS = {
 # CORES
 # ============================================================
 
-COR_AZUL = (0, 83, 155)
-COR_AZUL_ESCURO = (0, 55, 110)
-COR_AZUL_CLARO = (225, 239, 250)
+BRANCO = "#FFFFFF"
+FUNDO = "#F4F7FA"
 
-COR_CINZA = (245, 247, 249)
-COR_CINZA_BORDA = (210, 215, 220)
-COR_CINZA_TEXTO = (90, 90, 90)
+AZUL_ESCURO = "#123B5D"
+AZUL = "#0077B6"
+AZUL_MEDIO = "#2B8CC4"
 
-COR_BRANCO = (255, 255, 255)
-COR_PRETO = (30, 30, 30)
+CINZA = "#667085"
+CINZA_CLARO = "#E8EDF2"
+
+VERMELHO = "#D64545"
 
 
 # ============================================================
 # FONTES
 # ============================================================
 
-def obter_fonte(tamanho, negrito=False):
-    """
-    Tenta encontrar uma fonte adequada no ambiente.
-    """
-
-    caminhos_negrito = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+def localizar_fontes():
+    candidatos = [
+        Path("BACKLOG_AEGEA/fontes"),
+        Path("./BACKLOG_AEGEA/fontes"),
+        Path("fontes"),
+        Path("./fontes"),
     ]
 
-    caminhos_normal = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    ]
+    for pasta in candidatos:
+        if pasta.exists():
+            return pasta
 
-    caminhos = caminhos_negrito if negrito else caminhos_normal
+    return None
 
-    for caminho in caminhos:
-        if Path(caminho).exists():
+
+FONTES_AEGEA = localizar_fontes()
+
+
+def fonte(tamanho, negrito=False):
+    arquivos = []
+
+    if FONTES_AEGEA:
+        if negrito:
+            arquivos.extend(
+                [
+                    FONTES_AEGEA / "Aptos-Bold.ttf",
+                    FONTES_AEGEA / "Arial-Bold.ttf",
+                    FONTES_AEGEA / "Montserrat-Bold.ttf",
+                ]
+            )
+        else:
+            arquivos.extend(
+                [
+                    FONTES_AEGEA / "Aptos.ttf",
+                    FONTES_AEGEA / "Arial.ttf",
+                    FONTES_AEGEA / "Montserrat-Regular.ttf",
+                ]
+            )
+
+    if negrito:
+        nomes = [
+            "Arial-Bold.ttf",
+            "DejaVuSans-Bold.ttf",
+        ]
+    else:
+        nomes = [
+            "Arial.ttf",
+            "DejaVuSans.ttf",
+        ]
+
+    arquivos.extend(
+        Path("/usr/share/fonts/truetype/dejavu").glob(
+            "DejaVuSans*.ttf"
+        )
+    )
+
+    for arquivo in arquivos:
+        if arquivo.exists():
             try:
-                return ImageFont.truetype(caminho, tamanho)
+                return ImageFont.truetype(
+                    str(arquivo),
+                    tamanho,
+                )
             except Exception:
                 pass
+
+    for nome in nomes:
+        try:
+            return ImageFont.truetype(nome, tamanho)
+        except Exception:
+            pass
 
     return ImageFont.load_default()
 
 
 # ============================================================
-# NORMALIZAÇÃO
+# UTILITÁRIOS
 # ============================================================
 
 def normalizar(valor):
+
     if pd.isna(valor):
         return ""
 
     texto = str(valor).strip().upper()
 
-    texto = (
-        texto.replace("Á", "A")
-        .replace("À", "A")
-        .replace("Ã", "A")
-        .replace("Â", "A")
-        .replace("Ä", "A")
-        .replace("É", "E")
-        .replace("È", "E")
-        .replace("Ê", "E")
-        .replace("Ë", "E")
-        .replace("Í", "I")
-        .replace("Ì", "I")
-        .replace("Î", "I")
-        .replace("Ï", "I")
-        .replace("Ó", "O")
-        .replace("Ò", "O")
-        .replace("Õ", "O")
-        .replace("Ô", "O")
-        .replace("Ö", "O")
-        .replace("Ú", "U")
-        .replace("Ù", "U")
-        .replace("Û", "U")
-        .replace("Ü", "U")
-        .replace("Ç", "C")
-    )
+    substituicoes = {
+        "Á": "A",
+        "À": "A",
+        "Ã": "A",
+        "Â": "A",
+        "Ä": "A",
+        "É": "E",
+        "È": "E",
+        "Ê": "E",
+        "Ë": "E",
+        "Í": "I",
+        "Ì": "I",
+        "Î": "I",
+        "Ï": "I",
+        "Ó": "O",
+        "Ò": "O",
+        "Õ": "O",
+        "Ô": "O",
+        "Ö": "O",
+        "Ú": "U",
+        "Ù": "U",
+        "Û": "U",
+        "Ü": "U",
+        "Ç": "C",
+    }
+
+    for antigo, novo in substituicoes.items():
+        texto = texto.replace(antigo, novo)
 
     texto = re.sub(r"\s+", " ", texto)
 
@@ -232,141 +329,237 @@ def normalizar_cidade(valor):
     return normalizar(valor)
 
 
-# ============================================================
-# ZONA
-# ============================================================
-
 def obter_zona(bairro):
-    bairro_norm = normalizar(bairro)
 
-    return ZONA_POR_BAIRRO.get(
-        bairro_norm,
-        "Não classificado"
-    )
+    bairro_n = normalizar(bairro)
 
+    for chave, zona in ZONA_POR_BAIRRO.items():
+        if normalizar(chave) == bairro_n:
+            return zona
 
-# ============================================================
-# BASE
-# ============================================================
+    return "NÃO IDENTIFICADA"
+
 
 def obter_base(cidade):
-    cidade_norm = normalizar_cidade(cidade)
 
-    return BASE_POR_CIDADE.get(
-        cidade_norm,
-        "Não classificada"
-    )
+    cidade_n = normalizar_cidade(cidade)
 
+    for chave, base in BASE_POR_CIDADE.items():
+        if normalizar_cidade(chave) == cidade_n:
+            return base
 
-# ============================================================
-# LOCALIZAÇÃO DE COLUNAS
-# ============================================================
+    return ""
+
 
 def localizar_coluna(df, candidatos):
-    """
-    Localiza uma coluna considerando pequenas diferenças
-    de acentuação, caixa e espaços.
-    """
 
     mapa = {}
 
     for coluna in df.columns:
         chave = normalizar(coluna)
+        chave = re.sub(r"[^A-Z0-9]", "", chave)
         mapa[chave] = coluna
 
     for candidato in candidatos:
+
         chave = normalizar(candidato)
+        chave = re.sub(r"[^A-Z0-9]", "", chave)
 
         if chave in mapa:
             return mapa[chave]
 
-    # Busca aproximada
-    for candidato in candidatos:
-        chave_candidato = normalizar(candidato)
+    for coluna in df.columns:
 
-        for chave, coluna_real in mapa.items():
-            if (
-                chave_candidato in chave
-                or chave in chave_candidato
-            ):
-                return coluna_real
+        coluna_n = normalizar(coluna)
+        coluna_n = re.sub(r"[^A-Z0-9]", "", coluna_n)
+
+        for candidato in candidatos:
+
+            candidato_n = normalizar(candidato)
+            candidato_n = re.sub(
+                r"[^A-Z0-9]",
+                "",
+                candidato_n,
+            )
+
+            if candidato_n and candidato_n in coluna_n:
+                return coluna
 
     return None
 
 
 # ============================================================
-# CONVERSÃO DE DATA
+# CONVERSÃO DA DATA
 # ============================================================
 
-def converter_abertura(serie):
-    """
-    Converte a coluna Início do SLA para datetime.
+def converter_abertura(valor):
 
-    Exemplos aceitos:
-    02/10/2026 14:04
-    02/10/2026 14:04:00
-    """
+    if pd.isna(valor):
+        return pd.NaT
 
-    if serie is None:
-        return pd.Series(dtype="datetime64[ns]")
+    if isinstance(valor, pd.Timestamp):
+        return valor
 
-    resultado = pd.to_datetime(
-        serie,
-        errors="coerce",
-        dayfirst=True
-    )
+    if isinstance(valor, datetime):
+        return pd.Timestamp(valor)
 
-    return resultado
+    if isinstance(valor, date):
+        return pd.Timestamp(valor)
 
+    texto = str(valor).strip()
 
-# ============================================================
-# FORMATAÇÃO DE NÚMEROS
-# ============================================================
+    if not texto:
+        return pd.NaT
 
-def formatar_numero(valor):
+    # --------------------------------------------------------
+    # FORMATO PRINCIPAL:
+    # dd/mm/aaaa hh:mm
+    # --------------------------------------------------------
+
     try:
-        valor = int(valor)
 
-        return f"{valor:,}".replace(",", ".")
+        resultado = pd.to_datetime(
+            texto,
+            format="%d/%m/%Y %H:%M",
+            errors="raise",
+        )
+
+        return resultado
 
     except Exception:
-        return str(valor)
+        pass
+
+    # --------------------------------------------------------
+    # OUTROS FORMATOS
+    # --------------------------------------------------------
+
+    formatos = [
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d/%m/%y",
+    ]
+
+    for formato in formatos:
+
+        try:
+
+            return pd.to_datetime(
+                texto,
+                format=formato,
+                errors="raise",
+            )
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # EXCEL SERIAL
+    # --------------------------------------------------------
+
+    if re.fullmatch(
+        r"\d+(\.\d+)?",
+        texto,
+    ):
+
+        try:
+
+            numero = float(texto)
+
+            if 20000 < numero < 60000:
+
+                return (
+                    pd.Timestamp("1899-12-30")
+                    + pd.to_timedelta(
+                        numero,
+                        unit="D",
+                    )
+                )
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # MÊS/ANO
+    # --------------------------------------------------------
+
+    meses = {
+        "JAN": 1,
+        "FEV": 2,
+        "MAR": 3,
+        "ABR": 4,
+        "MAI": 5,
+        "JUN": 6,
+        "JUL": 7,
+        "AGO": 8,
+        "SET": 9,
+        "OUT": 10,
+        "NOV": 11,
+        "DEZ": 12,
+    }
+
+    texto_n = normalizar(texto)
+
+    match = re.match(
+        r"([A-Z]{3,})[/\-](\d{4})",
+        texto_n,
+    )
+
+    if match:
+
+        mes_texto = match.group(1)[:3]
+        ano = int(match.group(2))
+
+        if mes_texto in meses:
+
+            return pd.Timestamp(
+                year=ano,
+                month=meses[mes_texto],
+                day=1,
+            )
+
+    return pd.to_datetime(
+        texto,
+        errors="coerce",
+        dayfirst=True,
+    )
 
 
 # ============================================================
-# ABREVIAÇÃO DE TEXTO
+# FORMATAÇÃO
 # ============================================================
 
-def abreviar_texto(texto, limite=28):
+def formatar_numero(numero):
+
+    try:
+        return f"{int(numero):,}".replace(",", ".")
+    except Exception:
+        return "0"
+
+
+def abreviar_texto(texto, limite):
+
     texto = str(texto)
 
     if len(texto) <= limite:
         return texto
 
-    return texto[:limite - 3] + "..."
+    return texto[: limite - 3] + "..."
 
 
-# ============================================================
-# TEXTO DO PERÍODO
-# ============================================================
+def texto_cabecalho_periodo(valor, modo):
 
-def texto_cabecalho_periodo(df):
-    if df is None or df.empty:
-        return ""
-
-    data_min = df["_ABERTURA"].min()
-    data_max = df["_ABERTURA"].max()
-
-    if pd.isna(data_min) or pd.isna(data_max):
-        return ""
-
-    if data_min.date() == data_max.date():
-        return data_min.strftime("%d/%m/%Y")
+    if modo == "Por dia":
+        return valor.strftime("%d/%m")
 
     return (
-        f"{data_min.strftime('%d/%m/%Y')} "
-        f"a "
-        f"{data_max.strftime('%d/%m/%Y')}"
+        f"{MESES_PT[valor.month]}/"
+        f"{str(valor.year)[2:]}"
     )
 
 
@@ -382,6 +575,7 @@ def ler_planilha(arquivo):
     nome = arquivo.name.lower()
 
     try:
+
         arquivo.seek(0)
 
         if nome.endswith(".xlsx"):
@@ -389,7 +583,7 @@ def ler_planilha(arquivo):
             return pd.read_excel(
                 arquivo,
                 sheet_name=0,
-                engine="openpyxl"
+                engine="openpyxl",
             )
 
         elif nome.endswith(".xlsb"):
@@ -397,7 +591,7 @@ def ler_planilha(arquivo):
             return pd.read_excel(
                 arquivo,
                 sheet_name=0,
-                engine="pyxlsb"
+                engine="pyxlsb",
             )
 
         elif nome.endswith(".xls"):
@@ -405,7 +599,7 @@ def ler_planilha(arquivo):
             return pd.read_excel(
                 arquivo,
                 sheet_name=0,
-                engine="xlrd"
+                engine="xlrd",
             )
 
         else:
@@ -427,66 +621,88 @@ def ler_planilha(arquivo):
 
 
 # ============================================================
+# LEITURA E CONSOLIDAÇÃO DE MÚLTIPLAS PLANILHAS
+# ============================================================
+
+def ler_planilhas_consolidadas(arquivos):
+
+    if not arquivos:
+        return None
+
+    bases = []
+
+    for arquivo in arquivos:
+
+        df_arquivo = ler_planilha(
+            arquivo
+        )
+
+        if df_arquivo is not None and not df_arquivo.empty:
+
+            bases.append(
+                df_arquivo
+            )
+
+    if not bases:
+        return None
+
+    try:
+
+        df_consolidado = pd.concat(
+            bases,
+            ignore_index=True,
+            sort=False,
+        )
+
+        return df_consolidado
+
+    except Exception as erro:
+
+        st.error(
+            f"Não foi possível consolidar os arquivos: {erro}"
+        )
+
+        return None
+
+
+# ============================================================
 # PREPARAÇÃO DOS DADOS
 # ============================================================
 
-def preparar_dados(df, operacao):
+def preparar_dados(df, modulo):
 
     if df is None or df.empty:
-        return None
+
+        return None, "A planilha está vazia."
 
     dados = df.copy()
 
-    # --------------------------------------------------------
+    # ========================================================
     # DATA DE ABERTURA
-    # --------------------------------------------------------
+    # ========================================================
+    # IMPORTANTE:
+    # A coluna oficial utilizada é "Início do SLA".
+    # O horário será ignorado posteriormente.
+    # ========================================================
 
     coluna_abertura = localizar_coluna(
         dados,
         [
             "Início do SLA",
             "Inicio do SLA",
-            "Início SLA",
-            "Inicio SLA",
-
-            # Fallbacks antigos
-            "Abertura",
-            "Data Abertura",
-            "Data de Abertura",
-            "Data_Abertura",
-            "Dt Abertura",
-            "Data",
-        ]
+        ],
     )
 
     if coluna_abertura is None:
 
-        st.error(
-            "Não foi encontrada a coluna "
-            "'Início do SLA' na planilha."
+        return (
+            None,
+            "Não foi encontrada a coluna 'Início do SLA'.",
         )
 
-        return None
-
-    dados["_ABERTURA"] = converter_abertura(
-        dados[coluna_abertura]
-    )
-
-    dados = dados.dropna(
-        subset=["_ABERTURA"]
-    ).copy()
-
-    if dados.empty:
-        st.warning(
-            "Não existem registros com data de "
-            "abertura válida."
-        )
-
-        return None
-
-    # --------------------------------------------------------
-    # PROTOCOLO / O.S.
-    # --------------------------------------------------------
+    # ========================================================
+    # PROTOCOLO
+    # ========================================================
 
     coluna_protocolo = localizar_coluna(
         dados,
@@ -495,16 +711,28 @@ def preparar_dados(df, operacao):
             "Cod. Protocolo Origem",
             "Código Protocolo Origem",
             "Codigo Protocolo Origem",
-            "Protocolo Origem",
             "Protocolo",
-            "O.S.",
+            "Protocolo Origem",
             "OS",
-            "Ordem de Serviço",
-            "Ordem Serviço",
-        ]
+            "O.S.",
+        ],
     )
 
-    if coluna_protocolo is not None:
+    # ========================================================
+    # CONVERTER DATA
+    # ========================================================
+
+    dados["_ABERTURA"] = dados[
+        coluna_abertura
+    ].apply(
+        converter_abertura
+    )
+
+    # ========================================================
+    # PROTOCOLO
+    # ========================================================
+
+    if coluna_protocolo:
 
         dados["_PROTOCOLO"] = (
             dados[coluna_protocolo]
@@ -512,110 +740,44 @@ def preparar_dados(df, operacao):
             .str.strip()
         )
 
-        dados["_PROTOCOLO"] = dados[
-            "_PROTOCOLO"
-        ].replace(
-            {
-                "nan": "",
-                "None": "",
-                "NaN": "",
-            }
-        )
+        dados.loc[
+            dados["_PROTOCOLO"].isin(
+                [
+                    "",
+                    "NAN",
+                    "NONE",
+                    "NAT",
+                ]
+            ),
+            "_PROTOCOLO",
+        ] = np.nan
 
     else:
 
-        dados["_PROTOCOLO"] = ""
+        dados["_PROTOCOLO"] = np.nan
 
-    # --------------------------------------------------------
-    # LOCAL
-    # --------------------------------------------------------
+    # ========================================================
+    # REMOVER DATAS INVÁLIDAS
+    # ========================================================
 
-    if operacao in ["THE", "TIM"]:
+    dados = dados.dropna(
+        subset=["_ABERTURA"]
+    ).copy()
 
-        coluna_bairro = localizar_coluna(
-            dados,
-            [
-                "Bairro",
-                "BAIRRO",
-            ]
+    if dados.empty:
+
+        return (
+            None,
+            "Nenhum registro possui data válida na coluna 'Início do SLA'.",
         )
 
-        if coluna_bairro is None:
+    # ========================================================
+    # DATA — SOMENTE DIA
+    # ========================================================
 
-            st.error(
-                "Não foi encontrada a coluna "
-                "'Bairro' na planilha."
-            )
-
-            return None
-
-        dados["_LOCAL"] = (
-            dados[coluna_bairro]
-            .fillna("Não informado")
-            .astype(str)
-            .str.strip()
-        )
-
-        dados["_LOCAL"] = dados[
-            "_LOCAL"
-        ].replace(
-            {
-                "": "Não informado",
-                "nan": "Não informado",
-            }
-        )
-
-        dados["_BASE"] = ""
-
-    else:
-
-        coluna_cidade = localizar_coluna(
-            dados,
-            [
-                "Cidade",
-                "CIDADE",
-                "Município",
-                "Municipio",
-            ]
-        )
-
-        if coluna_cidade is None:
-
-            st.error(
-                "Não foi encontrada a coluna "
-                "'Cidade' ou 'Município' na planilha."
-            )
-
-            return None
-
-        dados["_LOCAL"] = (
-            dados[coluna_cidade]
-            .fillna("Não informado")
-            .astype(str)
-            .str.strip()
-        )
-
-        dados["_LOCAL"] = dados[
-            "_LOCAL"
-        ].replace(
-            {
-                "": "Não informado",
-                "nan": "Não informado",
-            }
-        )
-
-        dados["_BASE"] = dados[
-            "_LOCAL"
-        ].apply(obter_base)
-
-    # --------------------------------------------------------
-    # DATA / MÊS
-    # --------------------------------------------------------
-
-    dados["_DATA"] = (
-        dados["_ABERTURA"]
-        .dt.normalize()
-    )
+    dados["_DATA"] = dados[
+        "_ABERTURA"
+    ].dt.normalize()
 
     dados["_MES_ORDEM"] = (
         dados["_ABERTURA"]
@@ -623,737 +785,433 @@ def preparar_dados(df, operacao):
         .dt.to_timestamp()
     )
 
-    return dados
+    # ========================================================
+    # THE / TIM
+    # ========================================================
 
+    if modulo in ["THE", "TIM"]:
 
-# ============================================================
-# CONTAGEM DAS O.S.
-# ============================================================
-
-def contar_os(series_protocolos):
-
-    protocolos = (
-        series_protocolos
-        .astype(str)
-        .str.strip()
-    )
-
-    protocolos_validos = protocolos[
-        ~protocolos.isin(
+        coluna_bairro = localizar_coluna(
+            dados,
             [
-                "",
-                "nan",
-                "None",
-                "NaN",
-            ]
+                "Bairro",
+                "BAIRRO",
+                "Bairro do Cliente",
+                "Bairro Cliente",
+            ],
         )
+
+        if coluna_bairro is None:
+
+            return (
+                None,
+                "Não foi encontrada a coluna de Bairro.",
+            )
+
+        dados["_LOCAL"] = (
+            dados[coluna_bairro]
+            .fillna("NÃO INFORMADO")
+            .astype(str)
+            .str.strip()
+        )
+
+        dados["_LOCAL"] = dados[
+            "_LOCAL"
+        ].replace(
+            {
+                "": "NÃO INFORMADO",
+                "nan": "NÃO INFORMADO",
+                "NaN": "NÃO INFORMADO",
+            }
+        )
+
+    # ========================================================
+    # API
+    # ========================================================
+
+    elif modulo == "API":
+
+        coluna_cidade = localizar_coluna(
+            dados,
+            [
+                "Cidade",
+                "Município",
+                "Municipio",
+                "Município Cliente",
+                "Cidade Cliente",
+            ],
+        )
+
+        if coluna_cidade is None:
+
+            return (
+                None,
+                "Não foi encontrada a coluna de Cidade/Município.",
+            )
+
+        dados["_LOCAL"] = (
+            dados[coluna_cidade]
+            .fillna("NÃO INFORMADA")
+            .astype(str)
+            .str.strip()
+        )
+
+        dados["_LOCAL"] = dados[
+            "_LOCAL"
+        ].replace(
+            {
+                "": "NÃO INFORMADA",
+                "nan": "NÃO INFORMADA",
+                "NaN": "NÃO INFORMADA",
+            }
+        )
+
+        dados["_BASE"] = dados[
+            "_LOCAL"
+        ].apply(
+            obter_base
+        )
+
+    return dados, None
+
+
+# ============================================================
+# CONTAGEM
+# ============================================================
+
+def contar_os(series):
+
+    protocolos = series[
+        "_PROTOCOLO"
     ]
 
-    if not protocolos_validos.empty:
-        return protocolos_validos.nunique()
+    validos = protocolos.dropna()
 
-    return len(series_protocolos)
+    if not validos.empty:
+
+        return validos.nunique()
+
+    return len(series)
 
 
 # ============================================================
-# MATRIZ DO RELATÓRIO
+# TABELA
 # ============================================================
 
-def construir_matriz(dados, modo):
+def gerar_tabela_local_periodo(
+    df,
+    modo,
+):
 
-    if dados is None or dados.empty:
-        return None
+    dados = df.copy()
 
     if modo == "Por dia":
 
-        periodos = sorted(
-            dados["_DATA"].dropna().unique()
-        )
-
-        chave_periodo = "_DATA"
+        dados["_PERIODO"] = dados[
+            "_DATA"
+        ]
 
     else:
 
-        periodos = sorted(
-            dados["_MES_ORDEM"].dropna().unique()
-        )
-
-        chave_periodo = "_MES_ORDEM"
-
-    if not periodos:
-        return None
+        dados["_PERIODO"] = dados[
+            "_MES_ORDEM"
+        ]
 
     locais = sorted(
         dados["_LOCAL"]
         .dropna()
         .astype(str)
-        .unique(),
-        key=lambda x: normalizar(x)
+        .unique()
     )
 
-    registros = []
+    periodos = sorted(
+        dados["_PERIODO"]
+        .dropna()
+        .unique()
+    )
+
+    tabela = {}
 
     for local in locais:
 
-        linha = {
-            "LOCAL": local
-        }
-
-        total = 0
+        linha = []
 
         for periodo in periodos:
 
-            filtro = (
-                dados["_LOCAL"].astype(str) == str(local)
-            ) & (
-                dados[chave_periodo] == periodo
+            bloco = dados[
+                (dados["_LOCAL"] == local)
+                &
+                (
+                    dados["_PERIODO"]
+                    == periodo
+                )
+            ]
+
+            linha.append(
+                contar_os(bloco)
             )
 
-            quantidade = contar_os(
-                dados.loc[filtro, "_PROTOCOLO"]
-            )
+        tabela[local] = linha
 
-            total += quantidade
+    resultado = pd.DataFrame(
+        tabela,
+        index=periodos,
+    ).T
 
-            linha[periodo] = quantidade
+    resultado.index.name = "LOCAL"
 
-        linha["TOTAL"] = total
-
-        registros.append(linha)
-
-    matriz = pd.DataFrame(registros)
-
-    return matriz, periodos
+    return resultado
 
 
 # ============================================================
-# FORMATAÇÃO DOS PERÍODOS
+# DESENHO
 # ============================================================
 
-def formatar_periodo(periodo, modo):
-
-    periodo = pd.Timestamp(periodo)
-
-    if modo == "Por dia":
-
-        return periodo.strftime("%d/%m")
-
-    mes = MESES_PT.get(
-        periodo.month,
-        periodo.strftime("%b")
-    )
-
-    return f"{mes}/{periodo.strftime('%y')}"
-
-
-# ============================================================
-# MEDIÇÃO DE TEXTO
-# ============================================================
-
-def medir_texto(draw, texto, fonte):
-
-    try:
-
-        caixa = draw.textbbox(
-            (0, 0),
-            str(texto),
-            font=fonte
-        )
-
-        return (
-            caixa[2] - caixa[0],
-            caixa[3] - caixa[1]
-        )
-
-    except Exception:
-
-        return draw.textsize(
-            str(texto),
-            font=fonte
-        )
-
-
-# ============================================================
-# DESENHAR TEXTO CENTRALIZADO
-# ============================================================
-
-def desenhar_texto_centralizado(
+def texto_centralizado(
     draw,
+    box,
     texto,
-    caixa,
-    fonte,
-    fill=COR_PRETO
+    fonte_obj,
+    fill,
 ):
 
-    x1, y1, x2, y2 = caixa
+    x1, y1, x2, y2 = box
 
-    largura, altura = medir_texto(
-        draw,
+    bbox = draw.textbbox(
+        (0, 0),
         texto,
-        fonte
+        font=fonte_obj,
     )
 
-    x = x1 + (x2 - x1 - largura) / 2
-    y = y1 + (y2 - y1 - altura) / 2
+    largura = bbox[2] - bbox[0]
+    altura = bbox[3] - bbox[1]
+
+    x = (
+        x1
+        + ((x2 - x1) - largura) / 2
+    )
+
+    y = (
+        y1
+        + ((y2 - y1) - altura) / 2
+        - 2
+    )
 
     draw.text(
         (x, y),
-        str(texto),
-        font=fonte,
-        fill=fill
+        texto,
+        font=fonte_obj,
+        fill=fill,
     )
 
 
-# ============================================================
-# DESENHO DA TABELA
-# ============================================================
+def cor_intensidade(
+    valor,
+    maximo,
+):
 
-def desenhar_tabela(
-    draw,
-    matriz,
-    periodos,
-    modo,
+    if maximo <= 0 or valor <= 0:
+        return "#F1F4F7"
+
+    proporcao = valor / maximo
+
+    if proporcao >= 0.75:
+        return "#123B5D"
+
+    if proporcao >= 0.50:
+        return "#2B8CC4"
+
+    if proporcao >= 0.25:
+        return "#7BB8D8"
+
+    return "#DCECF5"
+
+
+def cor_texto_celula(
+    valor,
+    maximo,
+):
+
+    if (
+        maximo > 0
+        and valor / maximo >= 0.75
+    ):
+        return BRANCO
+
+    return AZUL_ESCURO
+
+
+def desenhar_logo(
+    imagem,
+    logo_path,
     x,
     y,
-    largura_total,
+    max_width,
+    max_height,
 ):
-    """
-    Desenha a tabela principal.
 
-    A tabela ocupa toda a largura disponível.
-    Quando existem muitos períodos, eles são divididos
-    em blocos verticais para manter o relatório em formato
-    vertical e preservar a leitura.
-    """
+    if not logo_path.exists():
+        return
 
-    if matriz is None or matriz.empty:
-        return y
+    try:
 
-    # --------------------------------------------------------
-    # CONFIGURAÇÕES
-    # --------------------------------------------------------
+        logo = Image.open(
+            logo_path
+        ).convert("RGBA")
 
-    margem = 25
-
-    altura_cabecalho = 52
-    altura_linha = 43
-
-    fonte_cabecalho = obter_fonte(
-        18,
-        negrito=True
-    )
-
-    fonte_local = obter_fonte(
-        16,
-        negrito=False
-    )
-
-    fonte_valor = obter_fonte(
-        16,
-        negrito=True
-    )
-
-    fonte_total = obter_fonte(
-        17,
-        negrito=True
-    )
-
-    # --------------------------------------------------------
-    # LARGURAS
-    # --------------------------------------------------------
-
-    largura_util = (
-        largura_total
-        - (margem * 2)
-    )
-
-    largura_local = 360
-    largura_total_coluna = 110
-
-    largura_periodo_disponivel = (
-        largura_util
-        - largura_local
-        - largura_total_coluna
-    )
-
-    # Número máximo de períodos por bloco.
-    #
-    # Isso evita que uma visualização diária com muitos dias
-    # gere uma tabela horizontal impossível de ler.
-    # --------------------------------------------------------
-
-    largura_minima_periodo = 72
-
-    periodos_por_bloco = max(
-        1,
-        int(
-            largura_periodo_disponivel
-            / largura_minima_periodo
-        )
-    )
-
-    # Mantém um limite visual confortável.
-    periodos_por_bloco = min(
-        periodos_por_bloco,
-        14
-    )
-
-    blocos = [
-        periodos[i:i + periodos_por_bloco]
-        for i in range(
-            0,
-            len(periodos),
-            periodos_por_bloco
-        )
-    ]
-
-    y_atual = y
-
-    # --------------------------------------------------------
-    # CADA BLOCO DE PERÍODOS
-    # --------------------------------------------------------
-
-    for numero_bloco, periodos_bloco in enumerate(blocos):
-
-        numero_periodos = len(
-            periodos_bloco
-        )
-
-        largura_periodo = (
-            largura_periodo_disponivel
-            / numero_periodos
-        )
-
-        # ----------------------------------------------------
-        # CABEÇALHO DO BLOCO
-        # ----------------------------------------------------
-
-        x_atual = x + margem
-
-        y_inicio = y_atual
-
-        # ----------------------------------------------------
-        # LOCAL
-        # ----------------------------------------------------
-
-        x1 = x_atual
-        x2 = x1 + largura_local
-
-        draw.rectangle(
-            [
-                x1,
-                y_inicio,
-                x2,
-                y_inicio + altura_cabecalho
-            ],
-            fill=COR_AZUL_ESCURO,
-            outline=COR_BRANCO,
-            width=1
-        )
-
-        desenhar_texto_centralizado(
-            draw,
-            "BAIRRO / CIDADE",
+        logo.thumbnail(
             (
-                x1,
-                y_inicio,
-                x2,
-                y_inicio + altura_cabecalho
+                max_width,
+                max_height,
             ),
-            fonte_cabecalho,
-            COR_BRANCO
+            Image.Resampling.LANCZOS,
         )
 
-        x_atual = x2
-
-        # ----------------------------------------------------
-        # PERÍODOS
-        # ----------------------------------------------------
-
-        for periodo in periodos_bloco:
-
-            x1 = x_atual
-            x2 = x1 + largura_periodo
-
-            draw.rectangle(
-                [
-                    x1,
-                    y_inicio,
-                    x2,
-                    y_inicio + altura_cabecalho
-                ],
-                fill=COR_AZUL_ESCURO,
-                outline=COR_BRANCO,
-                width=1
-            )
-
-            desenhar_texto_centralizado(
-                draw,
-                formatar_periodo(
-                    periodo,
-                    modo
-                ),
-                (
-                    x1,
-                    y_inicio,
-                    x2,
-                    y_inicio + altura_cabecalho
-                ),
-                fonte_cabecalho,
-                COR_BRANCO
-            )
-
-            x_atual = x2
-
-        # ----------------------------------------------------
-        # TOTAL
-        # ----------------------------------------------------
-
-        x1 = x_atual
-        x2 = x1 + largura_total_coluna
-
-        draw.rectangle(
-            [
-                x1,
-                y_inicio,
-                x2,
-                y_inicio + altura_cabecalho
-            ],
-            fill=COR_AZUL_ESCURO,
-            outline=COR_BRANCO,
-            width=1
-        )
-
-        desenhar_texto_centralizado(
-            draw,
-            "TOTAL",
+        imagem.alpha_composite(
+            logo,
             (
-                x1,
-                y_inicio,
-                x2,
-                y_inicio + altura_cabecalho
+                x,
+                y,
             ),
-            fonte_cabecalho,
-            COR_BRANCO
         )
 
-        # ----------------------------------------------------
-        # LINHAS
-        # ----------------------------------------------------
-
-        y_linha = (
-            y_inicio
-            + altura_cabecalho
-        )
-
-        for indice, linha in matriz.iterrows():
-
-            fundo = (
-                COR_BRANCO
-                if indice % 2 == 0
-                else COR_CINZA
-            )
-
-            x_atual = x + margem
-
-            # --------------------------------------------
-            # LOCAL
-            # --------------------------------------------
-
-            x1 = x_atual
-            x2 = x1 + largura_local
-
-            draw.rectangle(
-                [
-                    x1,
-                    y_linha,
-                    x2,
-                    y_linha + altura_linha
-                ],
-                fill=fundo,
-                outline=COR_CINZA_BORDA,
-                width=1
-            )
-
-            texto_local = str(
-                linha["LOCAL"]
-            )
-
-            texto_local = abreviar_texto(
-                texto_local,
-                limite=38
-            )
-
-            draw.text(
-                (
-                    x1 + 12,
-                    y_linha + 11
-                ),
-                texto_local,
-                font=fonte_local,
-                fill=COR_PRETO
-            )
-
-            x_atual = x2
-
-            # --------------------------------------------
-            # PERÍODOS
-            # --------------------------------------------
-
-            for periodo in periodos_bloco:
-
-                x1 = x_atual
-                x2 = x1 + largura_periodo
-
-                valor = linha.get(
-                    periodo,
-                    0
-                )
-
-                try:
-                    valor = int(valor)
-                except Exception:
-                    valor = 0
-
-                draw.rectangle(
-                    [
-                        x1,
-                        y_linha,
-                        x2,
-                        y_linha + altura_linha
-                    ],
-                    fill=fundo,
-                    outline=COR_CINZA_BORDA,
-                    width=1
-                )
-
-                desenhar_texto_centralizado(
-                    draw,
-                    formatar_numero(valor),
-                    (
-                        x1,
-                        y_linha,
-                        x2,
-                        y_linha + altura_linha
-                    ),
-                    fonte_valor,
-                    COR_PRETO
-                )
-
-                x_atual = x2
-
-            # --------------------------------------------
-            # TOTAL
-            # --------------------------------------------
-
-            x1 = x_atual
-            x2 = x1 + largura_total_coluna
-
-            valor_total = linha.get(
-                "TOTAL",
-                0
-            )
-
-            try:
-                valor_total = int(valor_total)
-            except Exception:
-                valor_total = 0
-
-            draw.rectangle(
-                [
-                    x1,
-                    y_linha,
-                    x2,
-                    y_linha + altura_linha
-                ],
-                fill=COR_AZUL_CLARO,
-                outline=COR_CINZA_BORDA,
-                width=1
-            )
-
-            desenhar_texto_centralizado(
-                draw,
-                formatar_numero(valor_total),
-                (
-                    x1,
-                    y_linha,
-                    x2,
-                    y_linha + altura_linha
-                ),
-                fonte_total,
-                COR_AZUL_ESCURO
-            )
-
-            y_linha += altura_linha
-
-        # ----------------------------------------------------
-        # PRÓXIMO BLOCO
-        # ----------------------------------------------------
-
-        y_atual = y_linha
-
-        if numero_bloco < len(blocos) - 1:
-
-            # Espaço discreto entre os blocos.
-            y_atual += 35
-
-            # Identificação do bloco seguinte.
-            texto_bloco = (
-                f"Continuação — "
-                f"períodos seguintes"
-            )
-
-            draw.text(
-                (
-                    x + margem,
-                    y_atual - 25
-                ),
-                texto_bloco,
-                font=obter_fonte(
-                    14,
-                    negrito=True
-                ),
-                fill=COR_CINZA_TEXTO
-            )
-
-    return y_atual
+    except Exception:
+        pass
 
 
 # ============================================================
-# GERAÇÃO DO RELATÓRIO
+# PAINEL
 # ============================================================
 
 def gerar_painel(
-    dados,
-    operacao,
+    df,
+    modulo,
     modo,
+    base=None,
 ):
-    """
-    Gera a imagem final do relatório.
 
-    O relatório é focado exclusivamente na tabela de dados.
-    """
+    if df is None or df.empty:
 
-    if dados is None or dados.empty:
-        return None
+        raise ValueError(
+            "Não existem dados para gerar o relatório."
+        )
 
-    resultado = construir_matriz(
+    dados = df.copy()
+
+    # ========================================================
+    # FILTRO API
+    # ========================================================
+
+    if modulo == "API" and base:
+
+        dados = dados[
+            dados["_BASE"] == base
+        ].copy()
+
+    if dados.empty:
+
+        raise ValueError(
+            "Não existem registros para o filtro selecionado."
+        )
+
+    # ========================================================
+    # TABELA
+    # ========================================================
+
+    tabela = gerar_tabela_local_periodo(
         dados,
-        modo
+        modo,
     )
 
-    if resultado is None:
-        return None
+    if tabela.empty:
 
-    matriz, periodos = resultado
+        raise ValueError(
+            "Não foi possível gerar a tabela."
+        )
 
-    if matriz is None or matriz.empty:
-        return None
+    tabela = tabela.sort_index()
+
+    periodos = list(
+        tabela.columns
+    )
+
+    locais = list(
+        tabela.index
+    )
 
     # ========================================================
     # DIMENSÕES
     # ========================================================
 
+    margem = 60
+
+    # Mantém o relatório vertical.
     largura = 1500
 
-    margem_lateral = 30
+    altura_cabecalho = 260
 
-    # --------------------------------------------------------
-    # Altura do cabeçalho
-    # --------------------------------------------------------
+    altura_linha = 58
 
-    altura_cabecalho = 250
+    # Ajuste da tabela para aproveitar melhor
+    # a largura disponível.
+    largura_local = 390
 
-    # --------------------------------------------------------
-    # Dimensões da tabela
-    # --------------------------------------------------------
+    largura_periodo = 90
 
-    altura_tabela_cabecalho = 52
-    altura_linha = 43
+    largura_total = 110
 
-    largura_util = (
-        largura
-        - (25 * 2)
-    )
+    # ========================================================
+    # QUANTIDADE DE COLUNAS
+    # ========================================================
 
-    largura_local = 360
-    largura_total_coluna = 110
+    # Os períodos são divididos em blocos verticais.
+    # Isso evita que muitos dias/meses façam a tabela
+    # ultrapassar os limites da imagem.
 
-    largura_periodo_disponivel = (
-        largura_util
-        - largura_local
-        - largura_total_coluna
-    )
+    periodos_por_bloco = 10
 
-    largura_minima_periodo = 72
-
-    periodos_por_bloco = max(
-        1,
-        int(
-            largura_periodo_disponivel
-            / largura_minima_periodo
-        )
-    )
-
-    periodos_por_bloco = min(
-        periodos_por_bloco,
-        14
-    )
-
-    quantidade_blocos = max(
-        1,
-        int(
-            np.ceil(
-                len(periodos)
-                / periodos_por_bloco
-            )
-        )
-    )
-
-    quantidade_linhas = len(matriz)
-
-    altura_por_bloco = (
-        altura_tabela_cabecalho
-        + (
-            quantidade_linhas
-            * altura_linha
-        )
-    )
-
-    espaco_entre_blocos = (
-        max(
+    blocos_periodos = [
+        periodos[i:i + periodos_por_bloco]
+        for i in range(
             0,
-            quantidade_blocos - 1
+            len(periodos),
+            periodos_por_bloco,
         )
-        * 35
-    )
+    ]
+
+    if not blocos_periodos:
+        blocos_periodos = [[]]
+
+    altura_tabela_total = 0
+
+    for bloco in blocos_periodos:
+
+        altura_tabela_total += (
+            45
+            + altura_linha
+            + len(locais) * altura_linha
+            + 45
+        )
+
+    altura_rodape = 90
 
     altura = (
         altura_cabecalho
-        + (
-            quantidade_blocos
-            * altura_por_bloco
-        )
-        + espaco_entre_blocos
-        + 50
-    )
-
-    altura = max(
-        altura,
-        600
+        + altura_tabela_total
+        + altura_rodape
     )
 
     # ========================================================
-    # CANVAS
+    # IMAGEM
     # ========================================================
 
     imagem = Image.new(
-        "RGB",
+        "RGBA",
         (
             largura,
-            altura
+            altura,
         ),
-        COR_BRANCO
+        FUNDO,
     )
 
     draw = ImageDraw.Draw(
@@ -1361,188 +1219,483 @@ def gerar_painel(
     )
 
     # ========================================================
-    # FONTES
-    # ========================================================
-
-    fonte_titulo = obter_fonte(
-        34,
-        negrito=True
-    )
-
-    fonte_subtitulo = obter_fonte(
-        20,
-        negrito=False
-    )
-
-    fonte_periodo = obter_fonte(
-        18,
-        negrito=True
-    )
-
-    fonte_rodape = obter_fonte(
-        14,
-        negrito=False
-    )
-
-    # ========================================================
     # CABEÇALHO
     # ========================================================
 
-    y = 30
-
-    # --------------------------------------------------------
-    # LOGO
-    # --------------------------------------------------------
-
-    caminho_logo = LOGOS.get(
-        operacao
+    draw.rectangle(
+        (
+            0,
+            0,
+            largura,
+            12,
+        ),
+        fill=AZUL_ESCURO,
     )
 
-    if caminho_logo:
+    titulo = TITULOS[
+        modulo
+    ]
 
-        try:
+    if modulo == "API":
 
-            logo = Image.open(
-                caminho_logo
-            ).convert("RGBA")
+        if base:
 
-            largura_logo_max = 230
-            altura_logo_max = 100
-
-            fator = min(
-                largura_logo_max / logo.width,
-                altura_logo_max / logo.height,
-                1
+            subtitulo = (
+                "Reclamações de Falta de Água "
+                f"• Base: {base}"
             )
 
-            nova_largura = int(
-                logo.width * fator
+        else:
+
+            subtitulo = (
+                "Reclamações de Falta de Água "
+                "• Todas as bases"
             )
 
-            nova_altura = int(
-                logo.height * fator
-            )
+    else:
 
-            logo = logo.resize(
-                (
-                    nova_largura,
-                    nova_altura
-                ),
-                Image.LANCZOS
-            )
-
-            imagem.paste(
-                logo,
-                (
-                    margem_lateral,
-                    y
-                ),
-                logo
-            )
-
-        except Exception:
-            pass
-
-    # --------------------------------------------------------
-    # TÍTULO
-    # --------------------------------------------------------
-
-    titulo = TITULOS.get(
-        operacao,
-        "Relatório de Falta de Água - COI"
-    )
+        subtitulo = (
+            "Reclamações de Falta de Água"
+        )
 
     draw.text(
         (
-            300,
-            42
+            margem,
+            50,
         ),
         titulo,
-        font=fonte_titulo,
-        fill=COR_AZUL_ESCURO
-    )
-
-    # --------------------------------------------------------
-    # SUBTÍTULO
-    # --------------------------------------------------------
-
-    empresa = NOMES_EMPRESAS.get(
-        operacao,
-        ""
+        font=fonte(
+            38,
+            True,
+        ),
+        fill=AZUL_ESCURO,
     )
 
     draw.text(
         (
-            300,
-            92
+            margem,
+            108,
         ),
-        f"Empresa: {empresa}",
-        font=fonte_subtitulo,
-        fill=COR_CINZA_TEXTO
+        subtitulo,
+        font=fonte(
+            21,
+        ),
+        fill=CINZA,
     )
 
-    # --------------------------------------------------------
-    # PERÍODO
-    # --------------------------------------------------------
+    # ========================================================
+    # INFORMAÇÃO TEMPORAL
+    # ========================================================
 
-    periodo_texto = texto_cabecalho_periodo(
-        dados
+    data_min = dados[
+        "_DATA"
+    ].min()
+
+    data_max = dados[
+        "_DATA"
+    ].max()
+
+    if modo == "Por dia":
+
+        periodo_texto = (
+            f"Período: "
+            f"{data_min.strftime('%d/%m/%Y')} "
+            f"a "
+            f"{data_max.strftime('%d/%m/%Y')}"
+        )
+
+    else:
+
+        periodo_texto = (
+            f"Período: "
+            f"{MESES_PT[data_min.month]}/"
+            f"{data_min.year} "
+            f"a "
+            f"{MESES_PT[data_max.month]}/"
+            f"{data_max.year}"
+        )
+
+    draw.text(
+        (
+            margem,
+            155,
+        ),
+        periodo_texto,
+        font=fonte(17),
+        fill=CINZA,
     )
 
     draw.text(
         (
-            300,
-            130
+            margem,
+            190,
         ),
-        f"Período: {periodo_texto}",
-        font=fonte_periodo,
-        fill=COR_AZUL
-    )
-
-    # --------------------------------------------------------
-    # TIPO DE VISUALIZAÇÃO
-    # --------------------------------------------------------
-
-    draw.text(
         (
-            300,
-            165
+            "Visualização: "
+            + modo
+            + " • "
+            + (
+                "Bairros"
+                if modulo in ["THE", "TIM"]
+                else "Cidades"
+            )
         ),
-        f"Visualização: {modo}",
-        font=fonte_subtitulo,
-        fill=COR_CINZA_TEXTO
+        font=fonte(16),
+        fill=CINZA,
     )
 
     # ========================================================
-    # LINHA DIVISÓRIA
+    # LOGO
     # ========================================================
 
-    draw.line(
-        [
-            margem_lateral,
-            220,
-            largura - margem_lateral,
-            220
-        ],
-        fill=COR_CINZA_BORDA,
-        width=2
+    desenhar_logo(
+        imagem,
+        LOGOS[modulo],
+        largura - margem - 280,
+        45,
+        280,
+        120,
     )
 
     # ========================================================
-    # TABELA
+    # ÁREA DAS TABELAS
     # ========================================================
 
-    y_tabela = 240
+    y_atual = altura_cabecalho
 
-    desenhar_tabela(
-        draw=draw,
-        matriz=matriz,
-        periodos=periodos,
-        modo=modo,
-        x=0,
-        y=y_tabela,
-        largura_total=largura
-    )
+    maximo = int(
+        tabela[
+            periodos
+        ].max().max()
+    ) if periodos else 0
+
+    for numero_bloco, bloco in enumerate(
+        blocos_periodos
+    ):
+
+        # ----------------------------------------------------
+        # TÍTULO DO BLOCO
+        # ----------------------------------------------------
+
+        if modo == "Por dia":
+
+            titulo_bloco = (
+                "VOLUME POR "
+                + (
+                    "BAIRRO"
+                    if modulo in ["THE", "TIM"]
+                    else "CIDADE"
+                )
+                + " — "
+                + (
+                    f"{bloco[0].strftime('%d/%m')}"
+                    if len(bloco) == 1
+                    else
+                    f"{bloco[0].strftime('%d/%m')} "
+                    f"a "
+                    f"{bloco[-1].strftime('%d/%m')}"
+                )
+            )
+
+        else:
+
+            titulo_bloco = (
+                "VOLUME POR "
+                + (
+                    "BAIRRO"
+                    if modulo in ["THE", "TIM"]
+                    else "CIDADE"
+                )
+                + " — "
+                + (
+                    texto_cabecalho_periodo(
+                        bloco[0],
+                        modo,
+                    )
+                    if len(bloco) == 1
+                    else
+                    f"{texto_cabecalho_periodo(bloco[0], modo)} "
+                    f"a "
+                    f"{texto_cabecalho_periodo(bloco[-1], modo)}"
+                )
+            )
+
+        draw.text(
+            (
+                margem,
+                y_atual,
+            ),
+            titulo_bloco,
+            font=fonte(
+                24,
+                True,
+            ),
+            fill=AZUL_ESCURO,
+        )
+
+        y_inicio = (
+            y_atual + 45
+        )
+
+        # ----------------------------------------------------
+        # LARGURA DO BLOCO
+        # ----------------------------------------------------
+
+        largura_tabela = (
+            largura_local
+            + len(bloco)
+            * largura_periodo
+            + largura_total
+        )
+
+        x_inicio = margem
+
+        # ----------------------------------------------------
+        # CABEÇALHO
+        # ----------------------------------------------------
+
+        draw.rounded_rectangle(
+            (
+                x_inicio,
+                y_inicio,
+                x_inicio + largura_tabela,
+                y_inicio + altura_linha,
+            ),
+            radius=8,
+            fill=AZUL_ESCURO,
+        )
+
+        nome_local = (
+            "BAIRRO"
+            if modulo in ["THE", "TIM"]
+            else "CIDADE"
+        )
+
+        draw.text(
+            (
+                x_inicio + 18,
+                y_inicio + 17,
+            ),
+            nome_local,
+            font=fonte(
+                17,
+                True,
+            ),
+            fill=BRANCO,
+        )
+
+        for indice, periodo in enumerate(
+            bloco
+        ):
+
+            x = (
+                x_inicio
+                + largura_local
+                + indice
+                * largura_periodo
+            )
+
+            titulo_periodo = (
+                texto_cabecalho_periodo(
+                    periodo,
+                    modo,
+                )
+            )
+
+            texto_centralizado(
+                draw,
+                (
+                    x,
+                    y_inicio,
+                    x + largura_periodo,
+                    y_inicio + altura_linha,
+                ),
+                titulo_periodo,
+                fonte(
+                    14,
+                    True,
+                ),
+                BRANCO,
+            )
+
+        x_total = (
+            x_inicio
+            + largura_local
+            + len(bloco)
+            * largura_periodo
+        )
+
+        texto_centralizado(
+            draw,
+            (
+                x_total,
+                y_inicio,
+                x_total + largura_total,
+                y_inicio + altura_linha,
+            ),
+            "TOTAL",
+            fonte(
+                15,
+                True,
+            ),
+            BRANCO,
+        )
+
+        # ----------------------------------------------------
+        # LINHAS
+        # ----------------------------------------------------
+
+        for linha_idx, local in enumerate(
+            locais
+        ):
+
+            y = (
+                y_inicio
+                + altura_linha
+                + linha_idx
+                * altura_linha
+            )
+
+            fill_linha = (
+                BRANCO
+                if linha_idx % 2 == 0
+                else "#F8FAFC"
+            )
+
+            draw.rectangle(
+                (
+                    x_inicio,
+                    y,
+                    x_inicio + largura_tabela,
+                    y + altura_linha,
+                ),
+                fill=fill_linha,
+            )
+
+            # -----------------------------------------------
+            # LOCAL
+            # -----------------------------------------------
+
+            texto_local = abreviar_texto(
+                local,
+                38,
+            )
+
+            draw.text(
+                (
+                    x_inicio + 18,
+                    y + 17,
+                ),
+                texto_local,
+                font=fonte(
+                    15,
+                    True,
+                ),
+                fill=AZUL_ESCURO,
+            )
+
+            # -----------------------------------------------
+            # PERÍODOS
+            # -----------------------------------------------
+
+            for indice, periodo in enumerate(
+                bloco
+            ):
+
+                x = (
+                    x_inicio
+                    + largura_local
+                    + indice
+                    * largura_periodo
+                )
+
+                valor = int(
+                    tabela.loc[
+                        local,
+                        periodo,
+                    ]
+                )
+
+                cor = cor_intensidade(
+                    valor,
+                    maximo,
+                )
+
+                draw.rectangle(
+                    (
+                        x + 2,
+                        y + 2,
+                        x
+                        + largura_periodo
+                        - 2,
+                        y
+                        + altura_linha
+                        - 2,
+                    ),
+                    fill=cor,
+                )
+
+                texto_centralizado(
+                    draw,
+                    (
+                        x,
+                        y,
+                        x + largura_periodo,
+                        y + altura_linha,
+                    ),
+                    formatar_numero(
+                        valor
+                    ),
+                    fonte(
+                        14,
+                        True,
+                    ),
+                    cor_texto_celula(
+                        valor,
+                        maximo,
+                    ),
+                )
+
+            # -----------------------------------------------
+            # TOTAL DO LOCAL
+            # -----------------------------------------------
+
+            total_local = int(
+                tabela.loc[
+                    local,
+                    periodos,
+                ].sum()
+            )
+
+            texto_centralizado(
+                draw,
+                (
+                    x_total,
+                    y,
+                    x_total + largura_total,
+                    y + altura_linha,
+                ),
+                formatar_numero(
+                    total_local
+                ),
+                fonte(
+                    15,
+                    True,
+                ),
+                AZUL_ESCURO,
+            )
+
+        # ----------------------------------------------------
+        # SEPARAÇÃO ENTRE BLOCOS
+        # ----------------------------------------------------
+
+        y_atual = (
+            y_inicio
+            + altura_linha
+            + len(locais)
+            * altura_linha
+            + 45
+        )
 
     # ========================================================
     # RODAPÉ
@@ -1550,301 +1703,402 @@ def gerar_painel(
 
     y_rodape = (
         altura
-        - 30
+        - altura_rodape
+        + 20
     )
 
-    texto_rodape = (
-        "Controle Operacional Integrado - COI"
+    draw.line(
+        (
+            margem,
+            y_rodape,
+            largura - margem,
+            y_rodape,
+        ),
+        fill=CINZA_CLARO,
+        width=2,
     )
 
-    largura_rodape, altura_rodape = medir_texto(
-        draw,
-        texto_rodape,
-        fonte_rodape
+    empresa = NOMES_EMPRESAS[
+        modulo
+    ]
+
+    draw.text(
+        (
+            margem,
+            y_rodape + 25,
+        ),
+        (
+            f"{empresa} • "
+            "Controle Operacional Integrado — COI"
+        ),
+        font=fonte(
+            15,
+        ),
+        fill=CINZA,
     )
 
     draw.text(
         (
-            (
-                largura
-                - largura_rodape
-            ) / 2,
-            y_rodape
+            largura - margem - 250,
+            y_rodape + 25,
         ),
-        texto_rodape,
-        font=fonte_rodape,
-        fill=COR_CINZA_TEXTO
+        datetime.now().strftime(
+            "Gerado em %d/%m/%Y %H:%M"
+        ),
+        font=fonte(
+            14,
+        ),
+        fill=CINZA,
     )
 
-    return imagem
+    # ========================================================
+    # PNG
+    # ========================================================
+
+    output = io.BytesIO()
+
+    imagem_rgb = imagem.convert(
+        "RGB"
+    )
+
+    imagem_rgb.save(
+        output,
+        format="PNG",
+        optimize=True,
+    )
+
+    output.seek(0)
+
+    return output
 
 
 # ============================================================
-# TÍTULO DA PÁGINA
+# INTERFACE
 # ============================================================
 
 st.markdown(
-    '<div class="titulo-principal">'
-    'Relatório de Falta de Água - COI'
-    '</div>',
-    unsafe_allow_html=True
+    '<div class="module-title">'
+    "Relatório de Falta de Água - COI"
+    "</div>",
+    unsafe_allow_html=True,
 )
 
 st.markdown(
-    '<div class="subtitulo">'
-    'Geração de relatório operacional a partir das O.S. '
-    'de Falta de Água.'
-    '</div>',
-    unsafe_allow_html=True
+    '<div class="module-subtitle">'
+    "Geração de relatório consolidado de reclamações de Falta de Água."
+    "</div>",
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# SELEÇÃO DA OPERAÇÃO
+# UPLOADS
 # ============================================================
 
-st.markdown("### Operação")
-
-operacao = st.radio(
-    "Selecione a operação:",
-    [
-        "API",
-        "THE",
-        "TIM",
-    ],
-    format_func=lambda x: NOMES_EMPRESAS.get(
-        x,
-        x
-    ),
-    horizontal=True
+col_api, col_the, col_tim = st.columns(
+    3,
+    gap="medium",
 )
 
+with col_api:
 
-# ============================================================
-# UPLOAD
-# ============================================================
+    st.markdown("### API")
 
-st.markdown("### Arquivo de dados")
-
-arquivo = st.file_uploader(
-    "Envie a planilha de O.S. de Falta de Água",
-    type=[
-        "xlsx",
-        "xls",
-        "xlsb"
-    ],
-    key=f"upload_{operacao}"
-)
-
-
-# ============================================================
-# MODO
-# ============================================================
-
-st.markdown("### Visualização")
-
-modo = st.radio(
-    "Como deseja visualizar os dados?",
-    [
-        "Por dia",
-        "Por mês",
-    ],
-    horizontal=True
-)
-
-
-# ============================================================
-# PROCESSAMENTO
-# ============================================================
-
-if arquivo is not None:
-
-    dados_brutos = ler_planilha(
-        arquivo
+    arquivos_api = st.file_uploader(
+        "Planilha(s) API",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        accept_multiple_files=True,
+        key="upload_api",
     )
 
-    if dados_brutos is not None:
 
-        dados = preparar_dados(
-            dados_brutos,
-            operacao
-        )
+with col_the:
 
-        if dados is not None and not dados.empty:
+    st.markdown("### THE")
 
-            # =================================================
-            # BASE - APENAS API
-            # =================================================
+    arquivos_the = st.file_uploader(
+        "Planilha(s) THE",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        accept_multiple_files=True,
+        key="upload_the",
+    )
 
-            base_selecionada = None
 
-            if operacao == "API":
+with col_tim:
 
-                bases_disponiveis = sorted(
-                    [
-                        base
-                        for base in dados["_BASE"]
-                        .dropna()
-                        .astype(str)
-                        .unique()
-                        if base.strip()
-                        and base != "Não classificada"
-                    ]
-                )
+    st.markdown("### TIM")
 
-                if bases_disponiveis:
+    arquivos_tim = st.file_uploader(
+        "Planilha(s) TIM",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        accept_multiple_files=True,
+        key="upload_tim",
+    )
 
-                    st.markdown(
-                        "### Base"
-                    )
 
-                    opcoes_base = [
-                        "Todas as bases"
-                    ] + bases_disponiveis
-
-                    base_selecionada = st.selectbox(
-                        "Selecione a base:",
-                        opcoes_base
-                    )
-
-                    if (
-                        base_selecionada
-                        != "Todas as bases"
-                    ):
-
-                        dados = dados[
-                            dados["_BASE"]
-                            == base_selecionada
-                        ].copy()
-
-                else:
-
-                    st.info(
-                        "Não foi possível identificar "
-                        "as bases através do mapeamento "
-                        "de cidades."
-                    )
-
-            # =================================================
-            # RESUMO SIMPLES
-            # =================================================
-
-            if dados.empty:
-
-                st.warning(
-                    "Não existem dados para a seleção realizada."
-                )
-
-            else:
-
-                st.success(
-                    f"{len(dados):,} registros encontrados."
-                    .replace(",", ".")
-                )
-
-                # =================================================
-                # BOTÃO DE GERAÇÃO
-                # =================================================
-
-                if st.button(
-                    "Gerar relatório",
-                    type="primary"
-                ):
-
-                    with st.spinner(
-                        "Gerando relatório..."
-                    ):
-
-                        imagem = gerar_painel(
-                            dados=dados,
-                            operacao=operacao,
-                            modo=modo
-                        )
-
-                    if imagem is not None:
-
-                        st.session_state[
-                            "relatorio_fa"
-                        ] = imagem
-
-                        st.session_state[
-                            "relatorio_operacao"
-                        ] = operacao
-
-                        st.session_state[
-                            "relatorio_modo"
-                        ] = modo
-
-                    else:
-
-                        st.error(
-                            "Não foi possível gerar "
-                            "o relatório."
-                        )
+st.divider()
 
 
 # ============================================================
-# EXIBIÇÃO DO RELATÓRIO
+# CONFIGURAÇÃO
 # ============================================================
 
-if (
-    "relatorio_fa"
-    in st.session_state
+st.markdown(
+    "### Configuração do relatório"
+)
+
+col1, col2 = st.columns(
+    [1, 1],
+    gap="large",
+)
+
+with col1:
+
+    modulo = st.radio(
+        "Empresa / operação",
+        [
+            "API",
+            "THE",
+            "TIM",
+        ],
+        horizontal=True,
+    )
+
+
+with col2:
+
+    modo = st.radio(
+        "Apresentação temporal",
+        [
+            "Por dia",
+            "Por mês",
+        ],
+        horizontal=True,
+    )
+
+
+# ============================================================
+# ARQUIVOS
+# ============================================================
+
+arquivos = {
+    "API": arquivos_api,
+    "THE": arquivos_the,
+    "TIM": arquivos_tim,
+}
+
+arquivos_selecionados = arquivos[
+    modulo
+]
+
+
+# ============================================================
+# LEITURA E CONSOLIDAÇÃO DOS ARQUIVOS
+# ============================================================
+
+if not arquivos_selecionados:
+
+    st.info(
+        f"Carregue uma ou mais planilhas de {modulo} "
+        "para gerar o relatório."
+    )
+
+    st.stop()
+
+
+with st.spinner(
+    f"Consolidando os dados de {modulo}..."
 ):
 
-    imagem_relatorio = (
-        st.session_state[
-            "relatorio_fa"
+    df_original = ler_planilhas_consolidadas(
+        arquivos_selecionados
+    )
+
+    if df_original is None:
+        st.stop()
+
+    df, erro = preparar_dados(
+        df_original,
+        modulo,
+    )
+
+
+if erro:
+
+    st.error(
+        erro
+    )
+
+    st.stop()
+
+
+# ============================================================
+# API — BASE
+# ============================================================
+
+base_selecionada = None
+
+if modulo == "API":
+
+    st.markdown(
+        "#### Base operacional"
+    )
+
+    bases_disponiveis = sorted(
+        [
+            b
+            for b in df["_BASE"]
+            .dropna()
+            .unique()
+            if b
         ]
     )
 
-    operacao_relatorio = (
-        st.session_state.get(
-            "relatorio_operacao",
-            operacao
-        )
+    opcoes_base = [
+        "Todas"
+    ] + bases_disponiveis
+
+    base_escolhida = st.selectbox(
+        "Selecione a base",
+        opcoes_base,
     )
 
-    modo_relatorio = (
-        st.session_state.get(
-            "relatorio_modo",
-            modo
-        )
-    )
+    if base_escolhida != "Todas":
 
-    st.markdown("---")
+        base_selecionada = (
+            base_escolhida
+        )
+
+
+st.divider()
+
+
+# ============================================================
+# BOTÃO
+# ============================================================
+
+st.markdown("")
+
+gerar = st.button(
+    "GERAR RELATÓRIO",
+    type="primary",
+    use_container_width=True,
+)
+
+
+# ============================================================
+# GERAÇÃO
+# ============================================================
+
+if gerar:
+
+    with st.spinner(
+        "Gerando relatório..."
+    ):
+
+        try:
+
+            imagem_bytes = gerar_painel(
+                df=df,
+                modulo=modulo,
+                modo=modo,
+                base=base_selecionada,
+            )
+
+            st.session_state[
+                "relatorio_gerado"
+            ] = imagem_bytes.getvalue()
+
+            st.session_state[
+                "relatorio_modulo"
+            ] = modulo
+
+            st.session_state[
+                "relatorio_modo"
+            ] = modo
+
+            st.session_state[
+                "relatorio_base"
+            ] = base_selecionada
+
+        except Exception as erro:
+
+            st.error(
+                f"Erro ao gerar o relatório: {erro}"
+            )
+
+            st.stop()
+
+
+# ============================================================
+# RESULTADO
+# ============================================================
+
+if (
+    "relatorio_gerado"
+    in st.session_state
+):
+
+    st.divider()
 
     st.markdown(
         "### Relatório gerado"
     )
 
+    imagem_final = st.session_state[
+        "relatorio_gerado"
+    ]
+
+    modulo_final = st.session_state[
+        "relatorio_modulo"
+    ]
+
+    modo_final = st.session_state[
+        "relatorio_modo"
+    ]
+
+    base_final = st.session_state[
+        "relatorio_base"
+    ]
+
+    if base_final:
+
+        nome_arquivo = (
+            f"RELATORIO_FA_"
+            f"{modulo_final}_"
+            f"{normalizar(base_final).replace(' ', '_')}_"
+            f"{modo_final.replace(' ', '_')}.png"
+        )
+
+    else:
+
+        nome_arquivo = (
+            f"RELATORIO_FA_"
+            f"{modulo_final}_"
+            f"{modo_final.replace(' ', '_')}.png"
+        )
+
     st.image(
-        imagem_relatorio,
-        use_container_width=True
-    )
-
-    # =========================================================
-    # DOWNLOAD
-    # =========================================================
-
-    buffer = io.BytesIO()
-
-    imagem_relatorio.save(
-        buffer,
-        format="PNG"
-    )
-
-    buffer.seek(0)
-
-    nome_arquivo = (
-        f"relatorio_falta_agua_"
-        f"{operacao_relatorio.lower()}_"
-        f"{modo_relatorio.lower().replace(' ', '_')}.png"
+        imagem_final,
+        use_container_width=True,
     )
 
     st.download_button(
-        label="Baixar relatório em PNG",
-        data=buffer.getvalue(),
+        label="BAIXAR RELATÓRIO EM PNG",
+        data=imagem_final,
         file_name=nome_arquivo,
-        mime="image/png"
+        mime="image/png",
+        use_container_width=True,
     )
