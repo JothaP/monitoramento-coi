@@ -538,22 +538,37 @@ def ler_planilha(arquivo):
     nome = arquivo.name.lower()
 
     try:
-        if nome.endswith(".xlsb"):
+        arquivo.seek(0)
+
+        if nome.endswith(".xlsx"):
             return pd.read_excel(
                 arquivo,
                 sheet_name=0,
-                engine="pyxlsb",
+                engine="openpyxl"
             )
 
-        return pd.read_excel(
-            arquivo,
-            sheet_name=0,
-        )
+        elif nome.endswith(".xlsb"):
+            return pd.read_excel(
+                arquivo,
+                sheet_name=0,
+                engine="pyxlsb"
+            )
+
+        elif nome.endswith(".xls"):
+            return pd.read_excel(
+                arquivo,
+                sheet_name=0,
+                engine="xlrd"
+            )
+
+        else:
+            st.error(
+                "Formato não suportado. Use .xlsx, .xls ou .xlsb."
+            )
+            return None
 
     except Exception as erro:
-        st.error(
-            f"Não foi possível ler o arquivo: {erro}"
-        )
+        st.error(f"Não foi possível ler o arquivo: {erro}")
         return None
 
 
