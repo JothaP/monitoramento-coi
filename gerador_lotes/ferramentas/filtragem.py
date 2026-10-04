@@ -1846,17 +1846,19 @@ def render_filtragem():
             "📊 Comparação com o Arquivo de Eventos"
         )
 
-        texto_comparacao = (
-            gerar_texto_comparacao_eventos(
-                comparacao_eventos,
-                len(
-                    st.session_state.get(
-                        "df_resultado",
-                        pd.DataFrame(),
-                    )
-                ),
-            )
-        )
+        df_resultado_comparacao = st.session_state.get(
+    "df_resultado"
+)
+
+if df_resultado_comparacao is None:
+    df_resultado_comparacao = pd.DataFrame()
+
+texto_comparacao = (
+    gerar_texto_comparacao_eventos(
+        comparacao_eventos,
+        len(df_resultado_comparacao),
+    )
+)
 
         st.info(
             texto_comparacao
