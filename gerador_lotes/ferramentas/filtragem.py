@@ -1828,10 +1828,10 @@ def render_filtragem():
     )
 
     # ========================================================
-    # COMPARAÇÃO COM ARQUIVO DE EVENTOS
-    # ========================================================
+# COMPARAÇÃO COM ARQUIVO DE EVENTOS
+# ========================================================
 
-    comparacao_eventos = st.session_state.get(
+comparacao_eventos = st.session_state.get(
     "df_comparacao_eventos"
 )
 
@@ -1862,7 +1862,7 @@ if (
 
     st.info(
         texto_comparacao
-    ))
+    )
 
     # ========================================================
     # BOTÕES
