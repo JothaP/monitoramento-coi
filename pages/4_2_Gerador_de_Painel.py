@@ -7,6 +7,11 @@ from datetime import datetime, date
 import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter
 
 
 # ============================================================
@@ -1173,6 +1178,391 @@ def contar_os(series):
         return validos.nunique()
 
     return len(series)
+
+
+# ============================================================
+# PLANILHA API — MODELO INTERATIVO
+# ============================================================
+
+def _cabecalhos_unicos(colunas):
+    """Garante cabeçalhos únicos e compatíveis com Tabelas do Excel."""
+
+    usados = set()
+    resultado = []
+
+    for coluna in colunas:
+        base = str(coluna).strip() or "COLUNA"
+        nome = base
+        contador = 2
+
+        while nome in usados:
+            nome = f"{base}_{contador}"
+            contador += 1
+
+        usados.add(nome)
+        resultado.append(nome)
+
+    return resultado
+
+
+def gerar_planilha_api(
+    df,
+    base_inicial=None,
+    modo="Por dia",
+):
+    """
+    Gera um XLSX para o modo API com:
+      - DADOS: tabela estruturada com os registros consolidados;
+      - BASES_CIDADES: cadastro oficial Base x Cidade;
+      - PAINEL_API: tabela dinâmica simulada por fórmulas, com
+        segmentação por Base através de lista suspensa.
+
+    A solução evita imagem estática. A planilha continua editável no Excel
+    e a troca da Base atualiza a visão do painel.
+    """
+
+    if df is None or df.empty:
+        raise ValueError("Não existem dados para gerar a planilha API.")
+
+    dados = df.copy()
+
+    if "_BASE" not in dados.columns or "_LOCAL" not in dados.columns:
+        raise ValueError("Os dados API não possuem Base/Cidade preparados.")
+
+    # ------------------------------------------------------------
+    # CONTAGENS ÚNICAS — mesma regra do relatório atual
+    # ------------------------------------------------------------
+    dados["_DATA"] = pd.to_datetime(dados["_DATA"], errors="coerce").dt.normalize()
+    dados["_MES_ORDEM"] = pd.to_datetime(dados["_MES_ORDEM"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+
+    chave_dia = pd.DataFrame({
+        "base": dados["_BASE"].fillna("").astype(str),
+        "cidade": dados["_LOCAL"].fillna("").astype(str),
+        "data": dados["_DATA"],
+        "protocolo": dados["_PROTOCOLO"],
+    })
+    chave_dia["tem_protocolo"] = chave_dia["protocolo"].notna()
+
+    cont_dia = pd.Series(1, index=dados.index, dtype="int64")
+    mask_proto = chave_dia["tem_protocolo"]
+    cont_dia.loc[mask_proto] = ~chave_dia.loc[mask_proto].duplicated(
+        subset=["base", "cidade", "data", "protocolo"],
+        keep="first",
+    )
+    dados["_CONTAGEM_DIA"] = cont_dia.astype(int)
+
+    chave_mes = pd.DataFrame({
+        "base": dados["_BASE"].fillna("").astype(str),
+        "cidade": dados["_LOCAL"].fillna("").astype(str),
+        "mes": dados["_MES_ORDEM"],
+        "protocolo": dados["_PROTOCOLO"],
+    })
+    chave_mes["tem_protocolo"] = chave_mes["protocolo"].notna()
+
+    cont_mes = pd.Series(1, index=dados.index, dtype="int64")
+    mask_proto_mes = chave_mes["tem_protocolo"]
+    cont_mes.loc[mask_proto_mes] = ~chave_mes.loc[mask_proto_mes].duplicated(
+        subset=["base", "cidade", "mes", "protocolo"],
+        keep="first",
+    )
+    dados["_CONTAGEM_MES"] = cont_mes.astype(int)
+
+    # ------------------------------------------------------------
+    # EXCEL
+    # ------------------------------------------------------------
+    wb = Workbook()
+    ws_painel = wb.active
+    ws_painel.title = "PAINEL_API"
+    ws_dados = wb.create_sheet("DADOS")
+    ws_mapa = wb.create_sheet("BASES_CIDADES")
+
+    # ------------------------------------------------------------
+    # DADOS
+    # ------------------------------------------------------------
+    colunas_originais = [
+        c for c in dados.columns
+        if not str(c).startswith("_")
+    ]
+
+    colunas_saida = colunas_originais + [
+        "COI_Data_Abertura",
+        "COI_Data",
+        "COI_Mes",
+        "COI_Cidade",
+        "COI_Base",
+        "COI_Protocolo",
+        "COI_Contagem_Dia",
+        "COI_Contagem_Mes",
+    ]
+    colunas_saida = _cabecalhos_unicos(colunas_saida)
+
+    ws_dados.append(colunas_saida)
+
+    mapa_coluna_saida = dict(zip(
+        [str(c) for c in colunas_originais],
+        colunas_saida[:len(colunas_originais)],
+    ))
+
+    for idx in dados.index:
+        linha = []
+
+        for coluna in colunas_originais:
+            valor = dados.at[idx, coluna]
+            if pd.isna(valor):
+                valor = None
+            elif isinstance(valor, pd.Timestamp):
+                valor = valor.to_pydatetime()
+            linha.append(valor)
+
+        linha.extend([
+            dados.at[idx, "_ABERTURA"].to_pydatetime() if pd.notna(dados.at[idx, "_ABERTURA"]) else None,
+            dados.at[idx, "_DATA"].to_pydatetime() if pd.notna(dados.at[idx, "_DATA"]) else None,
+            dados.at[idx, "_MES_ORDEM"].to_pydatetime() if pd.notna(dados.at[idx, "_MES_ORDEM"]) else None,
+            normalizar_cidade(dados.at[idx, "_LOCAL"]) if pd.notna(dados.at[idx, "_LOCAL"]) else "",
+            str(dados.at[idx, "_BASE"]) if pd.notna(dados.at[idx, "_BASE"]) else "",
+            str(dados.at[idx, "_PROTOCOLO"]) if pd.notna(dados.at[idx, "_PROTOCOLO"]) else "",
+            int(dados.at[idx, "_CONTAGEM_DIA"]),
+            int(dados.at[idx, "_CONTAGEM_MES"]),
+        ])
+
+        ws_dados.append(linha)
+
+    header_fill = PatternFill("solid", fgColor="123B5D")
+    header_font = Font(color="FFFFFF", bold=True)
+    thin_gray = Side(style="thin", color="D9E2EC")
+
+    for cell in ws_dados[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ws_dados.freeze_panes = "A2"
+    ws_dados.auto_filter.ref = ws_dados.dimensions
+
+    # Formatação de datas
+    nomes_data = {"COI_Data_Abertura", "COI_Data", "COI_Mes"}
+    for cell in ws_dados[1]:
+        if cell.value in nomes_data:
+            col_idx = cell.column
+            for row in range(2, ws_dados.max_row + 1):
+                ws_dados.cell(row, col_idx).number_format = "dd/mm/yyyy"
+
+    ref_dados = f"A1:{get_column_letter(ws_dados.max_column)}{ws_dados.max_row}"
+    tabela_dados = Table(displayName="TabelaDadosAPI", ref=ref_dados)
+    tabela_dados.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws_dados.add_table(tabela_dados)
+
+    # Larguras razoáveis sem alterar a estrutura dos dados.
+    for col_idx, cell in enumerate(ws_dados[1], start=1):
+        valores = [str(ws_dados.cell(r, col_idx).value or "") for r in range(1, min(ws_dados.max_row, 150) + 1)]
+        largura = min(max(max((len(v) for v in valores), default=10) + 2, 10), 38)
+        ws_dados.column_dimensions[get_column_letter(col_idx)].width = largura
+
+    # ------------------------------------------------------------
+    # BASES_CIDADES
+    # ------------------------------------------------------------
+    ws_mapa.append(["BASE", "CIDADE"])
+    for cell in ws_mapa[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+
+    pares = []
+    for cidade, base in BASE_POR_CIDADE.items():
+        pares.append((str(base), str(cidade)))
+    pares.sort(key=lambda x: (normalizar(x[0]), normalizar(x[1])))
+
+    for base, cidade in pares:
+        ws_mapa.append([base, cidade])
+
+    ws_mapa.freeze_panes = "A2"
+    ref_mapa = f"A1:B{ws_mapa.max_row}"
+    tabela_mapa = Table(displayName="TabelaBasesCidades", ref=ref_mapa)
+    tabela_mapa.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws_mapa.add_table(tabela_mapa)
+    ws_mapa.column_dimensions["A"].width = 28
+    ws_mapa.column_dimensions["B"].width = 34
+
+    # ------------------------------------------------------------
+    # LISTA DE BASES PARA A SEGMENTAÇÃO
+    # ------------------------------------------------------------
+    ws_aux = wb.create_sheet("LISTAS")
+    ws_aux.sheet_state = "hidden"
+    bases = sorted(set(BASE_POR_CIDADE.values()), key=normalizar)
+    ws_aux["A1"] = "Todas"
+    for i, base in enumerate(bases, start=2):
+        ws_aux.cell(i, 1, base)
+
+    # ------------------------------------------------------------
+    # PAINEL API
+    # ------------------------------------------------------------
+    ws_painel.sheet_view.showGridLines = False
+    ws_painel["A1"] = "RELATÓRIO DE FALTA DE ÁGUA — API"
+    ws_painel["A1"].font = Font(size=18, bold=True, color="123B5D")
+    ws_painel.merge_cells("A1:H1")
+
+    ws_painel["A3"] = "SEGMENTAÇÃO — BASE"
+    ws_painel["A3"].font = Font(bold=True, color="123B5D")
+    ws_painel["B3"] = base_inicial if base_inicial else "Todas"
+    ws_painel["B3"].font = Font(bold=True)
+    ws_painel["B3"].fill = PatternFill("solid", fgColor="EAF2F8")
+    ws_painel["B3"].border = Border(bottom=Side(style="thin", color="123B5D"))
+
+    dv_base = DataValidation(
+        type="list",
+        formula1=f"=LISTAS!$A$1:$A${len(bases) + 1}",
+        allow_blank=False,
+    )
+    dv_base.error = "Selecione uma base válida."
+    dv_base.errorTitle = "Base inválida"
+    dv_base.prompt = "Escolha a base para atualizar o painel."
+    dv_base.promptTitle = "Segmentação por Base"
+    ws_painel.add_data_validation(dv_base)
+    dv_base.add(ws_painel["B3"])
+
+    ws_painel["D3"] = "MODO"
+    ws_painel["D3"].font = Font(bold=True, color="123B5D")
+    ws_painel["E3"] = modo
+    ws_painel["E3"].font = Font(bold=True)
+
+    ws_painel["A5"] = "Cidade"
+    ws_painel["A5"].fill = header_fill
+    ws_painel["A5"].font = header_font
+    ws_painel["A5"].alignment = Alignment(horizontal="center")
+
+    periodos = sorted(dados["_DATA"].dropna().unique()) if modo == "Por dia" else sorted(dados["_MES_ORDEM"].dropna().unique())
+    if not periodos:
+        raise ValueError("Não foram encontradas datas válidas para o painel API.")
+
+    for j, periodo in enumerate(periodos, start=2):
+        cell = ws_painel.cell(5, j)
+        cell.value = pd.Timestamp(periodo).to_pydatetime()
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.number_format = "dd/mm/yyyy" if modo == "Por dia" else "mm/yyyy"
+
+    col_total = 2 + len(periodos)
+    ws_painel.cell(5, col_total, "Total")
+    ws_painel.cell(5, col_total).fill = header_fill
+    ws_painel.cell(5, col_total).font = header_font
+    ws_painel.cell(5, col_total).alignment = Alignment(horizontal="center")
+
+    # Todas as 242 cidades do cadastro aparecem; a fórmula decide quais
+    # pertencem à Base selecionada e retorna 0 para cidades sem O.S.
+    cidades = cidades_da_base(None)
+    primeira_linha = 6
+
+    for i, cidade in enumerate(cidades, start=primeira_linha):
+        ws_painel.cell(i, 1, cidade)
+
+        for j, periodo in enumerate(periodos, start=2):
+            letra = get_column_letter(j)
+            data_ref = f"{letra}$5"
+
+            if modo == "Por dia":
+                formula = (
+                    f'=IF(COUNTIFS(TabelaBasesCidades[BASE],$B$3,'
+                    f'TabelaBasesCidades[CIDADE],$A{i})=0,"",'
+                    f'SUMIFS(TabelaDadosAPI[COI_Contagem_Dia],TabelaDadosAPI[COI_Base],$B$3,'
+                    f'TabelaDadosAPI[COI_Cidade],$A{i},TabelaDadosAPI[COI_Data],{data_ref}))'
+                )
+            else:
+                formula = (
+                    f'=IF(COUNTIFS(TabelaBasesCidades[BASE],$B$3,'
+                    f'TabelaBasesCidades[CIDADE],$A{i})=0,"",'
+                    f'SUMIFS(TabelaDadosAPI[COI_Contagem_Mes],TabelaDadosAPI[COI_Base],$B$3,'
+                    f'TabelaDadosAPI[COI_Cidade],$A{i},TabelaDadosAPI[COI_Mes],{data_ref}))'
+                )
+
+            ws_painel.cell(i, j, formula)
+            ws_painel.cell(i, j).alignment = Alignment(horizontal="center")
+
+        faixa = f"B{i}:{get_column_letter(col_total - 1)}{i}"
+        ws_painel.cell(i, col_total, f'=IF(COUNT({faixa})=0,"",SUM({faixa}))')
+        ws_painel.cell(i, col_total).alignment = Alignment(horizontal="center")
+
+    ultima_linha = primeira_linha + len(cidades) - 1
+    linha_total = ultima_linha + 1
+    ws_painel.cell(linha_total, 1, "TOTAL")
+    ws_painel.cell(linha_total, 1).font = Font(bold=True)
+
+    for j in range(2, col_total + 1):
+        letra = get_column_letter(j)
+        ws_painel.cell(
+            linha_total,
+            j,
+            f'=IF(COUNT({letra}{primeira_linha}:{letra}{ultima_linha})=0,"",SUM({letra}{primeira_linha}:{letra}{ultima_linha}))',
+        )
+        ws_painel.cell(linha_total, j).font = Font(bold=True)
+        ws_painel.cell(linha_total, j).alignment = Alignment(horizontal="center")
+
+    # Estilo do painel
+    for row in ws_painel.iter_rows(min_row=5, max_row=linha_total, min_col=1, max_col=col_total):
+        for cell in row:
+            cell.border = Border(bottom=thin_gray)
+            cell.alignment = Alignment(
+                horizontal="center" if cell.column > 1 else "left",
+                vertical="center",
+            )
+
+    for cell in ws_painel[linha_total]:
+        cell.fill = PatternFill("solid", fgColor="EAF2F8")
+
+    ws_painel.freeze_panes = "B6"
+    ws_painel.column_dimensions["A"].width = 34
+    for j in range(2, col_total + 1):
+        ws_painel.column_dimensions[get_column_letter(j)].width = 12
+
+    # Filtro na tabela visual do painel.
+    ref_painel = f"A5:{get_column_letter(col_total)}{ultima_linha}"
+    tabela_painel = Table(displayName="TabelaPainelAPI", ref=ref_painel)
+    tabela_painel.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium2",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws_painel.add_table(tabela_painel)
+
+    # Observação de uso.
+    ws_painel.cell(linha_total + 2, 1, "Como usar:")
+    ws_painel.cell(linha_total + 2, 1).font = Font(bold=True, color="123B5D")
+    ws_painel.cell(
+        linha_total + 3,
+        1,
+        "Altere a célula B3 para segmentar o painel por Base. As cidades vinculadas à Base permanecem no painel mesmo quando não possuem O.S.; nesses casos o valor é 0.",
+    )
+    ws_painel.merge_cells(start_row=linha_total + 3, start_column=1, end_row=linha_total + 4, end_column=min(col_total, 8))
+    ws_painel.cell(linha_total + 3, 1).alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Cálculo automático ao abrir no Excel.
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+    except Exception:
+        pass
+
+    # Painel primeiro, depois dados auxiliares.
+    wb.active = 0
+
+    saida = io.BytesIO()
+    wb.save(saida)
+    saida.seek(0)
+    return saida
 
 
 # ============================================================
@@ -2431,28 +2821,54 @@ if gerar:
 
         try:
 
-            imagem_bytes = gerar_painel(
-                df=df,
-                modulo=modulo,
-                modo=modo,
-                base=base_selecionada,
-            )
+            if modulo == "API":
 
-            st.session_state[
-                "relatorio_gerado"
-            ] = imagem_bytes.getvalue()
+                planilha_bytes = gerar_planilha_api(
+                    df=df,
+                    base_inicial=base_selecionada,
+                    modo=modo,
+                )
 
-            st.session_state[
-                "relatorio_modulo"
-            ] = modulo
+                st.session_state[
+                    "relatorio_gerado_xlsx"
+                ] = planilha_bytes.getvalue()
 
-            st.session_state[
-                "relatorio_modo"
-            ] = modo
+                st.session_state[
+                    "relatorio_modulo"
+                ] = modulo
 
-            st.session_state[
-                "relatorio_base"
-            ] = base_selecionada
+                st.session_state[
+                    "relatorio_modo"
+                ] = modo
+
+                st.session_state[
+                    "relatorio_base"
+                ] = base_selecionada
+
+            else:
+
+                imagem_bytes = gerar_painel(
+                    df=df,
+                    modulo=modulo,
+                    modo=modo,
+                    base=base_selecionada,
+                )
+
+                st.session_state[
+                    "relatorio_gerado"
+                ] = imagem_bytes.getvalue()
+
+                st.session_state[
+                    "relatorio_modulo"
+                ] = modulo
+
+                st.session_state[
+                    "relatorio_modo"
+                ] = modo
+
+                st.session_state[
+                    "relatorio_base"
+                ] = base_selecionada
 
         except Exception as erro:
 
@@ -2467,20 +2883,13 @@ if gerar:
 # RESULTADO
 # ============================================================
 
-if (
-    "relatorio_gerado"
-    in st.session_state
-):
+if "relatorio_modulo" in st.session_state:
 
     st.divider()
 
     st.markdown(
         "### Relatório gerado"
     )
-
-    imagem_final = st.session_state[
-        "relatorio_gerado"
-    ]
 
     modulo_final = st.session_state[
         "relatorio_modulo"
@@ -2494,32 +2903,68 @@ if (
         "relatorio_base"
     ]
 
-    if base_final:
+    if modulo_final == "API" and "relatorio_gerado_xlsx" in st.session_state:
 
-        nome_arquivo = (
-            f"RELATORIO_FA_"
-            f"{modulo_final}_"
-            f"{normalizar(base_final).replace(' ', '_')}_"
-            f"{modo_final.replace(' ', '_')}.png"
+        planilha_final = st.session_state[
+            "relatorio_gerado_xlsx"
+        ]
+
+        if base_final:
+            nome_arquivo = (
+                f"RELATORIO_FA_API_"
+                f"{normalizar(base_final).replace(' ', '_')}_"
+                f"{modo_final.replace(' ', '_')}.xlsx"
+            )
+        else:
+            nome_arquivo = (
+                f"RELATORIO_FA_API_"
+                f"{modo_final.replace(' ', '_')}.xlsx"
+            )
+
+        st.success(
+            "Planilha API pronta. Abra no Excel e use a célula "
+            "'SEGMENTAÇÃO — BASE' para trocar a Base do painel."
         )
 
-    else:
-
-        nome_arquivo = (
-            f"RELATORIO_FA_"
-            f"{modulo_final}_"
-            f"{modo_final.replace(' ', '_')}.png"
+        st.download_button(
+            label="BAIXAR PLANILHA API",
+            data=planilha_final,
+            file_name=nome_arquivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
         )
 
-    st.image(
-        imagem_final,
-        use_container_width=True,
-    )
+    elif "relatorio_gerado" in st.session_state:
 
-    st.download_button(
-        label="BAIXAR RELATÓRIO EM PNG",
-        data=imagem_final,
-        file_name=nome_arquivo,
-        mime="image/png",
-        use_container_width=True,
-    )
+        imagem_final = st.session_state[
+            "relatorio_gerado"
+        ]
+
+        if base_final:
+            nome_arquivo = (
+                f"RELATORIO_FA_"
+                f"{modulo_final}_"
+                f"{normalizar(base_final).replace(' ', '_')}_"
+                f"{modo_final.replace(' ', '_')}.png"
+            )
+
+        else:
+            nome_arquivo = (
+                f"RELATORIO_FA_"
+                f"{modulo_final}_"
+                f"{modo_final.replace(' ', '_')}.png"
+            )
+
+        st.image(
+            imagem_final,
+            use_container_width=True,
+        )
+
+        st.download_button(
+            label="BAIXAR RELATÓRIO EM PNG",
+            data=imagem_final,
+            file_name=nome_arquivo,
+            mime="image/png",
+            use_container_width=True,
+        )
+
