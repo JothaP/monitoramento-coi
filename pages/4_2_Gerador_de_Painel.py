@@ -440,11 +440,6 @@ def preparar_dados(df, operacao):
     # --------------------------------------------------------
     # DATA DE ABERTURA
     # --------------------------------------------------------
-    #
-    # IMPORTANTE:
-    # A coluna principal é "Início do SLA".
-    #
-    # --------------------------------------------------------
 
     coluna_abertura = localizar_coluna(
         dados,
@@ -823,10 +818,12 @@ def desenhar_tabela(
     largura_total,
 ):
     """
-    Desenha somente a tabela principal.
+    Desenha a tabela principal.
 
-    A tabela foi ajustada para ocupar praticamente
-    toda a largura disponível da imagem.
+    A tabela ocupa toda a largura disponível.
+    Quando existem muitos períodos, eles são divididos
+    em blocos verticais para manter o relatório em formato
+    vertical e preservar a leitura.
     """
 
     if matriz is None or matriz.empty:
@@ -862,92 +859,85 @@ def desenhar_tabela(
     )
 
     # --------------------------------------------------------
-    # QUANTIDADE DE COLUNAS
+    # LARGURAS
     # --------------------------------------------------------
 
-    numero_periodos = len(periodos)
-
-    # Largura da primeira coluna.
-    #
-    # Como o foco agora é a planilha, a coluna de local
-    # ganha bastante espaço para evitar excesso de abreviação.
-    # --------------------------------------------------------
-
-    largura_local = min(
-        360,
-        max(
-            260,
-            int(largura_total * 0.27)
-        )
-    )
-
-    largura_total_coluna = 115
-
-    largura_disponivel_periodos = (
+    largura_util = (
         largura_total
-        - largura_local
-        - largura_total_coluna
         - (margem * 2)
     )
 
-    if numero_periodos > 0:
+    largura_local = 360
+    largura_total_coluna = 110
 
-        largura_periodo = max(
-            70,
-            int(
-                largura_disponivel_periodos
-                / numero_periodos
-            )
+    largura_periodo_disponivel = (
+        largura_util
+        - largura_local
+        - largura_total_coluna
+    )
+
+    # Número máximo de períodos por bloco.
+    #
+    # Isso evita que uma visualização diária com muitos dias
+    # gere uma tabela horizontal impossível de ler.
+    # --------------------------------------------------------
+
+    largura_minima_periodo = 72
+
+    periodos_por_bloco = max(
+        1,
+        int(
+            largura_periodo_disponivel
+            / largura_minima_periodo
+        )
+    )
+
+    # Mantém um limite visual confortável.
+    periodos_por_bloco = min(
+        periodos_por_bloco,
+        14
+    )
+
+    blocos = [
+        periodos[i:i + periodos_por_bloco]
+        for i in range(
+            0,
+            len(periodos),
+            periodos_por_bloco
+        )
+    ]
+
+    y_atual = y
+
+    # --------------------------------------------------------
+    # CADA BLOCO DE PERÍODOS
+    # --------------------------------------------------------
+
+    for numero_bloco, periodos_bloco in enumerate(blocos):
+
+        numero_periodos = len(
+            periodos_bloco
         )
 
-    else:
+        largura_periodo = (
+            largura_periodo_disponivel
+            / numero_periodos
+        )
 
-        largura_periodo = 80
+        # ----------------------------------------------------
+        # CABEÇALHO DO BLOCO
+        # ----------------------------------------------------
 
-    # --------------------------------------------------------
-    # CABEÇALHO
-    # --------------------------------------------------------
+        x_atual = x + margem
 
-    x_atual = x + margem
+        y_inicio = y_atual
 
-    y_inicio = y
-
-    # LOCAL
-    x1 = x_atual
-    x2 = x1 + largura_local
-
-    draw.rectangle(
-        [
-            x1,
-            y_inicio,
-            x2,
-            y_inicio + altura_cabecalho
-        ],
-        fill=COR_AZUL_ESCURO,
-        outline=COR_BRANCO,
-        width=1
-    )
-
-    desenhar_texto_centralizado(
-        draw,
-        "BAIRRO / CIDADE",
-        (
-            x1,
-            y_inicio,
-            x2,
-            y_inicio + altura_cabecalho
-        ),
-        fonte_cabecalho,
-        COR_BRANCO
-    )
-
-    x_atual = x2
-
-    # PERÍODOS
-    for periodo in periodos:
+        # ----------------------------------------------------
+        # LOCAL
+        # ----------------------------------------------------
 
         x1 = x_atual
-        x2 = x1 + largura_periodo
+        x2 = x1 + largura_local
 
         draw.rectangle(
             [
@@ -963,10 +953,7 @@ def desenhar_tabela(
 
         desenhar_texto_centralizado(
             draw,
-            formatar_periodo(
-                periodo,
-                modo
-            ),
+            "BAIRRO / CIDADE",
             (
                 x1,
                 y_inicio,
@@ -979,181 +966,255 @@ def desenhar_tabela(
 
         x_atual = x2
 
-    # TOTAL
-    x1 = x_atual
-    x2 = x1 + largura_total_coluna
-
-    draw.rectangle(
-        [
-            x1,
-            y_inicio,
-            x2,
-            y_inicio + altura_cabecalho
-        ],
-        fill=COR_AZUL_ESCURO,
-        outline=COR_BRANCO,
-        width=1
-    )
-
-    desenhar_texto_centralizado(
-        draw,
-        "TOTAL",
-        (
-            x1,
-            y_inicio,
-            x2,
-            y_inicio + altura_cabecalho
-        ),
-        fonte_cabecalho,
-        COR_BRANCO
-    )
-
-    # --------------------------------------------------------
-    # LINHAS
-    # --------------------------------------------------------
-
-    y_atual = y_inicio + altura_cabecalho
-
-    for indice, linha in matriz.iterrows():
-
-        fundo = (
-            COR_BRANCO
-            if indice % 2 == 0
-            else COR_CINZA
-        )
-
-        x_atual = x + margem
-
-        # --------------------------------------------
-        # LOCAL
-        # --------------------------------------------
-
-        x1 = x_atual
-        x2 = x1 + largura_local
-
-        draw.rectangle(
-            [
-                x1,
-                y_atual,
-                x2,
-                y_atual + altura_linha
-            ],
-            fill=fundo,
-            outline=COR_CINZA_BORDA,
-            width=1
-        )
-
-        texto_local = str(
-            linha["LOCAL"]
-        )
-
-        # Abrevia somente se realmente necessário.
-        texto_local = abreviar_texto(
-            texto_local,
-            limite=34
-        )
-
-        draw.text(
-            (
-                x1 + 12,
-                y_atual + 11
-            ),
-            texto_local,
-            font=fonte_local,
-            fill=COR_PRETO
-        )
-
-        x_atual = x2
-
-        # --------------------------------------------
+        # ----------------------------------------------------
         # PERÍODOS
-        # --------------------------------------------
+        # ----------------------------------------------------
 
-        for periodo in periodos:
+        for periodo in periodos_bloco:
 
             x1 = x_atual
             x2 = x1 + largura_periodo
 
-            valor = linha.get(
-                periodo,
-                0
+            draw.rectangle(
+                [
+                    x1,
+                    y_inicio,
+                    x2,
+                    y_inicio + altura_cabecalho
+                ],
+                fill=COR_AZUL_ESCURO,
+                outline=COR_BRANCO,
+                width=1
             )
 
-            try:
-                valor = int(valor)
-            except Exception:
-                valor = 0
+            desenhar_texto_centralizado(
+                draw,
+                formatar_periodo(
+                    periodo,
+                    modo
+                ),
+                (
+                    x1,
+                    y_inicio,
+                    x2,
+                    y_inicio + altura_cabecalho
+                ),
+                fonte_cabecalho,
+                COR_BRANCO
+            )
+
+            x_atual = x2
+
+        # ----------------------------------------------------
+        # TOTAL
+        # ----------------------------------------------------
+
+        x1 = x_atual
+        x2 = x1 + largura_total_coluna
+
+        draw.rectangle(
+            [
+                x1,
+                y_inicio,
+                x2,
+                y_inicio + altura_cabecalho
+            ],
+            fill=COR_AZUL_ESCURO,
+            outline=COR_BRANCO,
+            width=1
+        )
+
+        desenhar_texto_centralizado(
+            draw,
+            "TOTAL",
+            (
+                x1,
+                y_inicio,
+                x2,
+                y_inicio + altura_cabecalho
+            ),
+            fonte_cabecalho,
+            COR_BRANCO
+        )
+
+        # ----------------------------------------------------
+        # LINHAS
+        # ----------------------------------------------------
+
+        y_linha = (
+            y_inicio
+            + altura_cabecalho
+        )
+
+        for indice, linha in matriz.iterrows():
+
+            fundo = (
+                COR_BRANCO
+                if indice % 2 == 0
+                else COR_CINZA
+            )
+
+            x_atual = x + margem
+
+            # --------------------------------------------
+            # LOCAL
+            # --------------------------------------------
+
+            x1 = x_atual
+            x2 = x1 + largura_local
 
             draw.rectangle(
                 [
                     x1,
-                    y_atual,
+                    y_linha,
                     x2,
-                    y_atual + altura_linha
+                    y_linha + altura_linha
                 ],
                 fill=fundo,
                 outline=COR_CINZA_BORDA,
                 width=1
             )
 
-            desenhar_texto_centralizado(
-                draw,
-                formatar_numero(valor),
+            texto_local = str(
+                linha["LOCAL"]
+            )
+
+            texto_local = abreviar_texto(
+                texto_local,
+                limite=38
+            )
+
+            draw.text(
                 (
-                    x1,
-                    y_atual,
-                    x2,
-                    y_atual + altura_linha
+                    x1 + 12,
+                    y_linha + 11
                 ),
-                fonte_valor,
-                COR_PRETO
+                texto_local,
+                font=fonte_local,
+                fill=COR_PRETO
             )
 
             x_atual = x2
 
-        # --------------------------------------------
-        # TOTAL
-        # --------------------------------------------
+            # --------------------------------------------
+            # PERÍODOS
+            # --------------------------------------------
 
-        x1 = x_atual
-        x2 = x1 + largura_total_coluna
+            for periodo in periodos_bloco:
 
-        valor_total = linha.get(
-            "TOTAL",
-            0
-        )
+                x1 = x_atual
+                x2 = x1 + largura_periodo
 
-        try:
-            valor_total = int(valor_total)
-        except Exception:
-            valor_total = 0
+                valor = linha.get(
+                    periodo,
+                    0
+                )
 
-        draw.rectangle(
-            [
-                x1,
-                y_atual,
-                x2,
-                y_atual + altura_linha
-            ],
-            fill=COR_AZUL_CLARO,
-            outline=COR_CINZA_BORDA,
-            width=1
-        )
+                try:
+                    valor = int(valor)
+                except Exception:
+                    valor = 0
 
-        desenhar_texto_centralizado(
-            draw,
-            formatar_numero(valor_total),
-            (
-                x1,
-                y_atual,
-                x2,
-                y_atual + altura_linha
-            ),
-            fonte_total,
-            COR_AZUL_ESCURO
-        )
+                draw.rectangle(
+                    [
+                        x1,
+                        y_linha,
+                        x2,
+                        y_linha + altura_linha
+                    ],
+                    fill=fundo,
+                    outline=COR_CINZA_BORDA,
+                    width=1
+                )
 
-        y_atual += altura_linha
+                desenhar_texto_centralizado(
+                    draw,
+                    formatar_numero(valor),
+                    (
+                        x1,
+                        y_linha,
+                        x2,
+                        y_linha + altura_linha
+                    ),
+                    fonte_valor,
+                    COR_PRETO
+                )
+
+                x_atual = x2
+
+            # --------------------------------------------
+            # TOTAL
+            # --------------------------------------------
+
+            x1 = x_atual
+            x2 = x1 + largura_total_coluna
+
+            valor_total = linha.get(
+                "TOTAL",
+                0
+            )
+
+            try:
+                valor_total = int(valor_total)
+            except Exception:
+                valor_total = 0
+
+            draw.rectangle(
+                [
+                    x1,
+                    y_linha,
+                    x2,
+                    y_linha + altura_linha
+                ],
+                fill=COR_AZUL_CLARO,
+                outline=COR_CINZA_BORDA,
+                width=1
+            )
+
+            desenhar_texto_centralizado(
+                draw,
+                formatar_numero(valor_total),
+                (
+                    x1,
+                    y_linha,
+                    x2,
+                    y_linha + altura_linha
+                ),
+                fonte_total,
+                COR_AZUL_ESCURO
+            )
+
+            y_linha += altura_linha
+
+        # ----------------------------------------------------
+        # PRÓXIMO BLOCO
+        # ----------------------------------------------------
+
+        y_atual = y_linha
+
+        if numero_bloco < len(blocos) - 1:
+
+            # Espaço discreto entre os blocos.
+            y_atual += 35
+
+            # Identificação do bloco seguinte.
+            texto_bloco = (
+                f"Continuação — "
+                f"períodos seguintes"
+            )
+
+            draw.text(
+                (
+                    x + margem,
+                    y_atual - 25
+                ),
+                texto_bloco,
+                font=obter_fonte(
+                    14,
+                    negrito=True
+                ),
+                fill=COR_CINZA_TEXTO
+            )
 
     return y_atual
 
@@ -1170,11 +1231,7 @@ def gerar_painel(
     """
     Gera a imagem final do relatório.
 
-    IMPORTANTE:
-    - Sem KPIs
-    - Sem gráficos
-    - Tabela ocupa a maior parte da imagem
-    - Formato vertical
+    O relatório é focado exclusivamente na tabela de dados.
     """
 
     if dados is None or dados.empty:
@@ -1197,19 +1254,65 @@ def gerar_painel(
     # DIMENSÕES
     # ========================================================
 
-    # Largura fixa para manter o relatório vertical.
     largura = 1500
 
     margem_lateral = 30
 
-    # Altura baseada na quantidade de linhas.
+    # --------------------------------------------------------
+    # Altura do cabeçalho
+    # --------------------------------------------------------
+
     altura_cabecalho = 250
+
+    # --------------------------------------------------------
+    # Dimensões da tabela
+    # --------------------------------------------------------
+
     altura_tabela_cabecalho = 52
     altura_linha = 43
 
+    largura_util = (
+        largura
+        - (25 * 2)
+    )
+
+    largura_local = 360
+    largura_total_coluna = 110
+
+    largura_periodo_disponivel = (
+        largura_util
+        - largura_local
+        - largura_total_coluna
+    )
+
+    largura_minima_periodo = 72
+
+    periodos_por_bloco = max(
+        1,
+        int(
+            largura_periodo_disponivel
+            / largura_minima_periodo
+        )
+    )
+
+    periodos_por_bloco = min(
+        periodos_por_bloco,
+        14
+    )
+
+    quantidade_blocos = max(
+        1,
+        int(
+            np.ceil(
+                len(periodos)
+                / periodos_por_bloco
+            )
+        )
+    )
+
     quantidade_linhas = len(matriz)
 
-    altura_tabela = (
+    altura_por_bloco = (
         altura_tabela_cabecalho
         + (
             quantidade_linhas
@@ -1217,13 +1320,24 @@ def gerar_painel(
         )
     )
 
+    espaco_entre_blocos = (
+        max(
+            0,
+            quantidade_blocos - 1
+        )
+        * 35
+    )
+
     altura = (
         altura_cabecalho
-        + altura_tabela
+        + (
+            quantidade_blocos
+            * altura_por_bloco
+        )
+        + espaco_entre_blocos
         + 50
     )
 
-    # Altura mínima.
     altura = max(
         altura,
         600
@@ -1292,7 +1406,6 @@ def gerar_painel(
                 caminho_logo
             ).convert("RGBA")
 
-            # Limita o tamanho da logo.
             largura_logo_max = 230
             altura_logo_max = 100
 
