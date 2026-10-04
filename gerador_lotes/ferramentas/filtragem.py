@@ -1832,37 +1832,37 @@ def render_filtragem():
     # ========================================================
 
     comparacao_eventos = st.session_state.get(
-        "df_comparacao_eventos"
-    )
-
-    if (
-        arquivo_eventos is not None
-        and comparacao_eventos is not None
-    ):
-
-        st.divider()
-
-        st.subheader(
-            "📊 Comparação com o Arquivo de Eventos"
-        )
-
-        df_resultado_comparacao = st.session_state.get(
-    "df_resultado"
+    "df_comparacao_eventos"
 )
 
-if df_resultado_comparacao is None:
-    df_resultado_comparacao = pd.DataFrame()
+if (
+    arquivo_eventos is not None
+    and comparacao_eventos is not None
+):
 
-texto_comparacao = (
-    gerar_texto_comparacao_eventos(
-        comparacao_eventos,
-        len(df_resultado_comparacao),
+    st.divider()
+
+    st.subheader(
+        "📊 Comparação com o Arquivo de Eventos"
     )
-)
 
-        st.info(
-            texto_comparacao
+    df_resultado_comparacao = st.session_state.get(
+        "df_resultado"
+    )
+
+    if df_resultado_comparacao is None:
+        df_resultado_comparacao = pd.DataFrame()
+
+    texto_comparacao = (
+        gerar_texto_comparacao_eventos(
+            comparacao_eventos,
+            len(df_resultado_comparacao),
         )
+    )
+
+    st.info(
+        texto_comparacao
+    ))
 
     # ========================================================
     # BOTÕES
