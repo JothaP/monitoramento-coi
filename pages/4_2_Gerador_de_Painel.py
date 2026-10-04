@@ -1,408 +1,2250 @@
 import streamlit as st
-import os
 import io
 import re
-import textwrap
-import shutil
-import zipfile
-from datetime import datetime, date, timedelta
 from pathlib import Path
+from datetime import datetime, date
 
 import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-import matplotlib.pyplot as plt
-import matplotlib
-import matplotlib.dates as mdates
-matplotlib.use("Agg")
 
-# Configuração única da página
+
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
+
 st.set_page_config(
-    page_title="Gerador de Painéis e O.S. - COI",
-    page_icon="📊",
+    page_title="Relatório de Falta de Água - COI",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-st.markdown("""
-    <style>
-        [data-testid="stSidebarNav"] { display: none !important; }
-    </style>
-""", unsafe_allow_html=True)
+# ============================================================
+# CSS
+# ============================================================
 
-# ==============================================================================
-# DICIONÁRIOS GLOBAIS
-# ==============================================================================
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+        }
+
+        .upload-box {
+            border: 1px solid #D9E1EA;
+            border-radius: 12px;
+            padding: 14px 16px;
+            background: #FFFFFF;
+        }
+
+        .module-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #123B5D;
+            margin-bottom: 4px;
+        }
+
+        .module-subtitle {
+            color: #667085;
+            font-size: 14px;
+            margin-bottom: 18px;
+        }
+
+        div[data-testid="stDownloadButton"] button {
+            width: 100%;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# MAPAS EXISTENTES
+# ============================================================
+
 ZONA_POR_BAIRRO = {
-    'ACARAPE': 'NORTE', 'AEROPORTO': 'NORTE', 'AGUA MINERAL': 'NORTE', 'ALEGRIA': 'SUL',
-    'ALTO ALEGRE': 'NORTE', 'ANGELICA': 'SUL', 'ANGELIM': 'SUL', 'AREIAS': 'SUL',
-    'AROEIRAS': 'NORTE', 'AROEIRA': 'LESTE', 'ARVORES VERDES': 'LESTE', 'BEIRA RIO': 'SUDESTE',
-    'BELA VISTA': 'SUL', 'BOA HORA': 'NORTE', 'BOM JESUS': 'NORTE', 'BOM PRINCIPIO': 'SUDESTE',
-    'BRASILAR': 'SUL', 'BUENOS AIRES': 'NORTE', 'CABRAL': 'CENTRO', 'CAMPESTRE': 'LESTE',
-    'CATARINA': 'SUL', 'CENTRO': 'CENTRO', 'CENTRO(NORTE)': 'CENTRO', 'CENTRO(SUL)': 'CENTRO',
-    'CERAMICA CIL': 'SUL', 'CHAPADINHA': 'NORTE', 'CIDADE INDUSTRIAL': 'NORTE', 'CIDADE JARDIM': 'LESTE',
-    'CIDADE NOVA': 'SUL', 'COLORADO': 'SUDESTE', 'COMPRIDA': 'SUDESTE', 'CRISTO REI': 'SUL',
-    'DISTRITO INDUSTRIAL': 'SUL', 'EMBRAPA': 'NORTE', 'ESPLANADA': 'SUL', 'EXTREMA': 'SUDESTE',
-    'FATIMA': 'LESTE', 'FLOR DO CAMPO': 'SUDESTE', 'FREI SERAFIM': 'CENTRO', 'GURUPA': 'LESTE',
-    'GURUPI': 'SUDESTE', 'HORTO': 'LESTE', 'HORTO FLORESTAL': 'LESTE', 'ILHOTAS': 'CENTRO',
-    'ININGA': 'LESTE', 'ITAPERU': 'NORTE', 'ITARARE': 'SUDESTE', 'JACINTA ANDRADE': 'NORTE',
-    'JOCKEY': 'LESTE', 'LIVRAMENTO': 'SUDESTE', 'LOURIVAL PARENTE': 'SUL', 'MACAUBA': 'SUL',
-    'MAFRENSE': 'NORTE', 'MAFUA': 'CENTRO', 'MARQUES': 'CENTRO', 'MATADOURO': 'NORTE',
-    'MATINHA': 'CENTRO', 'MEMORARE': 'NORTE', 'MOCAMBINHO': 'NORTE', 'MONTE CASTELO': 'SUL',
-    'MONTE VERDE': 'NORTE', 'MORADA DO SOL': 'LESTE', 'MORADA NOVA': 'SUL', 'MORRO DA ESPERANCA': 'NORTE',
-    'MORROS': 'LESTE', 'NOIVOS': 'LESTE', 'NOSSA SENHORA DAS GRACAS': 'SUL', 'N. SRA. DAS GRACAS': 'CENTRO',
-    'NOVA BRASILIA': 'NORTE', 'NOVO HORIZONTE': 'SUDESTE', 'NOVO URUGUAI': 'LESTE', 'OLARIAS': 'NORTE',
-    'PARQUE ALVORADA': 'NORTE', 'PARQUE BRASIL': 'NORTE', 'PARQUE IDEAL': 'SUDESTE', 'PARQUE JACINTA': 'SUL',
-    'PARQUE JULIANA': 'SUL', 'PARQUE PIAUI': 'SUL', 'PARQUE POTI': 'SUDESTE', 'PARQUE SAO JOAO': 'SUL',
-    'PARQUE SUL': 'SUL', 'PARQUE UNIVERSITARIO': 'LESTE', 'PEDRA MIUDA': 'SUL', 'PEDRA MOLE': 'LESTE',
-    'PICARRA': 'CENTRO', 'PICARREIRA': 'LESTE', 'PIO XII': 'SUL', 'PIRAJA': 'CENTRO', 'PLANALTO': 'LESTE',
-    'POLO EMPRESARIAL SUL': 'SUL', 'PORENQUANTO': 'CENTRO', 'PORTO ALEGRE': 'SUL', 'PORTAL DA ALEGRIA': 'SUL',
-    'PORTO DO CENTRO': 'LESTE', 'POTI VELHO': 'NORTE', 'PRIMAVERA': 'NORTE', 'PROMORAR': 'SUL',
-    'REAL COPAGRE': 'NORTE', 'REAL COPAGRI': 'NORTE', 'RECANTO DAS PALMEIRAS': 'LESTE', 'REDENCAO': 'SUL',
-    'REDONDA': 'SUDESTE', 'RENASCENCA': 'SUDESTE', 'SACY': 'SUL', 'SAMAPI': 'LESTE', 'SANTA CRUZ': 'SUL',
-    'SANTA HELENA': 'NORTE', 'SANTA ISABEL': 'LESTE', 'SANTA LIA': 'LESTE', 'SANTA LUZIA': 'SUL',
-    'SANTA MARIA DA CODIPE': 'NORTE', 'STA MARIA DA CODIPI': 'NORTE', 'SANTA ROSA': 'NORTE',
-    'SANTA SOFIA': 'NORTE', 'SANTANA': 'SUDESTE', 'SANTO ANTONIO': 'SUL', 'SAO CRISTOVAO': 'LESTE',
-    'SAO JOAO': 'LESTE', 'SAO JOAQUIM': 'NORTE', 'SAO LOURENÇO': 'SUL', 'SAO LOURENCO': 'SUL',
-    'SAO PEDRO': 'SUL', 'SAO RAIMUNDO': 'SUDESTE', 'SAO SEBASTIAO': 'SUDESTE', 'SAO FRANCISCO': 'NORTE',
-    'SATELITE': 'LESTE', 'SOCOPO': 'LESTE', 'TABAJARAS': 'LESTE', 'TABULETA': 'SUL', 'TANCREDO NEVES': 'SUDESTE',
-    'TODOS OS SANTOS': 'SUDESTE', 'TRES ANDARES': 'SUL', 'TRIUNFO': 'SUL', 'URUGUAI': 'LESTE',
-    'VALE DO GAVIAO': 'LESTE', 'VALE QUEM TEM': 'LESTE', 'VERDE CAP': 'SUDESTE', 'VERDE LAR': 'LESTE',
-    'VERMELHA': 'SUL', 'VILA OPERARIA': 'NORTE', 'VILA SANTA BARBARA': 'LESTE', 'VILA SAO FRANCISCO': 'NORTE',
-    'VILA URUGUAI': 'LESTE', 'VILA IRMA DULCE': 'SUL', 'VILA BANDEIRANTES I': 'LESTE', 'ZOOBOTANICO': 'LESTE',
-    'ALEGRE': 'NORTE', 'POV NOVA JORDANIA': 'SUDESTE',
+    # NORTE
+    "ÁGUA MINERAL": "NORTE",
+    "ALEGRE": "NORTE",
+    "BUENOS AIRES": "NORTE",
+    "CABRAL": "NORTE",
+    "EMBRAPA": "NORTE",
+    "MOCAMBINHO": "NORTE",
+    "MORRO DA ESPERANÇA": "NORTE",
+    "PARQUE BRASIL": "NORTE",
+    "PRIMAVERA": "NORTE",
+    "REAL COMPAGRE": "NORTE",
+    "SANTA MARIA": "NORTE",
+    "SANTO ANTÔNIO": "NORTE",
+    "VALE QUEM TEM": "NORTE",
+
+    # SUL
+    "AREIAS": "SUL",
+    "CATUMBI": "SUL",
+    "CERÂMICA CIL": "SUL",
+    "CRISTO REI": "SUL",
+    "LOURIVAL PARENTE": "SUL",
+    "MACAÚBA": "SUL",
+    "MONTE CASTELO": "SUL",
+    "MORADA NOVA": "SUL",
+    "NOSSA SENHORA DAS GRAÇAS": "SUL",
+    "PARQUE PIAUÍ": "SUL",
+    "PROMORAR": "SUL",
+    "SACARCA": "SUL",
+    "SANTA LUZIA": "SUL",
+    "TABULETA": "SUL",
+    "TRÊS ANDARES": "SUL",
+
+    # LESTE
+    "ÁGUA BRANCA": "LESTE",
+    "CAMPESTRE": "LESTE",
+    "FÁTIMA": "LESTE",
+    "FLORES": "LESTE",
+    "HORTO": "LESTE",
+    "ININGA": "LESTE",
+    "JOCKEY": "LESTE",
+    "JÓQUEI": "LESTE",
+    "MORADA DO SOL": "LESTE",
+    "NOSSA SENHORA DE FÁTIMA": "LESTE",
+    "NOIVOS": "LESTE",
+    "PLANALTO": "LESTE",
+    "SAMAPI": "LESTE",
+    "SÃO CRISTÓVÃO": "LESTE",
+    "SÃO JOÃO": "LESTE",
+    "URUGUAI": "LESTE",
+
+    # SUDESTE
+    "DIRCEU": "SUDESTE",
+    "ITARARÉ": "SUDESTE",
+    "RENASCENÇA": "SUDESTE",
+    "REDONDA": "SUDESTE",
+    "TODOS OS SANTOS": "SUDESTE",
+    "USINA SANTANA": "SUDESTE",
+
+    # CENTRO
+    "CENTRO": "CENTRO",
+    "ILHOTAS": "CENTRO",
+    "MATINHA": "CENTRO",
+    "MARQUÊS": "CENTRO",
+    "MONTE CASTELO": "CENTRO",
 }
+
 
 BASE_POR_CIDADE = {
-    'ACAUA': 'PAULISTANA', 'AGRICOLANDIA': 'MEIO NORTE', 'AGUA BRANCA': 'MEIO NORTE',
-    'ALAGOINHA': 'PICOS', 'ALAGOINHA DO PIAUI': 'PICOS', 'ALEGRETE DO PIAUI': 'PICOS',
-    'ALTO LONGA': 'MEIO NORTE', 'ALTOS': 'MEIO NORTE', 'ALVORADA DO GURGUEIA': 'FLORIANO',
-    'AMARANTE': 'FLORIANO', 'ANGICAL DO PIAUI': 'MEIO NORTE', 'ANISIO DE ABREU': 'SAO RAIMUNDO NONATO',
-    'AROAZES': 'MEIO NORTE', 'AROEIRAS DO ITAIM': 'PICOS', 'ARRAIAL': 'FLORIANO',
-    'ASSUNCAO DO PIAUI': 'MEIO NORTE', 'AVELINO LOPES': 'BOM JESUS', 'BAIXA GRANDE DO RIBEIRO': 'FLORIANO',
-    'BARRA D ALCANTARA': 'OEIRAS', 'BARRAS': 'PIRIPIRI', 'BARREIRAS DO PIAUI': 'BOM JESUS',
-    'BARRO DURO': 'MEIO NORTE', 'BATALHA': 'PIRIPIRI', 'BELA VISTA DO PIAUI': 'SAO JOAO DO PIAUI',
-    'BELEM DO PIAUI': 'PICOS', 'BENEDITINOS': 'MEIO NORTE', 'BERTOLINIA': 'FLORIANO',
-    'BOA HORA': 'PIRIPIRI', 'BOCAINA': 'PICOS', 'BOM JESUS': 'BOM JESUS',
-    'BOM PRINCIPIO DO PIAUI': 'PARNAIBA', 'BONFIM DO PIAUI': 'SAO RAIMUNDO NONATO',
-    'BOQUEIRAO DO PIAUI': 'PIRIPIRI', 'BRASILEIRA': 'PIRIPIRI', 'BREJO DO PIAUI': 'SAO JOAO DO PIAUI',
-    'BURITI DOS LOPES': 'PARNAIBA', 'BURITI DOS MONTES': 'MEIO NORTE', 'CABECEIRAS DO PIAUI': 'PIRIPIRI',
-    'CAJAZEIRAS DO PIAUI': 'OEIRAS', 'CAJUEIRO DA PRAIA': 'PARNAIBA',
-    'CAMPINAS DO PIAUI': 'SAO JOAO DO PIAUI', 'CAMPO ALEGRE DO FIDALGO': 'SAO JOAO DO PIAUI',
-    'CAMPO GRANDE DO PIAUI': 'PICOS', 'CAMPO LARGO DO PIAUI': 'PIRIPIRI', 'CANAVIEIRA': 'FLORIANO',
-    'CANTO DO BURITI': 'SAO JOAO DO PIAUI', 'CAPITAO DE CAMPOS': 'PIRIPIRI',
-    'CAPITAO GERVASIO OLIVEIRA': 'SAO JOAO DO PIAUI', 'CARACOL': 'SAO RAIMUNDO NONATO',
-    'CARAUBAS DO PIAUI': 'PARNAIBA', 'CARIDADE': 'PAULISTANA', 'CARIDADE DO PIAUI': 'PAULISTANA',
-    'CASTELO DO PIAUI': 'MEIO NORTE', 'COCAL': 'PARNAIBA', 'COCAL DE TELHA': 'PIRIPIRI',
-    'COCAL DOS ALVES': 'PARNAIBA', 'COIVARAS': 'MEIO NORTE', 'COLONIA DO GURGUEIA': 'BOM JESUS',
-    'COLONIA DO PIAUI': 'OEIRAS', 'CONCEICAO DO CANINDE': 'SAO JOAO DO PIAUI',
-    'CORONEL JOSE DIAS': 'SAO RAIMUNDO NONATO', 'CORRENTE': 'BOM JESUS', 'CRISTALANDIA': 'BOM JESUS',
-    'CRISTINO CASTRO': 'BOM JESUS', 'CURIMATA': 'BOM JESUS', 'CURRAIS': 'BOM JESUS',
-    'CURRAL NOVO PI': 'PAULISTANA', 'CURRALINHOS': 'MEIO NORTE', 'DEMERVAL LOBAO': 'MEIO NORTE',
-    'DIRCEU ARCOVERDE': 'SAO RAIMUNDO NONATO', 'DOM EXPEDITO LOPES': 'PICOS',
-    'DOM INOCENCIO': 'SAO RAIMUNDO NONATO', 'DOMINGOS MOURAO': 'PIRIPIRI', 'ELESBAO VELOSO': 'MEIO NORTE',
-    'ELIZEU MARTINS': 'BOM JESUS', 'ESPERANTINA': 'PIRIPIRI', 'FARTURA DO PIAUI': 'SAO RAIMUNDO NONATO',
-    'FLORES DO PIAUI': 'FLORIANO', 'FLORESTA DO PIAUI': 'OEIRAS', 'FLORIANO': 'FLORIANO',
-    'FRANCINOPOLIS': 'OEIRAS', 'FRANCISCO AYRES': 'FLORIANO', 'FRANCISCO AIRES': 'FLORIANO',
-    'FRANCISCO MACEDO': 'PICOS', 'FRANCISCO SANTOS': 'PICOS', 'FRONTEIRAS': 'PICOS',
-    'GEMINIANO': 'PICOS', 'GILBUES': 'BOM JESUS', 'GUADALUPE': 'FLORIANO',
-    'GUARIBAS': 'SAO RAIMUNDO NONATO', 'HUGO NAPOLEAO': 'MEIO NORTE', 'ILHA GRANDE': 'PARNAIBA',
-    'INHUMA': 'OEIRAS', 'IPIRANGA': 'OEIRAS', 'ISAIAS COELHO': 'PAULISTANA', 'ITAINOPOLIS': 'PICOS',
-    'ITAUEIRA': 'FLORIANO', 'JACOBINA DO PIAUI': 'PAULISTANA', 'JAICOS': 'PICOS',
-    'JARDIM MULATO': 'MEIO NORTE', 'JATOBA DO PIAUI': 'MEIO NORTE', 'JERUMENHA': 'FLORIANO',
-    'JOAO COSTA': 'SAO RAIMUNDO NONATO', 'JOAQUIM PIRES': 'PARNAIBA', 'JOCA MARQUES': 'PARNAIBA',
-    'JOSE DE FREITAS': 'MEIO NORTE', 'JUAZEIRO DO PIAUI': 'MEIO NORTE', 'JULIO BORGES': 'BOM JESUS',
-    'JUREMA': 'SAO RAIMUNDO NONATO', 'LAGOA ALEGRE': 'PIRIPIRI', 'LAGOA DE SAO FRANCISCO': 'PIRIPIRI',
-    'LAGOA DO BARRO DO PIAUI': 'SAO JOAO DO PIAUI', 'LAGOA DO PIAUI': 'MEIO NORTE',
-    'LAGOA DO SITIO': 'OEIRAS', 'LAGOINHA DO PIAUI': 'MEIO NORTE', 'LUIS CORREIA': 'PARNAIBA',
-    'LUZILANDIA': 'PIRIPIRI', 'MADEIRO': 'PIRIPIRI', 'MANOEL EMIDIO': 'BOM JESUS',
-    'MARCOS PARENTE': 'FLORIANO', 'MASSAPE DO PIAUI': 'PAULISTANA', 'MATIAS OLIMPIO': 'PARNAIBA',
-    'MIGUEL ALVES': 'PIRIPIRI', 'MIGUEL LEAO': 'MEIO NORTE', 'MILTON BRANDAO': 'PIRIPIRI',
-    'MONSENHOR GIL': 'MEIO NORTE', 'MONSENHOR HIPOLITO': 'PICOS', 'MONTE ALEGRE': 'BOM JESUS',
-    'MORRO CABECA NO TEMPO': 'BOM JESUS', 'MORRO DO CHAPEU DO PIAUI': 'SAO RAIMUNDO NONATO',
-    'MURICI DOS PORTELAS': 'PARNAIBA', 'NAZARE DO PIAUI': 'FLORIANO', 'NAZARIA': 'MEIO NORTE',
-    'NOSSA SENHORA DE NAZARE': 'MEIO NORTE', 'NOSSA SRA DOS REMEDIOS': 'PARNAIBA',
-    'NOVA SANTA RITA': 'SAO JOAO DO PIAUI', 'NOVO ORIENTE DO PIAU': 'OEIRAS',
-    'NOVO SANTO ANTONIO': 'MEIO NORTE', 'OEIRAS': 'OEIRAS', "OLHO D'AGUA DO PIAUI": 'MEIO NORTE',
-    'OLHO D AGUA DO PIAUI': 'MEIO NORTE', 'PADRE MARCOS': 'PICOS', 'PAES LANDIM': 'SAO JOAO DO PIAUI',
-    'PAJEU DO PIAUI': 'FLORIANO', 'PALMEIRA DO PIAUI': 'BOM JESUS', 'PALMEIRAIS': 'MEIO NORTE',
-    'PAQUETA': 'PICOS', 'PARNAGUA': 'BOM JESUS', 'PARNAIBA': 'PARNAIBA',
-    'PASSAGEM FRANCA': 'MEIO NORTE', 'PATOS DO PIAUI': 'PAULISTANA', 'PAU D ARCO DO PIAUI': 'MEIO NORTE',
-    'PAULISTANA': 'PAULISTANA', 'PAVUSSU': 'FLORIANO', 'PEDRO II': 'PIRIPIRI', 'PICOS': 'PICOS',
-    'PIMENTEIRAS': 'OEIRAS', 'PIO IX': 'PICOS', 'PIRACURUCA': 'PARNAIBA', 'PIRIPIRI': 'PIRIPIRI',
-    'PORTO': 'PIRIPIRI', 'PORTO ALEGRE DO PIAUI': 'FLORIANO', 'POV SANTA TERESA': 'MEIO NORTE',
-    'POV CALDEIRAOZINHO': 'SAO RAIMUNDO NONATO', 'POVOADO BURITIZINHO': 'MEIO NORTE',
-    'POV COROA DE SAO REMIGIO': 'PARNAIBA', 'POVOADO PEDRA': 'MEIO NORTE',
-    'POVOADO APARECIDA': 'PICOS', 'POV BARRA DO LONGA': 'PARNAIBA', 'POV INGAZEIRA': 'PAULISTANA',
-    'POV SERRA DA SOLTA': 'MEIO NORTE', 'POVOADO BARRA GRANDE': 'PARNAIBA',
-    'POVOADO SAO JOAQUIM': 'MEIO NORTE', 'POVOADO TRANQUEIRA': 'MEIO NORTE',
-    'POV MOCAMBINHO': 'PARNAIBA', 'POV BURITI DO CASTELO': 'MEIO NORTE',
-    'POVOADO MANDACARU': 'PICOS', 'POVOADO MATINHA': 'MEIO NORTE', 'POV DAVID CALDAS': 'MEIO NORTE',
-    'POV. LAGOA DE BAIXO': 'SAO RAIMUNDO NONATO', 'POVOADO RIACHO DOS NEGRO': 'MEIO NORTE',
-    'POVOADO POCAO': 'PARNAIBA', 'PRATA DO PIAUI': 'MEIO NORTE', 'QUEIMADA NOVA': 'SAO JOAO DO PIAUI',
-    'REDENCAO DO GURGUEIA': 'BOM JESUS', 'REGENERACAO': 'FLORIANO', 'RIACHO FRIO': 'BOM JESUS',
-    'RIBEIRA DO PIAUI': 'FLORIANO', 'RIBEIRO GONCALVES': 'FLORIANO', 'RIO GRANDE DO PIAUI': 'FLORIANO',
-    'SANTA CRUZ DO PIAUI': 'OEIRAS', 'SANTA CRUZ DOS MILAGRES': 'MEIO NORTE',
-    'SANTA FILOMENA': 'BOM JESUS', 'SANTA LUZ': 'BOM JESUS', 'SANTA ROSA DO PIAUI': 'OEIRAS',
-    'SANTA TERESA': 'MEIO NORTE', 'SANTANA DO PIAUI': 'PICOS', 'SANTO ANTONIO D MILA': 'MEIO NORTE',
-    'SANTO ANTONIO DE LISBOA': 'PICOS', 'SANTO INACIO DO PIAUI': 'SAO JOAO DO PIAUI',
-    'SAO BRAZ': 'SAO RAIMUNDO NONATO', 'SAO FELIX': 'MEIO NORTE',
-    'SAO FRANCISCO DE ASSIS': 'SAO JOAO DO PIAUI', 'SAO FRANCISCO DO PIAUI': 'OEIRAS',
-    'SAO GONCALO DO GURGUEIA': 'BOM JESUS', 'SAO GONCALO DO PIAUI': 'MEIO NORTE',
-    'SAO JOAO DA CANABRAVA': 'PICOS', 'SAO JOAO DA FRONTEIRA': 'PIRIPIRI',
-    'SAO JOAO DA SERRA': 'MEIO NORTE', 'SAO JOAO DA VARJOTA': 'OEIRAS',
-    'SAO JOAO DO ARRAIAL': 'PIRIPIRI', 'SAO JOAO DO PIAUI': 'SAO JOAO DO PIAUI',
-    'SAO JOSE DA TENDA': 'SAO RAIMUNDO NONATO', 'SAO JOSE DO DIVINO': 'PARNAIBA',
-    'SAO JOSE DO PEIXE': 'SAO JOAO DO PIAUI', 'SAO JOSE DO PIAUI': 'OEIRAS', 'SAO JULIAO': 'PICOS',
-    'SAO LOURENCO': 'SAO RAIMUNDO NONATO', 'SAO LUIS DO PIAUI': 'PICOS',
-    'SAO MIGUEL DA BAIXA GRANDE': 'MEIO NORTE', 'SAO MIGUEL DO FIDALGO': 'SAO JOAO DO PIAUI',
-    'SAO MIGUEL TAPUIO': 'MEIO NORTE', 'SAO PEDRO': 'MEIO NORTE',
-    'SAO RAIMUNDO NONATO': 'SAO RAIMUNDO NONATO', 'SEBASTIAO BARROS': 'BOM JESUS',
-    'SEBASTIAO LEAL': 'FLORIANO', 'SIGEFREDO PACHECO': 'MEIO NORTE', 'SIMOES': 'PAULISTANA',
-    'SIMPLICIO MENDES': 'SAO JOAO DO PIAUI', 'SOCORRO DO PIAUI': 'SAO JOAO DO PIAUI',
-    'SUSSUAPARA': 'PICOS', 'TAMBORIL DO PIAUI': 'SAO RAIMUNDO NONATO', 'TANQUE DO PIAUI': 'OEIRAS',
-    'TERESINA': 'MEIO NORTE', 'UNIAO': 'MEIO NORTE', 'URUCUI': 'FLORIANO', 'VALENCA': 'OEIRAS',
-    'VARZEA BRANCA': 'SAO RAIMUNDO NONATO', 'VARZEA GRANDE': 'OEIRAS', 'VERA MENDES': 'PAULISTANA',
-    'VILA NOVA DO PIAUI': 'PICOS', 'WALL FERRAZ': 'OEIRAS',
+    "PAULISTANA": "PAULISTANA",
+    "PICOS": "PICOS",
+    "FLORIANO": "FLORIANO",
+    "SÃO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
+    "SAO RAIMUNDO NONATO": "SAO RAIMUNDO NONATO",
+    "BOM JESUS": "BOM JESUS",
+    "OEIRAS": "OEIRAS",
+    "PIRIPIRI": "PIRIPIRI",
+    "PARNAÍBA": "PARNAIBA",
+    "PARNAIBA": "PARNAIBA",
+    "SÃO JOÃO DO PIAUÍ": "SAO JOAO DO PIAUI",
+    "SAO JOAO DO PIAUI": "SAO JOAO DO PIAUI",
+    "TERESINA": "MEIO NORTE",
 }
+
 
 MESES_PT = {
-    1: 'jan', 2: 'fev', 3: 'mar', 4: 'abr',
-    5: 'mai', 6: 'jun', 7: 'jul', 8: 'ago',
-    9: 'set', 10: 'out', 11: 'nov', 12: 'dez'
+    1: "JAN",
+    2: "FEV",
+    3: "MAR",
+    4: "ABR",
+    5: "MAI",
+    6: "JUN",
+    7: "JUL",
+    8: "AGO",
+    9: "SET",
+    10: "OUT",
+    11: "NOV",
+    12: "DEZ",
 }
 
-# ==============================================================================
-# FUNÇÕES DE USO COMUM E DESIGN
-# ==============================================================================
-PASTA_AEGEA = Path("./BACKLOG_AEGEA")
-PASTA_FONTES = PASTA_AEGEA / "fontes"
-PASTAS_LOGOS = [PASTA_AEGEA / "Logos", PASTA_AEGEA / "Logo"]
-FONTES_AEGEA = {}
-ORDEM_FONTES = ["Thin", "ExtraLight", "Light", "Regular", "Medium", "Bold", "Black"]
 
-if PASTA_FONTES.exists():
-    for arquivo in PASTA_FONTES.iterdir():
-        if arquivo.is_file() and arquivo.suffix.lower() == ".otf":
-            nome = arquivo.stem.lower()
-            if "extralight" in nome: FONTES_AEGEA["ExtraLight"] = arquivo
-            elif "thin" in nome: FONTES_AEGEA["Thin"] = arquivo
-            elif "light" in nome: FONTES_AEGEA["Light"] = arquivo
-            elif "regular" in nome: FONTES_AEGEA["Regular"] = arquivo
-            elif "medium" in nome: FONTES_AEGEA["Medium"] = arquivo
-            elif "bold" in nome: FONTES_AEGEA["Bold"] = arquivo
-            elif "black" in nome: FONTES_AEGEA["Black"] = arquivo
+LOGOS = {
+    "API": Path("assets/logos/logo_aguas_do_piaui.png"),
+    "THE": Path("assets/logos/logo_aguas_de_teresina.png"),
+    "TIM": Path("assets/logos/logo_aguas_de_timon.png"),
+}
 
-logo_encontrada = None
-for pasta_logo in PASTAS_LOGOS:
-    if pasta_logo.exists():
-        for arquivo in pasta_logo.iterdir():
-            if arquivo.is_file() and arquivo.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-                if "logo_aguas_teresina" in arquivo.stem.lower() or "teresina" in arquivo.stem.lower() or "logo_aguas_piaui" in arquivo.stem.lower() or "logo_aguas_do_piaui" in arquivo.stem.lower():
-                    logo_encontrada = arquivo
-                    break
-        if logo_encontrada: break
-CAMINHO_LOGO = str(logo_encontrada) if logo_encontrada else None
 
-def fonte(tamanho, peso="Regular"):
-    if peso in FONTES_AEGEA and Path(str(FONTES_AEGEA[peso])).exists():
-        try: return ImageFont.truetype(str(FONTES_AEGEA[peso]), int(tamanho))
-        except: pass
-    return ImageFont.load_default()
+NOMES_EMPRESAS = {
+    "API": "Águas do Piauí",
+    "THE": "Águas de Teresina",
+    "TIM": "Águas de Timon",
+}
 
-BRANCO = (255, 255, 255)
-FUNDO = (252, 253, 255)
-AZUL_ESCURO = (0, 51, 120)
-AZUL = (0, 70, 160)
-AZUL_MEDIO = (40, 100, 180)
-CINZA = (90, 100, 115)
-CINZA_CLARO = (220, 225, 235)
-TURQUESA = (0, 150, 170)
 
-def cor_intensidade(valor, vmax):
-    if valor <= 0: return (248, 250, 253)
-    ratio = min(valor / max(vmax, 1), 1.0)
-    return (int(230 - ratio * 160), int(240 - ratio * 120), int(250 - ratio * 70))
+TITULOS = {
+    "API": "Relatório de Falta de Água — Piauí",
+    "THE": "Relatório de Falta de Água — Teresina",
+    "TIM": "Relatório de Falta de Água — Timon",
+}
 
-def normalizar(texto):
-    if pd.isna(texto) or texto is None: return ''
-    return ' '.join(str(texto).strip().upper().split())
 
-def obter_zona(bairro):
-    chave = normalizar(bairro)
-    return ZONA_POR_BAIRRO.get(chave, '')
+# ============================================================
+# CORES
+# ============================================================
 
-def normalizar_cidade(cidade):
-    if pd.isna(cidade) or cidade is None: return ''
-    return ' '.join(str(cidade).strip().upper().split())
+BRANCO = "#FFFFFF"
+FUNDO = "#F4F7FA"
 
-def obter_base(cidade):
-    chave = normalizar_cidade(cidade)
-    return BASE_POR_CIDADE.get(chave, '')
+AZUL_ESCURO = "#123B5D"
+AZUL = "#0077B6"
+AZUL_MEDIO = "#2B8CC4"
 
-def formatar_abertura(valor_sla):
-    if pd.isna(valor_sla) or valor_sla is None or str(valor_sla).strip() in ('', '-'): return ''
-    try:
-        texto = str(valor_sla).strip()
-        try: dt = datetime.strptime(texto, '%d/%m/%y %H:%M')
-        except ValueError: dt = datetime.strptime(texto[:8], '%d/%m/%y')
-        return f'{MESES_PT[dt.month]}/{dt.year}'
-    except Exception: return ''
+CINZA = "#667085"
+CINZA_CLARO = "#E8EDF2"
 
-def quebrar_texto(texto, max_chars=16):
-    texto = str(texto).title().strip()
-    if len(texto) <= max_chars: return [texto]
-    partes = textwrap.wrap(texto, width=max_chars, max_lines=2, placeholder="…")
-    return partes if partes else [texto[:max_chars]]
+TURQUESA = "#00A6A6"
 
-def localizar_coluna(df, candidatos):
-    def norm_nome(t):
-        t = str(t).strip().lower()
-        tabela = str.maketrans("áàãâäéèêëíìîïóòõôöúùûüç", "aaaaaeeeeiiiiooooouuuuc")
-        t = t.translate(tabela)
-        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", t)).strip()
-    for col in df.columns:
-        if norm_nome(col) in [norm_nome(c) for c in candidatos]: return col
-    for col in df.columns:
-        for cand in candidatos:
-            if norm_nome(cand) in norm_nome(col): return col
+VERMELHO = "#D64545"
+VERDE = "#208B4E"
+AMARELO = "#E5B700"
+
+
+# ============================================================
+# FONTES
+# ============================================================
+
+def localizar_fontes():
+    candidatos = [
+        Path("BACKLOG_AEGEA/fontes"),
+        Path("./BACKLOG_AEGEA/fontes"),
+        Path("fontes"),
+        Path("./fontes"),
+    ]
+
+    for pasta in candidatos:
+        if pasta.exists():
+            return pasta
+
     return None
 
-def converter_abertura_pd(valor):
-    if pd.isna(valor): return pd.NaT
-    if isinstance(valor, (pd.Timestamp, np.datetime64)):
-        try: return pd.Timestamp(valor)
-        except: return pd.NaT
-    texto = str(valor).strip().lower()
-    if not texto: return pd.NaT
-    match = re.fullmatch(r"([a-zç]{3})/(\d{4})", texto)
+
+FONTES_AEGEA = localizar_fontes()
+
+
+def fonte(
+    tamanho,
+    negrito=False,
+):
+    """
+    Procura fontes locais.
+    Faz fallback para DejaVuSans.
+    """
+
+    arquivos = []
+
+    if FONTES_AEGEA:
+        arquivos.extend(
+            [
+                FONTES_AEGEA / "Aptos.ttf",
+                FONTES_AEGEA / "Aptos-Bold.ttf",
+                FONTES_AEGEA / "Arial.ttf",
+                FONTES_AEGEA / "Arial-Bold.ttf",
+                FONTES_AEGEA / "Montserrat-Regular.ttf",
+                FONTES_AEGEA / "Montserrat-Bold.ttf",
+            ]
+        )
+
+    if negrito:
+        nomes = [
+            "Arial-Bold.ttf",
+            "DejaVuSans-Bold.ttf",
+        ]
+    else:
+        nomes = [
+            "Arial.ttf",
+            "DejaVuSans.ttf",
+        ]
+
+    arquivos.extend(
+        Path("/usr/share/fonts/truetype/dejavu").glob(
+            "DejaVuSans*.ttf"
+        )
+    )
+
+    for arquivo in arquivos:
+        if arquivo.exists():
+            try:
+                return ImageFont.truetype(
+                    str(arquivo),
+                    tamanho,
+                )
+            except Exception:
+                pass
+
+    for nome in nomes:
+        try:
+            return ImageFont.truetype(nome, tamanho)
+        except Exception:
+            pass
+
+    return ImageFont.load_default()
+
+
+# ============================================================
+# UTILITÁRIOS
+# ============================================================
+
+def normalizar(valor):
+    if pd.isna(valor):
+        return ""
+
+    texto = str(valor).strip().upper()
+
+    substituicoes = {
+        "Á": "A",
+        "À": "A",
+        "Ã": "A",
+        "Â": "A",
+        "Ä": "A",
+        "É": "E",
+        "È": "E",
+        "Ê": "E",
+        "Ë": "E",
+        "Í": "I",
+        "Ì": "I",
+        "Î": "I",
+        "Ï": "I",
+        "Ó": "O",
+        "Ò": "O",
+        "Õ": "O",
+        "Ô": "O",
+        "Ö": "O",
+        "Ú": "U",
+        "Ù": "U",
+        "Û": "U",
+        "Ü": "U",
+        "Ç": "C",
+    }
+
+    for antigo, novo in substituicoes.items():
+        texto = texto.replace(antigo, novo)
+
+    texto = re.sub(r"\s+", " ", texto)
+
+    return texto
+
+
+def normalizar_cidade(valor):
+    return normalizar(valor)
+
+
+def obter_zona(bairro):
+    """
+    Mantida no código por compatibilidade com outras rotinas.
+    NÃO é utilizada nos relatórios THE/TIM.
+    """
+
+    bairro_n = normalizar(bairro)
+
+    for chave, zona in ZONA_POR_BAIRRO.items():
+        if normalizar(chave) == bairro_n:
+            return zona
+
+    return "NÃO IDENTIFICADA"
+
+
+def obter_base(cidade):
+    cidade_n = normalizar_cidade(cidade)
+
+    for chave, base in BASE_POR_CIDADE.items():
+        if normalizar_cidade(chave) == cidade_n:
+            return base
+
+    return ""
+
+
+def localizar_coluna(df, candidatos):
+    """
+    Localiza uma coluna por nome, ignorando acentos,
+    espaços, maiúsculas/minúsculas e pontuação.
+    """
+
+    mapa = {}
+
+    for coluna in df.columns:
+        chave = normalizar(coluna)
+        chave = re.sub(r"[^A-Z0-9]", "", chave)
+        mapa[chave] = coluna
+
+    for candidato in candidatos:
+        chave = normalizar(candidato)
+        chave = re.sub(r"[^A-Z0-9]", "", chave)
+
+        if chave in mapa:
+            return mapa[chave]
+
+    # segunda tentativa: contém
+    for coluna in df.columns:
+        coluna_n = normalizar(coluna)
+        coluna_n = re.sub(r"[^A-Z0-9]", "", coluna_n)
+
+        for candidato in candidatos:
+            candidato_n = normalizar(candidato)
+            candidato_n = re.sub(r"[^A-Z0-9]", "", candidato_n)
+
+            if candidato_n and candidato_n in coluna_n:
+                return coluna
+
+    return None
+
+
+def converter_abertura(valor):
+    """
+    Converte datas de abertura para datetime.
+    """
+
+    if pd.isna(valor):
+        return pd.NaT
+
+    if isinstance(valor, pd.Timestamp):
+        return valor
+
+    if isinstance(valor, datetime):
+        return pd.Timestamp(valor)
+
+    if isinstance(valor, date):
+        return pd.Timestamp(valor)
+
+    texto = str(valor).strip()
+
+    if not texto:
+        return pd.NaT
+
+    # Excel serial
+    if re.fullmatch(r"\d+(\.\d+)?", texto):
+        try:
+            numero = float(texto)
+
+            if 20000 < numero < 60000:
+                return pd.Timestamp(
+                    "1899-12-30"
+                ) + pd.to_timedelta(
+                    numero,
+                    unit="D",
+                )
+        except Exception:
+            pass
+
+    # Formatos conhecidos
+    formatos = [
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d/%m/%y",
+        "%b/%Y",
+        "%B/%Y",
+    ]
+
+    for formato in formatos:
+        try:
+            return pd.to_datetime(
+                texto,
+                format=formato,
+                errors="raise",
+            )
+        except Exception:
+            pass
+
+    # Tratamento de mês/ano em português
+    meses = {
+        "JAN": 1,
+        "FEV": 2,
+        "MAR": 3,
+        "ABR": 4,
+        "MAI": 5,
+        "JUN": 6,
+        "JUL": 7,
+        "AGO": 8,
+        "SET": 9,
+        "OUT": 10,
+        "NOV": 11,
+        "DEZ": 12,
+    }
+
+    texto_n = normalizar(texto)
+
+    match = re.match(
+        r"([A-Z]{3,})[/\-](\d{4})",
+        texto_n,
+    )
+
     if match:
-        mes_txt = match.group(1)[:3]
+        mes_texto = match.group(1)[:3]
         ano = int(match.group(2))
-        if mes_txt in MESES_PT.values():
-            mes_num = {v: k for k, v in MESES_PT.items()}.get(mes_txt)
-            try: return pd.Timestamp(year=ano, month=mes_num, day=1)
-            except: return pd.NaT
-    try: return pd.to_datetime(texto, errors="coerce", dayfirst=True)
-    except: return pd.NaT
 
-# ==============================================================================
-# MENU LATERAL - SELEÇÃO DO MÓDULO
-# ==============================================================================
-st.sidebar.title("🗂️ Menu de Ferramentas")
-modulo = st.sidebar.radio("Selecione o módulo que deseja executar:", [
-    "1. THE/TIM (Estruturar Planilha)",
-    "2. Diretoria API (Estruturar Planilha)",
-    "3. Teresina (Painéis Executivos)",
-    "4. Piauí Mensal (Painéis por Base)",
-    "5. Piauí Diário (Painéis por Base)",
-    "6. Painel por Cidade (Bairros x Meses)",
-    "7. Painel O.S. (Pendentes/Abertas)"
-])
+        if mes_texto in meses:
+            return pd.Timestamp(
+                year=ano,
+                month=meses[mes_texto],
+                day=1,
+            )
 
-# ==============================================================================
-# MÓDULOS DE EXECUÇÃO
-# ==============================================================================
-if modulo == "1. THE/TIM (Estruturar Planilha)":
-    st.header("Processamento de Atividades - THE / TIM (Teresina e Timon)")
-    st.markdown("Gera planilha estruturada com Zona + Abertura (Consolidado).")
-    
-    uploaded_files = st.file_uploader("Faça o upload dos arquivos Excel", type=["xlsx", "xlsb", "xls"], accept_multiple_files=True)
-    if uploaded_files:
-        lista_dfs = []
-        for file in uploaded_files:
-            engine = "pyxlsb" if file.name.endswith(".xlsb") else "openpyxl"
-            lista_dfs.append(pd.read_excel(file, engine=engine))
-        
-        df = pd.concat(lista_dfs, ignore_index=True)
-        colunas_necessarias = ['Cód. Protocolo Origem', 'Matrícula', 'Cidade', 'Bairro', 'Início do SLA']
-        faltando = [c for c in colunas_necessarias if c not in df.columns]
-        
-        if faltando:
-            st.error(f"Colunas não encontradas: {faltando}")
+    return pd.to_datetime(
+        texto,
+        errors="coerce",
+        dayfirst=True,
+    )
+
+
+def formatar_numero(numero):
+    try:
+        return f"{int(numero):,}".replace(",", ".")
+    except Exception:
+        return "0"
+
+
+def abreviar_texto(texto, limite):
+    texto = str(texto)
+
+    if len(texto) <= limite:
+        return texto
+
+    return texto[: limite - 3] + "..."
+
+
+def texto_cabecalho_periodo(valor, modo):
+    if modo == "Por dia":
+        return valor.strftime("%d/%m")
+
+    return f"{MESES_PT[valor.month]}/{str(valor.year)[2:]}"
+
+
+# ============================================================
+# LEITURA DE ARQUIVO
+# ============================================================
+
+def ler_planilha(arquivo):
+    if arquivo is None:
+        return None
+
+    nome = arquivo.name.lower()
+
+    try:
+        if nome.endswith(".xlsb"):
+            return pd.read_excel(
+                arquivo,
+                sheet_name=0,
+                engine="pyxlsb",
+            )
+
+        return pd.read_excel(
+            arquivo,
+            sheet_name=0,
+        )
+
+    except Exception as erro:
+        st.error(
+            f"Não foi possível ler o arquivo: {erro}"
+        )
+        return None
+
+
+# ============================================================
+# PREPARAÇÃO DOS DADOS
+# ============================================================
+
+def preparar_dados(df, modulo):
+    """
+    Padroniza os dados para o gerador.
+
+    THE/TIM:
+        Bairro
+        Abertura
+        Protocolo
+
+    API:
+        Cidade
+        Abertura
+        Protocolo
+        Base
+    """
+
+    if df is None or df.empty:
+        return None, "A planilha está vazia."
+
+    dados = df.copy()
+
+    coluna_abertura = localizar_coluna(
+        dados,
+        [
+            "Abertura",
+            "Data Abertura",
+            "Data de Abertura",
+            "Data_Abertura",
+            "Dt Abertura",
+            "Data",
+        ],
+    )
+
+    coluna_protocolo = localizar_coluna(
+        dados,
+        [
+            "Cód. Protocolo Origem",
+            "Cod. Protocolo Origem",
+            "Código Protocolo Origem",
+            "Codigo Protocolo Origem",
+            "Protocolo",
+            "Protocolo Origem",
+            "OS",
+            "O.S.",
+        ],
+    )
+
+    if coluna_abertura is None:
+        return (
+            None,
+            "Não foi encontrada a coluna de abertura.",
+        )
+
+    dados["_ABERTURA"] = dados[coluna_abertura].apply(
+        converter_abertura
+    )
+
+    if coluna_protocolo:
+        dados["_PROTOCOLO"] = (
+            dados[coluna_protocolo]
+            .astype(str)
+            .str.strip()
+        )
+
+        dados.loc[
+            dados["_PROTOCOLO"].isin(
+                ["", "NAN", "NONE", "NAT"]
+            ),
+            "_PROTOCOLO",
+        ] = np.nan
+
+    else:
+        dados["_PROTOCOLO"] = np.nan
+
+    dados = dados.dropna(
+        subset=["_ABERTURA"]
+    ).copy()
+
+    if dados.empty:
+        return (
+            None,
+            "Nenhum registro possui data de abertura válida.",
+        )
+
+    # --------------------------------------------------------
+    # THE / TIM
+    # --------------------------------------------------------
+
+    if modulo in ["THE", "TIM"]:
+
+        coluna_bairro = localizar_coluna(
+            dados,
+            [
+                "Bairro",
+                "BAIRRO",
+                "Bairro do Cliente",
+                "Bairro Cliente",
+            ],
+        )
+
+        if coluna_bairro is None:
+            return (
+                None,
+                "Não foi encontrada a coluna de Bairro.",
+            )
+
+        dados["_LOCAL"] = (
+            dados[coluna_bairro]
+            .fillna("NÃO INFORMADO")
+            .astype(str)
+            .str.strip()
+        )
+
+        dados["_LOCAL"] = dados["_LOCAL"].replace(
+            {
+                "": "NÃO INFORMADO",
+                "nan": "NÃO INFORMADO",
+                "NaN": "NÃO INFORMADO",
+            }
+        )
+
+    # --------------------------------------------------------
+    # API
+    # --------------------------------------------------------
+
+    elif modulo == "API":
+
+        coluna_cidade = localizar_coluna(
+            dados,
+            [
+                "Cidade",
+                "Município",
+                "Municipio",
+                "Município Cliente",
+                "Cidade Cliente",
+            ],
+        )
+
+        if coluna_cidade is None:
+            return (
+                None,
+                "Não foi encontrada a coluna de Cidade/Município.",
+            )
+
+        dados["_LOCAL"] = (
+            dados[coluna_cidade]
+            .fillna("NÃO INFORMADA")
+            .astype(str)
+            .str.strip()
+        )
+
+        dados["_LOCAL"] = dados["_LOCAL"].replace(
+            {
+                "": "NÃO INFORMADA",
+                "nan": "NÃO INFORMADA",
+                "NaN": "NÃO INFORMADA",
+            }
+        )
+
+        dados["_BASE"] = dados["_LOCAL"].apply(
+            obter_base
+        )
+
+    dados["_DATA"] = dados["_ABERTURA"].dt.normalize()
+    dados["_MES_ORDEM"] = dados["_ABERTURA"].dt.to_period(
+        "M"
+    ).dt.to_timestamp()
+
+    return dados, None
+
+
+# ============================================================
+# CONTAGEM
+# ============================================================
+
+def contar_os(series):
+    """
+    Conta protocolos distintos quando disponíveis.
+    Caso contrário, conta linhas.
+    """
+
+    protocolos = series["_PROTOCOLO"]
+
+    validos = protocolos.dropna()
+
+    if not validos.empty:
+        return validos.nunique()
+
+    return len(series)
+
+
+def gerar_agregacao(
+    df,
+    modo,
+):
+    if modo == "Por dia":
+        df["_PERIODO"] = df["_DATA"]
+    else:
+        df["_PERIODO"] = df["_MES_ORDEM"]
+
+    grupos = []
+
+    for periodo, bloco_periodo in df.groupby(
+        "_PERIODO",
+        sort=True,
+    ):
+        grupos.append(
+            {
+                "PERIODO": periodo,
+                "TOTAL": contar_os(bloco_periodo),
+            }
+        )
+
+    if not grupos:
+        return pd.DataFrame(
+            columns=["PERIODO", "TOTAL"]
+        )
+
+    return pd.DataFrame(grupos)
+
+
+def gerar_tabela_local_periodo(
+    df,
+    modo,
+):
+    if modo == "Por dia":
+        df["_PERIODO"] = df["_DATA"]
+    else:
+        df["_PERIODO"] = df["_MES_ORDEM"]
+
+    tabela = {}
+
+    locais = sorted(
+        df["_LOCAL"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    periodos = sorted(
+        df["_PERIODO"]
+        .dropna()
+        .unique()
+    )
+
+    for local in locais:
+
+        linha = []
+
+        for periodo in periodos:
+
+            bloco = df[
+                (df["_LOCAL"] == local)
+                & (df["_PERIODO"] == periodo)
+            ]
+
+            linha.append(
+                contar_os(bloco)
+            )
+
+        tabela[local] = linha
+
+    resultado = pd.DataFrame(
+        tabela,
+        index=periodos,
+    ).T
+
+    resultado.index.name = "LOCAL"
+
+    return resultado
+
+
+# ============================================================
+# DESENHO
+# ============================================================
+
+def cor_intensidade(valor, maximo):
+    if maximo <= 0 or valor <= 0:
+        return "#F1F4F7"
+
+    proporcao = valor / maximo
+
+    if proporcao >= 0.75:
+        return "#123B5D"
+
+    if proporcao >= 0.50:
+        return "#2B8CC4"
+
+    if proporcao >= 0.25:
+        return "#7BB8D8"
+
+    return "#DCECF5"
+
+
+def cor_texto_celula(valor, maximo):
+    if maximo > 0 and valor / maximo >= 0.75:
+        return BRANCO
+
+    return AZUL_ESCURO
+
+
+def texto_centralizado(
+    draw,
+    box,
+    texto,
+    fonte_obj,
+    fill,
+):
+    x1, y1, x2, y2 = box
+
+    bbox = draw.textbbox(
+        (0, 0),
+        texto,
+        font=fonte_obj,
+    )
+
+    largura = bbox[2] - bbox[0]
+    altura = bbox[3] - bbox[1]
+
+    x = x1 + ((x2 - x1) - largura) / 2
+    y = y1 + ((y2 - y1) - altura) / 2 - 2
+
+    draw.text(
+        (x, y),
+        texto,
+        font=fonte_obj,
+        fill=fill,
+    )
+
+
+def desenhar_card(
+    draw,
+    x,
+    y,
+    largura,
+    altura,
+    titulo,
+    valor,
+):
+    draw.rounded_rectangle(
+        (
+            x,
+            y,
+            x + largura,
+            y + altura,
+        ),
+        radius=18,
+        fill=BRANCO,
+        outline=CINZA_CLARO,
+        width=2,
+    )
+
+    draw.text(
+        (
+            x + 24,
+            y + 20,
+        ),
+        titulo,
+        font=fonte(17, True),
+        fill=CINZA,
+    )
+
+    draw.text(
+        (
+            x + 24,
+            y + 55,
+        ),
+        str(valor),
+        font=fonte(30, True),
+        fill=AZUL_ESCURO,
+    )
+
+
+def desenhar_barra(
+    draw,
+    x,
+    y,
+    largura,
+    altura,
+    valor,
+    maximo,
+):
+    draw.rounded_rectangle(
+        (
+            x,
+            y,
+            x + largura,
+            y + altura,
+        ),
+        radius=6,
+        fill=CINZA_CLARO,
+    )
+
+    if maximo > 0:
+        largura_valor = int(
+            largura * (valor / maximo)
+        )
+
+        if largura_valor > 0:
+            draw.rounded_rectangle(
+                (
+                    x,
+                    y,
+                    x + largura_valor,
+                    y + altura,
+                ),
+                radius=6,
+                fill=AZUL,
+            )
+
+
+def desenhar_logo(
+    imagem,
+    logo_path,
+    x,
+    y,
+    max_width,
+    max_height,
+):
+    if not logo_path.exists():
+        return
+
+    try:
+        logo = Image.open(
+            logo_path
+        ).convert("RGBA")
+
+        logo.thumbnail(
+            (
+                max_width,
+                max_height,
+            ),
+            Image.Resampling.LANCZOS,
+        )
+
+        imagem.alpha_composite(
+            logo,
+            (
+                x,
+                y,
+            ),
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# PAINEL PRINCIPAL
+# ============================================================
+
+def gerar_painel(
+    df,
+    modulo,
+    modo,
+    base=None,
+):
+    """
+    Gera o painel vertical.
+
+    THE/TIM:
+        todos os bairros.
+
+    API:
+        todas as cidades.
+
+    Não existe limite de locais.
+    """
+
+    if df is None or df.empty:
+        raise ValueError(
+            "Não existem dados para gerar o painel."
+        )
+
+    dados = df.copy()
+
+    if modulo == "API" and base:
+        dados = dados[
+            dados["_BASE"] == base
+        ].copy()
+
+    if dados.empty:
+        raise ValueError(
+            "Não existem registros para o filtro selecionado."
+        )
+
+    # --------------------------------------------------------
+    # AGREGADOS
+    # --------------------------------------------------------
+
+    tabela = gerar_tabela_local_periodo(
+        dados,
+        modo,
+    )
+
+    if tabela.empty:
+        raise ValueError(
+            "Não foi possível gerar a tabela."
+        )
+
+    tabela = tabela.sort_index()
+
+    periodos = list(tabela.columns)
+    locais = list(tabela.index)
+
+    # Totais
+    tabela["_TOTAL"] = tabela.sum(
+        axis=1
+    )
+
+    total_geral = int(
+        tabela["_TOTAL"].sum()
+    )
+
+    local_maior = (
+        tabela["_TOTAL"]
+        .idxmax()
+        if not tabela.empty
+        else "-"
+    )
+
+    local_maior_total = int(
+        tabela["_TOTAL"].max()
+    ) if not tabela.empty else 0
+
+    totais_periodo = tabela[
+        periodos
+    ].sum(
+        axis=0
+    )
+
+    periodo_critico = (
+        totais_periodo.idxmax()
+        if not totais_periodo.empty
+        else None
+    )
+
+    periodo_critico_total = int(
+        totais_periodo.max()
+    ) if not totais_periodo.empty else 0
+
+    # --------------------------------------------------------
+    # DIMENSÕES DINÂMICAS
+    # --------------------------------------------------------
+
+    margem = 70
+
+    largura = 1800
+
+    altura_cabecalho = 300
+    altura_cards = 220
+    altura_titulo_tabela = 110
+    altura_linha = 62
+    altura_grafico = 460
+    altura_rodape = 100
+
+    # Limita visualmente a largura das colunas.
+    # A altura cresce conforme a quantidade de bairros/cidades.
+    largura_local = 390
+    largura_periodo = 105
+    largura_total = 125
+
+    largura_tabela = (
+        largura_local
+        + len(periodos) * largura_periodo
+        + largura_total
+    )
+
+    largura = max(
+        largura,
+        largura_tabela + margem * 2,
+    )
+
+    altura_tabela = (
+        altura_titulo_tabela
+        + len(locais) * altura_linha
+    )
+
+    altura = (
+        altura_cabecalho
+        + altura_cards
+        + 50
+        + altura_tabela
+        + 70
+        + altura_grafico
+        + altura_rodape
+    )
+
+    imagem = Image.new(
+        "RGBA",
+        (
+            largura,
+            altura,
+        ),
+        FUNDO,
+    )
+
+    draw = ImageDraw.Draw(
+        imagem
+    )
+
+    # --------------------------------------------------------
+    # CABEÇALHO
+    # --------------------------------------------------------
+
+    draw.rectangle(
+        (
+            0,
+            0,
+            largura,
+            12,
+        ),
+        fill=AZUL_ESCURO,
+    )
+
+    titulo = TITULOS[modulo]
+
+    if modulo == "API":
+        if base:
+            subtitulo = (
+                f"Painel de Reclamações de Falta de Água • {base}"
+            )
         else:
-            resultado = pd.DataFrame()
-            resultado['Cód. Protocolo Origem'] = df['Cód. Protocolo Origem']
-            resultado['Matrícula'] = df['Matrícula']
-            resultado['Cidade'] = df['Cidade']
-            resultado['Zona'] = df['Bairro'].apply(obter_zona)
-            resultado['Bairro'] = df['Bairro']
-            resultado['Abertura'] = df['Início do SLA'].apply(formatar_abertura)
-            resultado['Início do SLA'] = df['Início do SLA']
-            
-            st.success(f"Sucesso! Total de registros: {len(resultado)}")
-            st.dataframe(resultado.head())
-            
-            output = io.BytesIO()
-            resultado.to_excel(output, index=False)
-            st.download_button("📥 Baixar Base Estruturada", data=output.getvalue(), file_name="Base_Estruturada_Consolidada.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            subtitulo = (
+                "Painel de Reclamações de Falta de Água"
+            )
+    else:
+        subtitulo = (
+            f"Painel de Reclamações de Falta de Água • {modo}"
+        )
 
-elif modulo == "2. Diretoria API (Estruturar Planilha)":
-    st.header("Processamento de Atividades - DIRETORIA API")
-    st.markdown("Gera planilha estruturada com Base + Abertura.")
-    
-    uploaded_file = st.file_uploader("Faça o upload do arquivo Excel", type=["xlsx", "xlsb", "xls"])
-    if uploaded_file:
-        engine = "pyxlsb" if uploaded_file.name.endswith(".xlsb") else "openpyxl"
-        df = pd.read_excel(uploaded_file, engine=engine)
-        
-        colunas_necessarias = ['Cód. Protocolo Origem', 'Matrícula', 'Cidade', 'Bairro', 'Início do SLA']
-        faltando = [c for c in colunas_necessarias if c not in df.columns]
-        
-        if faltando:
-            st.error(f"Colunas não encontradas: {faltando}")
+    draw.text(
+        (
+            margem,
+            55,
+        ),
+        titulo,
+        font=fonte(40, True),
+        fill=AZUL_ESCURO,
+    )
+
+    draw.text(
+        (
+            margem,
+            112,
+        ),
+        subtitulo,
+        font=fonte(22),
+        fill=CINZA,
+    )
+
+    # período disponível
+    data_min = dados["_DATA"].min()
+    data_max = dados["_DATA"].max()
+
+    if modo == "Por dia":
+        periodo_texto = (
+            f"Período: {data_min.strftime('%d/%m/%Y')} "
+            f"a {data_max.strftime('%d/%m/%Y')}"
+        )
+    else:
+        periodo_texto = (
+            f"Período: {MESES_PT[data_min.month]}/{data_min.year} "
+            f"a {MESES_PT[data_max.month]}/{data_max.year}"
+        )
+
+    draw.text(
+        (
+            margem,
+            160,
+        ),
+        periodo_texto,
+        font=fonte(18),
+        fill=CINZA,
+    )
+
+    # Logo
+    desenhar_logo(
+        imagem,
+        LOGOS[modulo],
+        largura - margem - 330,
+        45,
+        330,
+        130,
+    )
+
+    # --------------------------------------------------------
+    # CARDS
+    # --------------------------------------------------------
+
+    y_cards = altura_cabecalho
+
+    espaco_card = 25
+
+    largura_card = (
+        largura - 2 * margem - 2 * espaco_card
+    ) / 3
+
+    desenhar_card(
+        draw,
+        margem,
+        y_cards,
+        largura_card,
+        altura_cards,
+        "TOTAL DE O.S. / RECLAMAÇÕES",
+        formatar_numero(total_geral),
+    )
+
+    desenhar_card(
+        draw,
+        margem + largura_card + espaco_card,
+        y_cards,
+        largura_card,
+        altura_cards,
+        "LOCAL COM MAIOR VOLUME",
+        abreviar_texto(
+            local_maior,
+            24,
+        ),
+    )
+
+    desenhar_card(
+        draw,
+        margem
+        + (largura_card + espaco_card) * 2,
+        y_cards,
+        largura_card,
+        altura_cards,
+        "PERÍODO CRÍTICO",
+        (
+            texto_cabecalho_periodo(
+                periodo_critico,
+                modo,
+            )
+            if periodo_critico is not None
+            else "-"
+        ),
+    )
+
+    # --------------------------------------------------------
+    # TABELA
+    # --------------------------------------------------------
+
+    y_tabela = (
+        y_cards
+        + altura_cards
+        + 50
+    )
+
+    draw.text(
+        (
+            margem,
+            y_tabela,
+        ),
+        (
+            "VOLUME POR BAIRRO"
+            if modulo in ["THE", "TIM"]
+            else "VOLUME POR CIDADE"
+        ),
+        font=fonte(27, True),
+        fill=AZUL_ESCURO,
+    )
+
+    y_inicio = (
+        y_tabela
+        + altura_titulo_tabela - 20
+    )
+
+    x_inicio = margem
+
+    # Cabeçalho
+    draw.rounded_rectangle(
+        (
+            x_inicio,
+            y_inicio,
+            x_inicio + largura_tabela,
+            y_inicio + altura_linha,
+        ),
+        radius=8,
+        fill=AZUL_ESCURO,
+    )
+
+    draw.text(
+        (
+            x_inicio + 18,
+            y_inicio + 17,
+        ),
+        (
+            "BAIRRO"
+            if modulo in ["THE", "TIM"]
+            else "CIDADE"
+        ),
+        font=fonte(18, True),
+        fill=BRANCO,
+    )
+
+    for indice, periodo in enumerate(periodos):
+
+        x = (
+            x_inicio
+            + largura_local
+            + indice * largura_periodo
+        )
+
+        titulo_periodo = texto_cabecalho_periodo(
+            periodo,
+            modo,
+        )
+
+        texto_centralizado(
+            draw,
+            (
+                x,
+                y_inicio,
+                x + largura_periodo,
+                y_inicio + altura_linha,
+            ),
+            titulo_periodo,
+            fonte(15, True),
+            BRANCO,
+        )
+
+    x_total = (
+        x_inicio
+        + largura_local
+        + len(periodos) * largura_periodo
+    )
+
+    texto_centralizado(
+        draw,
+        (
+            x_total,
+            y_inicio,
+            x_total + largura_total,
+            y_inicio + altura_linha,
+        ),
+        "TOTAL",
+        fonte(16, True),
+        BRANCO,
+    )
+
+    # --------------------------------------------------------
+    # LINHAS
+    # --------------------------------------------------------
+
+    maximo = int(
+        tabela[periodos].max().max()
+    ) if periodos else 0
+
+    for linha_idx, local in enumerate(locais):
+
+        y = (
+            y_inicio
+            + altura_linha
+            + linha_idx * altura_linha
+        )
+
+        fill_linha = (
+            BRANCO
+            if linha_idx % 2 == 0
+            else "#F8FAFC"
+        )
+
+        draw.rectangle(
+            (
+                x_inicio,
+                y,
+                x_inicio + largura_tabela,
+                y + altura_linha,
+            ),
+            fill=fill_linha,
+        )
+
+        # Local
+        texto_local = abreviar_texto(
+            local,
+            35,
+        )
+
+        draw.text(
+            (
+                x_inicio + 18,
+                y + 18,
+            ),
+            texto_local,
+            font=fonte(16, True),
+            fill=AZUL_ESCURO,
+        )
+
+        # Períodos
+        for indice, periodo in enumerate(periodos):
+
+            x = (
+                x_inicio
+                + largura_local
+                + indice * largura_periodo
+            )
+
+            valor = int(
+                tabela.loc[
+                    local,
+                    periodo,
+                ]
+            )
+
+            cor = cor_intensidade(
+                valor,
+                maximo,
+            )
+
+            draw.rectangle(
+                (
+                    x + 2,
+                    y + 2,
+                    x + largura_periodo - 2,
+                    y + altura_linha - 2,
+                ),
+                fill=cor,
+            )
+
+            texto_centralizado(
+                draw,
+                (
+                    x,
+                    y,
+                    x + largura_periodo,
+                    y + altura_linha,
+                ),
+                formatar_numero(valor),
+                fonte(15, True),
+                cor_texto_celula(
+                    valor,
+                    maximo,
+                ),
+            )
+
+        # Total
+        total_local = int(
+            tabela.loc[
+                local,
+                "_TOTAL",
+            ]
+        )
+
+        texto_centralizado(
+            draw,
+            (
+                x_total,
+                y,
+                x_total + largura_total,
+                y + altura_linha,
+            ),
+            formatar_numero(
+                total_local
+            ),
+            fonte(16, True),
+            AZUL_ESCURO,
+        )
+
+    # --------------------------------------------------------
+    # GRÁFICO DE EVOLUÇÃO
+    # --------------------------------------------------------
+
+    y_grafico = (
+        y_inicio
+        + altura_linha
+        + len(locais) * altura_linha
+        + 60
+    )
+
+    draw.text(
+        (
+            margem,
+            y_grafico,
+        ),
+        "EVOLUÇÃO DO VOLUME",
+        font=fonte(27, True),
+        fill=AZUL_ESCURO,
+    )
+
+    grafico_y = (
+        y_grafico + 70
+    )
+
+    grafico_h = (
+        altura_grafico - 100
+    )
+
+    grafico_x = margem
+    grafico_w = (
+        largura - 2 * margem
+    )
+
+    # Área do gráfico
+    draw.rounded_rectangle(
+        (
+            grafico_x,
+            grafico_y,
+            grafico_x + grafico_w,
+            grafico_y + grafico_h,
+        ),
+        radius=14,
+        fill=BRANCO,
+        outline=CINZA_CLARO,
+        width=2,
+    )
+
+    valores_grafico = [
+        int(totais_periodo[p])
+        for p in periodos
+    ]
+
+    if valores_grafico:
+
+        max_grafico = max(
+            valores_grafico
+        )
+
+        if max_grafico <= 0:
+            max_grafico = 1
+
+        eixo_x = (
+            grafico_x + 70
+        )
+
+        eixo_y = (
+            grafico_y + grafico_h - 60
+        )
+
+        eixo_topo = (
+            grafico_y + 40
+        )
+
+        eixo_direita = (
+            grafico_x + grafico_w - 35
+        )
+
+        # linhas horizontais
+        for i in range(5):
+
+            proporcao = i / 4
+
+            yy = (
+                eixo_y
+                - (eixo_y - eixo_topo)
+                * proporcao
+            )
+
+            draw.line(
+                (
+                    eixo_x,
+                    yy,
+                    eixo_direita,
+                    yy,
+                ),
+                fill=CINZA_CLARO,
+                width=2,
+            )
+
+            valor_eixo = int(
+                max_grafico
+                * proporcao
+            )
+
+            draw.text(
+                (
+                    grafico_x + 15,
+                    yy - 10,
+                ),
+                formatar_numero(
+                    valor_eixo
+                ),
+                font=fonte(13),
+                fill=CINZA,
+            )
+
+        n = len(periodos)
+
+        if n == 1:
+            pontos = [
+                (
+                    (eixo_x + eixo_direita) // 2,
+                    eixo_y
+                    - (
+                        valores_grafico[0]
+                        / max_grafico
+                    )
+                    * (
+                        eixo_y - eixo_topo
+                    ),
+                )
+            ]
         else:
-            resultado = pd.DataFrame()
-            resultado['Cód. Protocolo Origem'] = df['Cód. Protocolo Origem']
-            resultado['Matrícula'] = df['Matrícula']
-            resultado['Base'] = df['Cidade'].apply(obter_base)
-            resultado['Cidade'] = df['Cidade']
-            resultado['Bairro'] = df['Bairro']
-            resultado['Abertura'] = df['Início do SLA'].apply(formatar_abertura)
-            resultado['Início do SLA'] = df['Início do SLA']
-            
-            st.success(f"Sucesso! Total de registros: {len(resultado)}")
-            st.dataframe(resultado.head())
-            
-            output = io.BytesIO()
-            resultado.to_excel(output, index=False)
-            nome_base = os.path.splitext(uploaded_file.name)[0]
-            st.download_button("📥 Baixar Arquivo Estruturado", data=output.getvalue(), file_name=f"{nome_base}_Estruturado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            pontos = []
 
-elif modulo == "3. Teresina (Painéis Executivos)":
-    st.header("Backlog Águas de Teresina - Painéis Executivos")
-    uploaded_file = st.file_uploader("Selecione a planilha Excel do Backlog Teresina:", type=["xlsx", "xlsb", "xls"])
-    
-    if uploaded_file:
-        engine = "pyxlsb" if uploaded_file.name.endswith(".xlsb") else "openpyxl"
-        df_raw = pd.read_excel(uploaded_file, engine=engine)
-        df_raw.columns = [str(c).strip() for c in df_raw.columns]
-        st.success(f"Base carregada com {len(df_raw)} registros.")
-        tipo_painel = st.selectbox("Selecione o Painel:", ["Painel Geral (Zonas x Meses)", "Painel Top 25 Bairros & Regionais"])
-        if st.button("Gerar Painel Executivo"):
-            st.info("Rotina de renderização gráfica pronta para processamento.")
+            for i, valor in enumerate(
+                valores_grafico
+            ):
+                xx = (
+                    eixo_x
+                    + (
+                        i
+                        / (n - 1)
+                    )
+                    * (
+                        eixo_direita
+                        - eixo_x
+                    )
+                )
+
+                yy = (
+                    eixo_y
+                    - (
+                        valor
+                        / max_grafico
+                    )
+                    * (
+                        eixo_y
+                        - eixo_topo
+                    )
+                )
+
+                pontos.append(
+                    (
+                        int(xx),
+                        int(yy),
+                    )
+                )
+
+        if len(pontos) >= 2:
+            draw.line(
+                pontos,
+                fill=AZUL,
+                width=6,
+            )
+
+        for i, ponto in enumerate(
+            pontos
+        ):
+
+            xx, yy = ponto
+
+            draw.ellipse(
+                (
+                    xx - 8,
+                    yy - 8,
+                    xx + 8,
+                    yy + 8,
+                ),
+                fill=AZUL,
+            )
+
+            valor = valores_grafico[i]
+
+            draw.text(
+                (
+                    xx - 20,
+                    yy - 38,
+                ),
+                formatar_numero(
+                    valor
+                ),
+                font=fonte(14, True),
+                fill=AZUL_ESCURO,
+            )
+
+            # Exibir rótulos de todos os períodos,
+            # mas reduzir fonte quando houver muitos.
+            if len(periodos) <= 20:
+                texto_periodo = (
+                    texto_cabecalho_periodo(
+                        periodos[i],
+                        modo,
+                    )
+                )
+
+                bbox = draw.textbbox(
+                    (0, 0),
+                    texto_periodo,
+                    font=fonte(13, True),
+                )
+
+                largura_txt = (
+                    bbox[2] - bbox[0]
+                )
+
+                draw.text(
+                    (
+                        xx - largura_txt / 2,
+                        eixo_y + 15,
+                    ),
+                    texto_periodo,
+                    font=fonte(13, True),
+                    fill=CINZA,
+                )
+
+    # --------------------------------------------------------
+    # RODAPÉ
+    # --------------------------------------------------------
+
+    y_rodape = (
+        altura - altura_rodape + 25
+    )
+
+    draw.line(
+        (
+            margem,
+            y_rodape,
+            largura - margem,
+            y_rodape,
+        ),
+        fill=CINZA_CLARO,
+        width=2,
+    )
+
+    empresa = NOMES_EMPRESAS[
+        modulo
+    ]
+
+    draw.text(
+        (
+            margem,
+            y_rodape + 25,
+        ),
+        f"{empresa} • Controle Operacional Integrado — COI",
+        font=fonte(16),
+        fill=CINZA,
+    )
+
+    draw.text(
+        (
+            largura - margem - 250,
+            y_rodape + 25,
+        ),
+        datetime.now().strftime(
+            "Gerado em %d/%m/%Y %H:%M"
+        ),
+        font=fonte(15),
+        fill=CINZA,
+    )
+
+    # --------------------------------------------------------
+    # PNG
+    # --------------------------------------------------------
+
+    output = io.BytesIO()
+
+    imagem_rgb = imagem.convert(
+        "RGB"
+    )
+
+    imagem_rgb.save(
+        output,
+        format="PNG",
+        optimize=True,
+    )
+
+    output.seek(0)
+
+    return output
+
+
+# ============================================================
+# INTERFACE
+# ============================================================
+
+st.markdown(
+    '<div class="module-title">Relatório de Falta de Água - COI</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="module-subtitle">'
+    "Carregue as bases operacionais e gere o relatório consolidado de reclamações."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# UPLOADS
+# ============================================================
+
+col_api, col_the, col_tim = st.columns(
+    3,
+    gap="medium",
+)
+
+with col_api:
+
+    st.markdown(
+        "### API"
+    )
+
+    arquivo_api = st.file_uploader(
+        "Planilha API",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        key="upload_api",
+    )
+
+with col_the:
+
+    st.markdown(
+        "### THE"
+    )
+
+    arquivo_the = st.file_uploader(
+        "Planilha THE",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        key="upload_the",
+    )
+
+with col_tim:
+
+    st.markdown(
+        "### TIM"
+    )
+
+    arquivo_tim = st.file_uploader(
+        "Planilha TIM",
+        type=[
+            "xlsx",
+            "xls",
+            "xlsb",
+        ],
+        key="upload_tim",
+    )
+
+
+st.divider()
+
+
+# ============================================================
+# SELEÇÃO DO MÓDULO
+# ============================================================
+
+st.markdown(
+    "### Configuração do relatório"
+)
+
+col1, col2 = st.columns(
+    [1, 1],
+    gap="large",
+)
+
+with col1:
+
+    modulo = st.radio(
+        "Empresa / operação",
+        [
+            "API",
+            "THE",
+            "TIM",
+        ],
+        horizontal=True,
+    )
+
+with col2:
+
+    modo = st.radio(
+        "Apresentação temporal",
+        [
+            "Por dia",
+            "Por mês",
+        ],
+        horizontal=True,
+    )
+
+
+# ============================================================
+# API — SELEÇÃO DE BASE
+# ============================================================
+
+base_selecionada = None
+
+if modulo == "API":
+
+    st.markdown(
+        "#### Base operacional"
+    )
+
+    # Descobrir bases disponíveis no arquivo
+    bases_disponiveis = []
+
+    if arquivo_api is not None:
+
+        df_api_preview = ler_planilha(
+            arquivo_api
+        )
+
+        if df_api_preview is not None:
+
+            df_api_preview, erro_preview = preparar_dados(
+                df_api_preview,
+                "API",
+            )
+
+            if df_api_preview is not None:
+
+                bases_disponiveis = sorted(
+                    [
+                        b
+                        for b in df_api_preview["_BASE"]
+                        .dropna()
+                        .unique()
+                        if b
+                    ]
+                )
+
+    opcoes_base = [
+        "Todas"
+    ] + bases_disponiveis
+
+    base_escolhida = st.selectbox(
+        "Selecione a base",
+        opcoes_base,
+    )
+
+    if base_escolhida != "Todas":
+        base_selecionada = base_escolhida
+
+
+st.divider()
+
+
+# ============================================================
+# ARQUIVO SELECIONADO
+# ============================================================
+
+arquivos = {
+    "API": arquivo_api,
+    "THE": arquivo_the,
+    "TIM": arquivo_tim,
+}
+
+arquivo_selecionado = arquivos[
+    modulo
+]
+
+
+if arquivo_selecionado is None:
+
+    st.info(
+        f"Carregue a planilha de {modulo} para gerar o relatório."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# PREPARAÇÃO
+# ============================================================
+
+with st.spinner(
+    f"Preparando os dados de {modulo}..."
+):
+
+    df_original = ler_planilha(
+        arquivo_selecionado
+    )
+
+    if df_original is None:
+        st.stop()
+
+    df, erro = preparar_dados(
+        df_original,
+        modulo,
+    )
+
+
+if erro:
+
+    st.error(
+        erro
+    )
+
+    st.stop()
+
+
+# ============================================================
+# INFORMAÇÕES DA BASE
+# ============================================================
+
+data_min = df["_DATA"].min()
+data_max = df["_DATA"].max()
+
+total_registros = len(df)
+
+if modulo == "API":
+
+    cidades = df["_LOCAL"].nunique()
+
+    bases = (
+        df["_BASE"]
+        .replace("", np.nan)
+        .dropna()
+        .nunique()
+    )
+
+    info1, info2, info3 = st.columns(
+        3
+    )
+
+    with info1:
+        st.metric(
+            "Registros",
+            formatar_numero(
+                total_registros
+            ),
+        )
+
+    with info2:
+        st.metric(
+            "Cidades",
+            formatar_numero(
+                cidades
+            ),
+        )
+
+    with info3:
+        st.metric(
+            "Bases identificadas",
+            formatar_numero(
+                bases
+            ),
+        )
 
 else:
-    st.header(modulo)
-    uploaded_file = st.file_uploader(f"Envie a planilha base para {modulo}", type=["xlsx", "xlsb", "xls"])
-    if uploaded_file:
-        df_raw = pd.read_excel(uploaded_file)
-        st.success(f"Arquivo '{uploaded_file.name}' carregado. Linhas: {len(df_raw)}")
-        if "Diário" in modulo:
-            st.selectbox("Selecione a Base:", ["Todas"] + list(df_raw.columns))
-            st.button("Gerar Painéis por Base (ZIP)")
-        elif "Mensal" in modulo:
-            st.multiselect("Bases a gerar:", ["Todas"])
-            st.button("Gerar Painéis (ZIP)")
-        elif "Cidade" in modulo:
-            cidade = st.selectbox("Selecione a Cidade:", ["Exemplo Cidade"])
-            st.button(f"Gerar Painel para {cidade}")
-        elif "Pendentes/Abertas" in modulo:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.selectbox("Tipo:", ["PENDENTES", "ABERTAS", "COMPARATIVO"])
-                st.selectbox("Crítico:", ["Mês", "Semana", "Dia"])
-            with col2:
-                st.date_input("De:")
-                st.date_input("Até:")
-            st.button("Gerar Painel O.S.")
+
+    bairros = df["_LOCAL"].nunique()
+
+    info1, info2, info3 = st.columns(
+        3
+    )
+
+    with info1:
+        st.metric(
+            "Registros",
+            formatar_numero(
+                total_registros
+            ),
+        )
+
+    with info2:
+        st.metric(
+            "Bairros",
+            formatar_numero(
+                bairros
+            ),
+        )
+
+    with info3:
+        st.metric(
+            "Período",
+            (
+                f"{data_min.strftime('%d/%m/%Y')} "
+                f"a {data_max.strftime('%d/%m/%Y')}"
+            ),
+        )
+
+
+# ============================================================
+# BOTÃO DE GERAÇÃO
+# ============================================================
+
+st.markdown(
+    ""
+)
+
+gerar = st.button(
+    "GERAR RELATÓRIO",
+    type="primary",
+    use_container_width=True,
+)
+
+
+# ============================================================
+# GERAÇÃO
+# ============================================================
+
+if gerar:
+
+    with st.spinner(
+        "Gerando relatório..."
+    ):
+
+        try:
+
+            imagem_bytes = gerar_painel(
+                df=df,
+                modulo=modulo,
+                modo=modo,
+                base=base_selecionada,
+            )
+
+            st.session_state[
+                "relatorio_gerado"
+            ] = imagem_bytes.getvalue()
+
+            st.session_state[
+                "relatorio_modulo"
+            ] = modulo
+
+            st.session_state[
+                "relatorio_modo"
+            ] = modo
+
+            st.session_state[
+                "relatorio_base"
+            ] = base_selecionada
+
+        except Exception as erro:
+
+            st.error(
+                f"Erro ao gerar o relatório: {erro}"
+            )
+
+            st.stop()
+
+
+# ============================================================
+# RESULTADO
+# ============================================================
+
+if (
+    "relatorio_gerado"
+    in st.session_state
+):
+
+    st.divider()
+
+    st.markdown(
+        "### Relatório gerado"
+    )
+
+    imagem_final = st.session_state[
+        "relatorio_gerado"
+    ]
+
+    modulo_final = st.session_state[
+        "relatorio_modulo"
+    ]
+
+    modo_final = st.session_state[
+        "relatorio_modo"
+    ]
+
+    base_final = st.session_state[
+        "relatorio_base"
+    ]
+
+    nome_empresa = NOMES_EMPRESAS[
+        modulo_final
+    ]
+
+    if base_final:
+        nome_arquivo = (
+            f"RELATORIO_FA_{modulo_final}_"
+            f"{normalizar(base_final).replace(' ', '_')}_"
+            f"{modo_final.replace(' ', '_')}.png"
+        )
+    else:
+        nome_arquivo = (
+            f"RELATORIO_FA_{modulo_final}_"
+            f"{modo_final.replace(' ', '_')}.png"
+        )
+
+    st.image(
+        imagem_final,
+        use_container_width=True,
+    )
+
+    st.download_button(
+        label="BAIXAR RELATÓRIO EM PNG",
+        data=imagem_final,
+        file_name=nome_arquivo,
+        mime="image/png",
+        use_container_width=True,
+    )
