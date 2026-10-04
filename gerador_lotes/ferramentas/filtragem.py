@@ -1827,43 +1827,46 @@ def render_filtragem():
         key="filtragem_observacao_lote",
     )
 
-# ========================================================
-# COMPARAÇÃO COM ARQUIVO DE EVENTOS
-# ========================================================
+    # ========================================================
+    # COMPARAÇÃO COM ARQUIVO DE EVENTOS
+    # ========================================================
 
-comparacao_eventos = st.session_state.get(
-    "df_comparacao_eventos"
-)
-
-if (
-    arquivo_eventos is not None
-    and comparacao_eventos is not None
-):
-
-    st.divider()
-
-    st.subheader(
-        "📊 Comparação com o Arquivo de Eventos"
+    comparacao_eventos = st.session_state.get(
+        "df_comparacao_eventos"
     )
 
-    df_resultado_comparacao = st.session_state.get(
-        "df_resultado"
-    )
+    if (
+        arquivo_eventos is not None
+        and comparacao_eventos is not None
+    ):
 
-    if df_resultado_comparacao is None:
-        df_resultado_comparacao = pd.DataFrame()
+        st.divider()
 
-    texto_comparacao = (
-        gerar_texto_comparacao_eventos(
-            comparacao_eventos,
-            len(df_resultado_comparacao),
+        st.subheader(
+            "📊 Comparação com o Arquivo de Eventos"
         )
-    )
 
-    st.info(
-        texto_comparacao
-    )
-    
+        # Correção: o valor pode existir na sessão como None.
+        # Nesse caso, usamos um DataFrame vazio para evitar
+        # TypeError ao executar len(None).
+        df_resultado_comparacao = st.session_state.get(
+            "df_resultado"
+        )
+
+        if df_resultado_comparacao is None:
+            df_resultado_comparacao = pd.DataFrame()
+
+        texto_comparacao = (
+            gerar_texto_comparacao_eventos(
+                comparacao_eventos,
+                len(df_resultado_comparacao),
+            )
+        )
+
+        st.info(
+            texto_comparacao
+        )
+
     # ========================================================
     # BOTÕES
     # ========================================================
