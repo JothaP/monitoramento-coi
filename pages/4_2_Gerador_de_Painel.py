@@ -206,6 +206,7 @@ VERMELHO = "#D64545"
 # ============================================================
 
 def localizar_fontes():
+
     candidatos = [
         Path("BACKLOG_AEGEA/fontes"),
         Path("./BACKLOG_AEGEA/fontes"),
@@ -214,6 +215,7 @@ def localizar_fontes():
     ]
 
     for pasta in candidatos:
+
         if pasta.exists():
             return pasta
 
@@ -224,10 +226,13 @@ FONTES_AEGEA = localizar_fontes()
 
 
 def fonte(tamanho, negrito=False):
+
     arquivos = []
 
     if FONTES_AEGEA:
+
         if negrito:
+
             arquivos.extend(
                 [
                     FONTES_AEGEA / "Aptos-Bold.ttf",
@@ -235,7 +240,9 @@ def fonte(tamanho, negrito=False):
                     FONTES_AEGEA / "Montserrat-Bold.ttf",
                 ]
             )
+
         else:
+
             arquivos.extend(
                 [
                     FONTES_AEGEA / "Aptos.ttf",
@@ -245,11 +252,14 @@ def fonte(tamanho, negrito=False):
             )
 
     if negrito:
+
         nomes = [
             "Arial-Bold.ttf",
             "DejaVuSans-Bold.ttf",
         ]
+
     else:
+
         nomes = [
             "Arial.ttf",
             "DejaVuSans.ttf",
@@ -262,18 +272,28 @@ def fonte(tamanho, negrito=False):
     )
 
     for arquivo in arquivos:
+
         if arquivo.exists():
+
             try:
+
                 return ImageFont.truetype(
                     str(arquivo),
                     tamanho,
                 )
+
             except Exception:
                 pass
 
     for nome in nomes:
+
         try:
-            return ImageFont.truetype(nome, tamanho)
+
+            return ImageFont.truetype(
+                nome,
+                tamanho,
+            )
+
         except Exception:
             pass
 
@@ -318,14 +338,23 @@ def normalizar(valor):
     }
 
     for antigo, novo in substituicoes.items():
-        texto = texto.replace(antigo, novo)
 
-    texto = re.sub(r"\s+", " ", texto)
+        texto = texto.replace(
+            antigo,
+            novo,
+        )
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto,
+    )
 
     return texto
 
 
 def normalizar_cidade(valor):
+
     return normalizar(valor)
 
 
@@ -334,6 +363,7 @@ def obter_zona(bairro):
     bairro_n = normalizar(bairro)
 
     for chave, zona in ZONA_POR_BAIRRO.items():
+
         if normalizar(chave) == bairro_n:
             return zona
 
@@ -345,6 +375,7 @@ def obter_base(cidade):
     cidade_n = normalizar_cidade(cidade)
 
     for chave, base in BASE_POR_CIDADE.items():
+
         if normalizar_cidade(chave) == cidade_n:
             return base
 
@@ -356,14 +387,26 @@ def localizar_coluna(df, candidatos):
     mapa = {}
 
     for coluna in df.columns:
+
         chave = normalizar(coluna)
-        chave = re.sub(r"[^A-Z0-9]", "", chave)
+
+        chave = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            chave,
+        )
+
         mapa[chave] = coluna
 
     for candidato in candidatos:
 
         chave = normalizar(candidato)
-        chave = re.sub(r"[^A-Z0-9]", "", chave)
+
+        chave = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            chave,
+        )
 
         if chave in mapa:
             return mapa[chave]
@@ -371,18 +414,27 @@ def localizar_coluna(df, candidatos):
     for coluna in df.columns:
 
         coluna_n = normalizar(coluna)
-        coluna_n = re.sub(r"[^A-Z0-9]", "", coluna_n)
+
+        coluna_n = re.sub(
+            r"[^A-Z0-9]",
+            "",
+            coluna_n,
+        )
 
         for candidato in candidatos:
 
             candidato_n = normalizar(candidato)
+
             candidato_n = re.sub(
                 r"[^A-Z0-9]",
                 "",
                 candidato_n,
             )
 
-            if candidato_n and candidato_n in coluna_n:
+            if (
+                candidato_n
+                and candidato_n in coluna_n
+            ):
                 return coluna
 
     return None
@@ -411,11 +463,6 @@ def converter_abertura(valor):
     if not texto:
         return pd.NaT
 
-    # --------------------------------------------------------
-    # FORMATO PRINCIPAL:
-    # dd/mm/aaaa hh:mm
-    # --------------------------------------------------------
-
     try:
 
         resultado = pd.to_datetime(
@@ -428,10 +475,6 @@ def converter_abertura(valor):
 
     except Exception:
         pass
-
-    # --------------------------------------------------------
-    # OUTROS FORMATOS
-    # --------------------------------------------------------
 
     formatos = [
         "%d/%m/%Y %H:%M:%S",
@@ -458,10 +501,6 @@ def converter_abertura(valor):
         except Exception:
             pass
 
-    # --------------------------------------------------------
-    # EXCEL SERIAL
-    # --------------------------------------------------------
-
     if re.fullmatch(
         r"\d+(\.\d+)?",
         texto,
@@ -483,10 +522,6 @@ def converter_abertura(valor):
 
         except Exception:
             pass
-
-    # --------------------------------------------------------
-    # MÊS/ANO
-    # --------------------------------------------------------
 
     meses = {
         "JAN": 1,
@@ -537,8 +572,14 @@ def converter_abertura(valor):
 def formatar_numero(numero):
 
     try:
-        return f"{int(numero):,}".replace(",", ".")
+
+        return f"{int(numero):,}".replace(
+            ",",
+            ".",
+        )
+
     except Exception:
+
         return "0"
 
 
@@ -555,7 +596,10 @@ def abreviar_texto(texto, limite):
 def texto_cabecalho_periodo(valor, modo):
 
     if modo == "Por dia":
-        return valor.strftime("%d/%m")
+
+        return valor.strftime(
+            "%d/%m"
+        )
 
     return (
         f"{MESES_PT[valor.month]}/"
@@ -621,7 +665,7 @@ def ler_planilha(arquivo):
 
 
 # ============================================================
-# LEITURA E CONSOLIDAÇÃO DE MÚLTIPLAS PLANILHAS
+# LEITURA E CONSOLIDAÇÃO
 # ============================================================
 
 def ler_planilhas_consolidadas(arquivos):
@@ -637,7 +681,10 @@ def ler_planilhas_consolidadas(arquivos):
             arquivo
         )
 
-        if df_arquivo is not None and not df_arquivo.empty:
+        if (
+            df_arquivo is not None
+            and not df_arquivo.empty
+        ):
 
             bases.append(
                 df_arquivo
@@ -673,17 +720,12 @@ def preparar_dados(df, modulo):
 
     if df is None or df.empty:
 
-        return None, "A planilha está vazia."
+        return (
+            None,
+            "A planilha está vazia.",
+        )
 
     dados = df.copy()
-
-    # ========================================================
-    # DATA DE ABERTURA
-    # ========================================================
-    # IMPORTANTE:
-    # A coluna oficial utilizada é "Início do SLA".
-    # O horário será ignorado posteriormente.
-    # ========================================================
 
     coluna_abertura = localizar_coluna(
         dados,
@@ -700,10 +742,6 @@ def preparar_dados(df, modulo):
             "Não foi encontrada a coluna 'Início do SLA'.",
         )
 
-    # ========================================================
-    # PROTOCOLO
-    # ========================================================
-
     coluna_protocolo = localizar_coluna(
         dados,
         [
@@ -718,19 +756,11 @@ def preparar_dados(df, modulo):
         ],
     )
 
-    # ========================================================
-    # CONVERTER DATA
-    # ========================================================
-
     dados["_ABERTURA"] = dados[
         coluna_abertura
     ].apply(
         converter_abertura
     )
-
-    # ========================================================
-    # PROTOCOLO
-    # ========================================================
 
     if coluna_protocolo:
 
@@ -756,10 +786,6 @@ def preparar_dados(df, modulo):
 
         dados["_PROTOCOLO"] = np.nan
 
-    # ========================================================
-    # REMOVER DATAS INVÁLIDAS
-    # ========================================================
-
     dados = dados.dropna(
         subset=["_ABERTURA"]
     ).copy()
@@ -772,12 +798,17 @@ def preparar_dados(df, modulo):
         )
 
     # ========================================================
-    # DATA — SOMENTE DIA
+    # DATA REAL DA ABERTURA
     # ========================================================
 
-    dados["_DATA"] = dados[
-        "_ABERTURA"
-    ].dt.normalize()
+    dados["_DATA"] = (
+        dados["_ABERTURA"]
+        .dt.normalize()
+    )
+
+    # ========================================================
+    # MÊS DE REFERÊNCIA
+    # ========================================================
 
     dados["_MES_ORDEM"] = (
         dados["_ABERTURA"]
@@ -786,7 +817,7 @@ def preparar_dados(df, modulo):
     )
 
     # ========================================================
-    # THE / TIM
+    # LOCAL
     # ========================================================
 
     if modulo in ["THE", "TIM"]:
@@ -815,19 +846,15 @@ def preparar_dados(df, modulo):
             .str.strip()
         )
 
-        dados["_LOCAL"] = dados[
-            "_LOCAL"
-        ].replace(
-            {
-                "": "NÃO INFORMADO",
-                "nan": "NÃO INFORMADO",
-                "NaN": "NÃO INFORMADO",
-            }
+        dados["_LOCAL"] = (
+            dados["_LOCAL"].replace(
+                {
+                    "": "NÃO INFORMADO",
+                    "nan": "NÃO INFORMADO",
+                    "NaN": "NÃO INFORMADO",
+                }
+            )
         )
-
-    # ========================================================
-    # API
-    # ========================================================
 
     elif modulo == "API":
 
@@ -856,14 +883,14 @@ def preparar_dados(df, modulo):
             .str.strip()
         )
 
-        dados["_LOCAL"] = dados[
-            "_LOCAL"
-        ].replace(
-            {
-                "": "NÃO INFORMADA",
-                "nan": "NÃO INFORMADA",
-                "NaN": "NÃO INFORMADA",
-            }
+        dados["_LOCAL"] = (
+            dados["_LOCAL"].replace(
+                {
+                    "": "NÃO INFORMADA",
+                    "nan": "NÃO INFORMADA",
+                    "NaN": "NÃO INFORMADA",
+                }
+            )
         )
 
         dados["_BASE"] = dados[
@@ -880,6 +907,9 @@ def preparar_dados(df, modulo):
 # ============================================================
 
 def contar_os(series):
+
+    if series is None or series.empty:
+        return 0
 
     protocolos = series[
         "_PROTOCOLO"
@@ -905,17 +935,44 @@ def gerar_tabela_local_periodo(
 
     dados = df.copy()
 
+    # ========================================================
+    # POR DATA
+    # ========================================================
+    #
+    # Cada data com pelo menos uma O.S. em toda a base
+    # vira uma coluna.
+    #
+    # Exemplo:
+    #
+    #             01/10   02/10   03/10
+    # BAIRRO A       4       -       2
+    # BAIRRO B       -       7       -
+    #
+    # O "-" será representado visualmente como espaço em branco.
+    # ========================================================
+
     if modo == "Por dia":
 
-        dados["_PERIODO"] = dados[
-            "_DATA"
-        ]
+        dados["_PERIODO"] = (
+            dados["_DATA"]
+            .dt.normalize()
+        )
+
+    # ========================================================
+    # POR MÊS
+    # ========================================================
 
     else:
 
-        dados["_PERIODO"] = dados[
-            "_MES_ORDEM"
-        ]
+        dados["_PERIODO"] = (
+            dados["_DATA"]
+            .dt.to_period("M")
+            .dt.to_timestamp()
+        )
+
+    # ========================================================
+    # LOCAIS
+    # ========================================================
 
     locais = sorted(
         dados["_LOCAL"]
@@ -924,11 +981,24 @@ def gerar_tabela_local_periodo(
         .unique()
     )
 
+    # ========================================================
+    # PERÍODOS
+    # ========================================================
+    #
+    # IMPORTANTE:
+    # Só entram datas/meses que possuem pelo menos uma O.S.
+    # em qualquer local.
+    # ========================================================
+
     periodos = sorted(
         dados["_PERIODO"]
         .dropna()
         .unique()
     )
+
+    # ========================================================
+    # CONTAGEM
+    # ========================================================
 
     tabela = {}
 
@@ -947,8 +1017,12 @@ def gerar_tabela_local_periodo(
                 )
             ]
 
+            quantidade = contar_os(
+                bloco
+            )
+
             linha.append(
-                contar_os(bloco)
+                quantidade
             )
 
         tabela[local] = linha
@@ -959,6 +1033,13 @@ def gerar_tabela_local_periodo(
     ).T
 
     resultado.index.name = "LOCAL"
+
+    resultado = resultado.reindex(
+        columns=periodos
+    )
+
+    # Garante valores numéricos
+    resultado = resultado.fillna(0).astype(int)
 
     return resultado
 
@@ -1036,6 +1117,7 @@ def cor_texto_celula(
         maximo > 0
         and valor / maximo >= 0.75
     ):
+
         return BRANCO
 
     return AZUL_ESCURO
@@ -1099,7 +1181,7 @@ def gerar_painel(
     dados = df.copy()
 
     # ========================================================
-    # FILTRO API
+    # FILTRO DE BASE — API
     # ========================================================
 
     if modulo == "API" and base:
@@ -1115,7 +1197,7 @@ def gerar_painel(
         )
 
     # ========================================================
-    # TABELA
+    # GERA TABELA
     # ========================================================
 
     tabela = gerar_tabela_local_periodo(
@@ -1145,33 +1227,25 @@ def gerar_painel(
 
     margem = 60
 
-    # Mantém o relatório vertical.
     largura = 1500
 
     altura_cabecalho = 260
 
     altura_linha = 58
 
-    # Ajuste da tabela para aproveitar melhor
-    # a largura disponível.
     largura_local = 390
 
     largura_periodo = 90
 
     largura_total = 110
 
-    # ========================================================
-    # QUANTIDADE DE COLUNAS
-    # ========================================================
-
-    # Os períodos são divididos em blocos verticais.
-    # Isso evita que muitos dias/meses façam a tabela
-    # ultrapassar os limites da imagem.
-
+    # Número de datas/meses por bloco
     periodos_por_bloco = 10
 
     blocos_periodos = [
-        periodos[i:i + periodos_por_bloco]
+        periodos[
+            i:i + periodos_por_bloco
+        ]
         for i in range(
             0,
             len(periodos),
@@ -1189,7 +1263,8 @@ def gerar_painel(
         altura_tabela_total += (
             45
             + altura_linha
-            + len(locais) * altura_linha
+            + len(locais)
+            * altura_linha
             + 45
         )
 
@@ -1202,7 +1277,7 @@ def gerar_painel(
     )
 
     # ========================================================
-    # IMAGEM
+    # CANVAS
     # ========================================================
 
     imagem = Image.new(
@@ -1219,7 +1294,7 @@ def gerar_painel(
     )
 
     # ========================================================
-    # CABEÇALHO
+    # FAIXA SUPERIOR
     # ========================================================
 
     draw.rectangle(
@@ -1231,6 +1306,10 @@ def gerar_painel(
         ),
         fill=AZUL_ESCURO,
     )
+
+    # ========================================================
+    # TÍTULO
+    # ========================================================
 
     titulo = TITULOS[
         modulo
@@ -1284,7 +1363,7 @@ def gerar_painel(
     )
 
     # ========================================================
-    # INFORMAÇÃO TEMPORAL
+    # PERÍODO
     # ========================================================
 
     data_min = dados[
@@ -1321,9 +1400,15 @@ def gerar_painel(
             155,
         ),
         periodo_texto,
-        font=fonte(17),
+        font=fonte(
+            17
+        ),
         fill=CINZA,
     )
+
+    # ========================================================
+    # TIPO DE VISUALIZAÇÃO
+    # ========================================================
 
     draw.text(
         (
@@ -1340,7 +1425,9 @@ def gerar_painel(
                 else "Cidades"
             )
         ),
-        font=fonte(16),
+        font=fonte(
+            16
+        ),
         fill=CINZA,
     )
 
@@ -1358,24 +1445,38 @@ def gerar_painel(
     )
 
     # ========================================================
-    # ÁREA DAS TABELAS
+    # POSIÇÃO INICIAL
     # ========================================================
 
     y_atual = altura_cabecalho
 
-    maximo = int(
-        tabela[
-            periodos
-        ].max().max()
-    ) if periodos else 0
+    # ========================================================
+    # MÁXIMO GLOBAL
+    # ========================================================
+
+    if periodos:
+
+        maximo = int(
+            tabela[
+                periodos
+            ].max().max()
+        )
+
+    else:
+
+        maximo = 0
+
+    # ========================================================
+    # BLOCOS
+    # ========================================================
 
     for numero_bloco, bloco in enumerate(
         blocos_periodos
     ):
 
-        # ----------------------------------------------------
+        # ====================================================
         # TÍTULO DO BLOCO
-        # ----------------------------------------------------
+        # ====================================================
 
         if modo == "Por dia":
 
@@ -1433,13 +1534,13 @@ def gerar_painel(
             fill=AZUL_ESCURO,
         )
 
+        # ====================================================
+        # CABEÇALHO DA TABELA
+        # ====================================================
+
         y_inicio = (
             y_atual + 45
         )
-
-        # ----------------------------------------------------
-        # LARGURA DO BLOCO
-        # ----------------------------------------------------
 
         largura_tabela = (
             largura_local
@@ -1449,10 +1550,6 @@ def gerar_painel(
         )
 
         x_inicio = margem
-
-        # ----------------------------------------------------
-        # CABEÇALHO
-        # ----------------------------------------------------
 
         draw.rounded_rectangle(
             (
@@ -1483,6 +1580,10 @@ def gerar_painel(
             ),
             fill=BRANCO,
         )
+
+        # ====================================================
+        # CABEÇALHO DOS PERÍODOS
+        # ====================================================
 
         for indice, periodo in enumerate(
             bloco
@@ -1518,6 +1619,10 @@ def gerar_painel(
                 BRANCO,
             )
 
+        # ====================================================
+        # COLUNA TOTAL
+        # ====================================================
+
         x_total = (
             x_inicio
             + largura_local
@@ -1541,9 +1646,9 @@ def gerar_painel(
             BRANCO,
         )
 
-        # ----------------------------------------------------
+        # ====================================================
         # LINHAS
-        # ----------------------------------------------------
+        # ====================================================
 
         for linha_idx, local in enumerate(
             locais
@@ -1572,9 +1677,9 @@ def gerar_painel(
                 fill=fill_linha,
             )
 
-            # -----------------------------------------------
-            # LOCAL
-            # -----------------------------------------------
+            # =================================================
+            # NOME DO LOCAL
+            # =================================================
 
             texto_local = abreviar_texto(
                 local,
@@ -1594,9 +1699,9 @@ def gerar_painel(
                 fill=AZUL_ESCURO,
             )
 
-            # -----------------------------------------------
-            # PERÍODOS
-            # -----------------------------------------------
+            # =================================================
+            # VALORES POR DATA/MÊS
+            # =================================================
 
             for indice, periodo in enumerate(
                 bloco
@@ -1615,6 +1720,10 @@ def gerar_painel(
                         periodo,
                     ]
                 )
+
+                # =============================================
+                # CÉLULA
+                # =============================================
 
                 cor = cor_intensidade(
                     valor,
@@ -1635,30 +1744,41 @@ def gerar_painel(
                     fill=cor,
                 )
 
-                texto_centralizado(
-                    draw,
-                    (
-                        x,
-                        y,
-                        x + largura_periodo,
-                        y + altura_linha,
-                    ),
-                    formatar_numero(
-                        valor
-                    ),
-                    fonte(
-                        14,
-                        True,
-                    ),
-                    cor_texto_celula(
-                        valor,
-                        maximo,
-                    ),
-                )
+                # =============================================
+                # IMPORTANTE:
+                #
+                # Se valor == 0:
+                #   não escreve nada.
+                #
+                # Assim a célula fica visualmente vazia.
+                # =============================================
 
-            # -----------------------------------------------
+                if valor > 0:
+
+                    texto_centralizado(
+                        draw,
+                        (
+                            x,
+                            y,
+                            x + largura_periodo,
+                            y + altura_linha,
+                        ),
+                        formatar_numero(
+                            valor
+                        ),
+                        fonte(
+                            14,
+                            True,
+                        ),
+                        cor_texto_celula(
+                            valor,
+                            maximo,
+                        ),
+                    )
+
+            # =================================================
             # TOTAL DO LOCAL
-            # -----------------------------------------------
+            # =================================================
 
             total_local = int(
                 tabela.loc[
@@ -1685,9 +1805,9 @@ def gerar_painel(
                 AZUL_ESCURO,
             )
 
-        # ----------------------------------------------------
-        # SEPARAÇÃO ENTRE BLOCOS
-        # ----------------------------------------------------
+        # ====================================================
+        # PRÓXIMO BLOCO
+        # ====================================================
 
         y_atual = (
             y_inicio
@@ -1752,7 +1872,7 @@ def gerar_painel(
     )
 
     # ========================================================
-    # PNG
+    # EXPORTAÇÃO
     # ========================================================
 
     output = io.BytesIO()
@@ -1799,6 +1919,7 @@ col_api, col_the, col_tim = st.columns(
     3,
     gap="medium",
 )
+
 
 with col_api:
 
@@ -1864,6 +1985,7 @@ col1, col2 = st.columns(
     gap="large",
 )
 
+
 with col1:
 
     modulo = st.radio(
@@ -1905,7 +2027,7 @@ arquivos_selecionados = arquivos[
 
 
 # ============================================================
-# LEITURA E CONSOLIDAÇÃO DOS ARQUIVOS
+# LEITURA E CONSOLIDAÇÃO
 # ============================================================
 
 if not arquivos_selecionados:
@@ -1949,6 +2071,7 @@ if erro:
 # ============================================================
 
 base_selecionada = None
+
 
 if modulo == "API":
 
