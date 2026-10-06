@@ -1525,36 +1525,50 @@ def gerar_png_relatorio(
     base=None,
     status=None,
 ):
-    """Gera PNG otimizado para envio no WhatsApp (nitidez + legibilidade após compressão)."""
-    # ------------------------------------------------------------------
-    # Estratégia para WhatsApp:
-    # 1. Células e fontes MAIORES na base (texto sobrevive ao downscale).
-    # 2. Render em alta densidade (escala 3x).
-    # 3. No final, redimensionamos nós mesmos para ~1600 px de largura
-    #    com LANCZOS (qualidade alta). Assim o WhatsApp quase não
-    #    redimensiona de novo e o texto continua legível.
-    # ------------------------------------------------------------------
-    escala = 3
-    espessura = max(1, escala)  # bordas visíveis após compressão
+    """Gera PNG de alta nitidez otimizado para WhatsApp.
 
-    # Tamanhos lógicos maiores → texto legível mesmo depois do WhatsApp
-    largura_local = 260
-    largura_coluna = 90
-    largura_total = 100
-    altura_linha = 36
-    altura_header = 38
-    altura_subheader = 34
-    margem = 28
+    Estratégia:
+    - Fontes e células grandes o suficiente para o texto continuar legível
+      mesmo depois da compressão do WhatsApp.
+    - Escala alta (4x) + bordas grossas.
+    - Largura de coluna se adapta à quantidade de períodos (evita imagem
+      absurdamente larga).
+    - NÃO redimensionamos de forma agressiva (foi o que piorou no teste
+      anterior). O usuário pode dar zoom na imagem no WhatsApp.
+    """
+    escala = 4
+    espessura = max(2, escala)  # bordas bem visíveis
+
+    n_cols = max(len(colunas), 1)
+
+    # Largura de coluna adaptativa: quanto mais colunas, um pouco mais estreita,
+    # mas nunca pequena demais para o texto.
+    if n_cols <= 8:
+        largura_coluna = 100
+        tam_num = 14
+    elif n_cols <= 14:
+        largura_coluna = 85
+        tam_num = 13
+    else:
+        largura_coluna = 72
+        tam_num = 12
+
+    largura_local = 270
+    largura_total = 105
+    altura_linha = 40
+    altura_header = 42
+    altura_subheader = 38
+    margem = 30
 
     largura = (
         margem * 2
         + largura_local
-        + len(colunas) * largura_coluna
+        + n_cols * largura_coluna
         + largura_total
     )
     altura = (
         margem * 2
-        + 64
+        + 70
         + altura_header
         + altura_subheader
         + (len(locais) + 1) * altura_linha
@@ -1586,23 +1600,22 @@ def gerar_png_relatorio(
             return self._draw.text(self._xy(xy), text, **kwargs)
 
         def textbbox(self, xy, text, **kwargs):
-            # Retorna bbox em coordenadas LÓGICAS (corrige centramento).
+            # Bbox em coordenadas LÓGICAS (corrige centramento do texto).
             bbox = self._draw.textbbox(self._xy(xy), text, **kwargs)
             f = float(self._fator)
             return (bbox[0] / f, bbox[1] / f, bbox[2] / f, bbox[3] / f)
 
     draw = _DrawEscalado(draw_base, escala)
 
-    # Fontes maiores para sobreviver à compressão do WhatsApp
-    f_titulo = fonte(24 * escala, True)
-    f_pequena = fonte(13 * escala, False)
-    f_header = fonte(13 * escala, True)
-    f_local = fonte(12 * escala, False)
-    f_num = fonte(12 * escala, False)
-    f_total = fonte(12 * escala, True)
+    f_titulo = fonte(26 * escala, True)
+    f_pequena = fonte(14 * escala, False)
+    f_header = fonte(14 * escala, True)
+    f_local = fonte(13 * escala, False)
+    f_num = fonte(tam_num * escala, False)
+    f_total = fonte(tam_num * escala, True)
 
     titulo = TITULOS.get(modulo, "Relatório de Falta de Água")
-    draw.text((margem, 10), titulo, font=f_titulo, fill=AZUL_ESCURO)
+    draw.text((margem, 12), titulo, font=f_titulo, fill=AZUL_ESCURO)
 
     info = []
     if base:
@@ -1610,9 +1623,9 @@ def gerar_png_relatorio(
     if status:
         info.append(f"Status: {status}")
     if info:
-        draw.text((margem, 40), " | ".join(info), font=f_pequena, fill=CINZA)
+        draw.text((margem, 44), " | ".join(info), font=f_pequena, fill=CINZA)
 
-    y0 = margem + 64
+    y0 = margem + 70
     x0 = margem
 
     # Cabeçalho de meses
@@ -1622,7 +1635,7 @@ def gerar_png_relatorio(
         outline="#B8C2CC",
     )
     draw.text(
-        (x0 + 10, y0 + 26),
+        (x0 + 12, y0 + 28),
         "LOCAL",
         font=f_header,
         fill=BRANCO,
@@ -1644,7 +1657,7 @@ def gerar_png_relatorio(
         label = periodo_label(mes)
         bbox = draw.textbbox((0, 0), label, font=f_header)
         draw.text(
-            (x + (w - (bbox[2] - bbox[0])) / 2, y0 + 10),
+            (x + (w - (bbox[2] - bbox[0])) / 2, y0 + 12),
             label,
             font=f_header,
             fill=BRANCO,
@@ -1657,7 +1670,7 @@ def gerar_png_relatorio(
         fill=AZUL_ESCURO,
         outline="#B8C2CC",
     )
-    draw.text((x + 18, y0 + 26), "TOTAL", font=f_header, fill=BRANCO)
+    draw.text((x + 20, y0 + 28), "TOTAL", font=f_header, fill=BRANCO)
 
     # Subcabeçalho (datas)
     x = x0 + largura_local
@@ -1670,7 +1683,7 @@ def gerar_png_relatorio(
         label = data_label(dia) if dia is not None else periodo_label(mes)
         bbox = draw.textbbox((0, 0), label, font=f_header)
         draw.text(
-            (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y0 + altura_header + 9),
+            (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y0 + altura_header + 10),
             label,
             font=f_header,
             fill=AZUL_ESCURO,
@@ -1685,8 +1698,8 @@ def gerar_png_relatorio(
             fill="white",
             outline="#C8CDD2",
         )
-        texto = abreviar_texto(local, 28)
-        draw.text((x0 + 8, y + 10), texto, font=f_local, fill=AZUL_ESCURO)
+        texto = abreviar_texto(local, 26)
+        draw.text((x0 + 10, y + 12), texto, font=f_local, fill=AZUL_ESCURO)
 
         x = x0 + largura_local
         for idx in range(len(colunas)):
@@ -1699,7 +1712,7 @@ def gerar_png_relatorio(
             if valor:
                 bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_num)
                 draw.text(
-                    (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 10),
+                    (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 12),
                     formatar_numero(valor),
                     font=f_num,
                     fill=AZUL_ESCURO,
@@ -1712,7 +1725,7 @@ def gerar_png_relatorio(
             fill="#E8EDF2",
             outline="#B8C2CC",
         )
-        draw.text((x + 24, y + 10), formatar_numero(total), font=f_total, fill=AZUL_ESCURO)
+        draw.text((x + 26, y + 12), formatar_numero(total), font=f_total, fill=AZUL_ESCURO)
         y += altura_linha
 
     # Total geral
@@ -1721,7 +1734,7 @@ def gerar_png_relatorio(
         fill=AZUL_ESCURO,
         outline=AZUL_ESCURO,
     )
-    draw.text((x0 + 8, y + 10), "TOTAL GERAL", font=f_total, fill=BRANCO)
+    draw.text((x0 + 10, y + 12), "TOTAL GERAL", font=f_total, fill=BRANCO)
 
     x = x0 + largura_local
     for idx in range(len(colunas)):
@@ -1734,7 +1747,7 @@ def gerar_png_relatorio(
         if valor:
             bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_total)
             draw.text(
-                (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 10),
+                (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 12),
                 formatar_numero(valor),
                 font=f_total,
                 fill=BRANCO,
@@ -1747,22 +1760,11 @@ def gerar_png_relatorio(
         fill=AZUL_ESCURO,
         outline=AZUL_ESCURO,
     )
-    draw.text((x + 24, y + 10), formatar_numero(total_geral), font=f_total, fill=BRANCO)
+    draw.text((x + 26, y + 12), formatar_numero(total_geral), font=f_total, fill=BRANCO)
 
-    # ------------------------------------------------------------------
-    # Redimensionamento controlado para o WhatsApp
-    # Alvo: largura máxima ~1600 px (WhatsApp quase não redimensiona).
-    # Usamos LANCZOS para manter a nitidez do texto.
-    # ------------------------------------------------------------------
-    MAX_LARGURA_WHATSAPP = 1600
-    if imagem.width > MAX_LARGURA_WHATSAPP:
-        ratio = MAX_LARGURA_WHATSAPP / imagem.width
-        nova_altura = int(imagem.height * ratio)
-        imagem = imagem.resize(
-            (MAX_LARGURA_WHATSAPP, nova_altura),
-            Image.Resampling.LANCZOS,
-        )
-
+    # Mantém a imagem em alta resolução.
+    # O WhatsApp pode comprimir, mas o usuário consegue dar zoom e ler.
+    # Evitamos o downscale agressivo que piorou o resultado anterior.
     output = io.BytesIO()
     imagem.save(
         output,
