@@ -1108,6 +1108,9 @@ def preparar_dados(df, modulo):
             )
         )
 
+        # Para THE/TIM o local principal já é o bairro.
+        dados["_BAIRRO"] = dados["_LOCAL"]
+
     elif modulo == "API":
 
         coluna_cidade = localizar_coluna(
@@ -1150,6 +1153,35 @@ def preparar_dados(df, modulo):
         ].apply(
             obter_base
         )
+
+        # O modo API pode ser detalhado por cidade e, depois,
+        # apresentar os bairros daquela cidade.
+        coluna_bairro = localizar_coluna(
+            dados,
+            [
+                "Bairro",
+                "BAIRRO",
+                "Bairro do Cliente",
+                "Bairro Cliente",
+            ],
+        )
+
+        if coluna_bairro is not None:
+            dados["_BAIRRO"] = (
+                dados[coluna_bairro]
+                .fillna("NÃO INFORMADO")
+                .astype(str)
+                .str.strip()
+            )
+            dados["_BAIRRO"] = dados["_BAIRRO"].replace(
+                {
+                    "": "NÃO INFORMADO",
+                    "nan": "NÃO INFORMADO",
+                    "NaN": "NÃO INFORMADO",
+                }
+            )
+        else:
+            dados["_BAIRRO"] = "NÃO INFORMADO"
 
     return dados, None
 
@@ -1693,6 +1725,21 @@ def aplicar_filtro_status(df, coluna_status, status):
     ].copy()
 
 
+def locais_com_os(dados, coluna_local="_LOCAL"):
+    """Retorna apenas localidades que possuem pelo menos uma O.S."""
+    if dados is None or dados.empty or coluna_local not in dados.columns:
+        return []
+
+    locais_validos = []
+    for local, bloco in dados.groupby(coluna_local, sort=False, dropna=False):
+        if contar_bloco(bloco) > 0:
+            texto = str(local).strip()
+            if texto:
+                locais_validos.append(texto)
+
+    return sorted(set(locais_validos), key=normalizar)
+
+
 # ============================================================
 # INTERFACE
 # ============================================================
@@ -1902,7 +1949,15 @@ if coluna_status:
         )
 
 base_selecionada = None
+cidade_selecionada = None
+
+# Filtro aplicado apenas para o relatório.
+dados = aplicar_filtro_status(df, coluna_status, status_selecionado)
+
 if modulo == "API":
+    # --------------------------------------------------------
+    # BASE / FONTE DE DADOS
+    # --------------------------------------------------------
     with col3:
         bases_disponiveis = sorted(
             [b for b in df["_BASE"].dropna().unique() if b],
@@ -1913,34 +1968,47 @@ if modulo == "API":
             "Base / fonte de dados",
             opcoes_base,
         )
+
     if base_escolhida != "Todas":
         base_selecionada = base_escolhida
+        dados = dados[dados["_BASE"] == base_selecionada].copy()
 
-# Filtro aplicado apenas para o relatório.
-dados = aplicar_filtro_status(df, coluna_status, status_selecionado)
+    # --------------------------------------------------------
+    # CIDADE
+    # --------------------------------------------------------
+    # A cidade só é selecionada depois da Base. Ao escolher uma
+    # cidade, o relatório passa a mostrar os bairros daquela cidade.
+    cidades_com_os = locais_com_os(dados, "_LOCAL")
+    opcoes_cidade = ["Todas"] + cidades_com_os
 
-if modulo == "API" and base_selecionada:
-    dados = dados[dados["_BASE"] == base_selecionada].copy()
-
-# Cadastro oficial de cidades para garantir que a seleção de Base API
-# mostre todas as cidades da base, inclusive as que estão zeradas.
-if modulo == "API":
-    locais = cidades_da_base(base_selecionada)
-    if not base_selecionada:
-        locais = cidades_da_base(None)
-else:
-    locais = sorted(
-        dados["_LOCAL"].dropna().astype(str).unique(),
-        key=normalizar,
+    cidade_escolhida = st.selectbox(
+        "Cidade",
+        opcoes_cidade,
+        key="cidade_api_relatorio",
     )
 
+    if cidade_escolhida != "Todas":
+        cidade_selecionada = cidade_escolhida
+        dados = dados[
+            dados["_LOCAL"].astype(str).str.strip().eq(cidade_selecionada)
+        ].copy()
+        # O nível de linha muda de Cidade para Bairro.
+        dados["_LOCAL"] = dados["_BAIRRO"]
+
+    # Só aparecem cidades que realmente possuem O.S.
+    # (quando não foi escolhida uma cidade).
+    locais = locais_com_os(dados, "_LOCAL")
+
+else:
+    # THE/TIM: somente bairros com pelo menos uma O.S.
+    locais = locais_com_os(dados, "_LOCAL")
+
 if not locais:
-    st.warning("Não há localidades disponíveis para este relatório.")
+    st.warning("Não há localidades com O.S. para os filtros selecionados.")
     st.stop()
 
-# Meses disponíveis na seleção. Se a seleção ficar sem registros, usa a base
-# completa para manter a estrutura temporal do relatório.
-dados_periodos = dados if not dados.empty else df
+# Meses disponíveis na seleção.
+dados_periodos = dados
 meses = meses_disponiveis(dados_periodos)
 if not meses:
     st.warning("Não foi encontrada nenhuma data válida para montar as colunas.")
@@ -2028,6 +2096,7 @@ st.download_button(
     file_name=(
         f"RELATORIO_FA_{modulo}"
         + (f"_{normalizar(base_selecionada).replace(' ', '_')}" if base_selecionada else "")
+        + (f"_{normalizar(cidade_selecionada).replace(' ', '_')}" if cidade_selecionada else "")
         + ".png"
     ),
     mime="image/png",
