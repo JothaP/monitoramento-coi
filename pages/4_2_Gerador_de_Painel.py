@@ -9,6 +9,10 @@ import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -1777,6 +1781,192 @@ def gerar_png_relatorio(
     return output
 
 
+def gerar_excel_relatorio(
+    matriz,
+    locais,
+    colunas,
+    modulo,
+    base=None,
+    status=None,
+):
+    """Gera Excel com o mesmo design visual do relatório (cores, hierarquia de cabeçalhos e totais)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Relatório FA"
+
+    # Cores do design
+    fill_azul_escuro = PatternFill("solid", fgColor="123B5D")
+    fill_cinza_claro = PatternFill("solid", fgColor="E8EDF2")
+    fill_branco = PatternFill("solid", fgColor="FFFFFF")
+    font_branco_bold = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    font_azul_bold = Font(name="Calibri", bold=True, color="123B5D", size=11)
+    font_azul = Font(name="Calibri", color="123B5D", size=11)
+    font_titulo = Font(name="Calibri", bold=True, color="123B5D", size=14)
+    font_info = Font(name="Calibri", color="667085", size=10)
+    thin = Border(
+        left=Side(style="thin", color="B8C2CC"),
+        right=Side(style="thin", color="B8C2CC"),
+        top=Side(style="thin", color="B8C2CC"),
+        bottom=Side(style="thin", color="B8C2CC"),
+    )
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align = Alignment(horizontal="left", vertical="center")
+
+    # Título e informações
+    titulo = TITULOS.get(modulo, "Relatório de Falta de Água")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(2 + len(colunas), 3))
+    ws.cell(1, 1, titulo).font = font_titulo
+    ws.cell(1, 1).alignment = left_align
+
+    info_parts = []
+    if base:
+        info_parts.append(f"Base: {base}")
+    if status:
+        info_parts.append(f"Status: {status}")
+    info_txt = " | ".join(info_parts) if info_parts else ""
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max(2 + len(colunas), 3))
+    ws.cell(2, 1, info_txt).font = font_info
+
+    # Linha 4 = cabeçalho de meses (agrupado)
+    # Linha 5 = cabeçalho de datas
+    row_mes = 4
+    row_data = 5
+
+    # Coluna LOCAL
+    cell_local = ws.cell(row_mes, 1, "LOCAL")
+    cell_local.fill = fill_azul_escuro
+    cell_local.font = font_branco_bold
+    cell_local.alignment = center
+    cell_local.border = thin
+    ws.merge_cells(start_row=row_mes, start_column=1, end_row=row_data, end_column=1)
+    ws.cell(row_data, 1).border = thin
+    ws.cell(row_data, 1).fill = fill_azul_escuro
+
+    # Meses agrupados
+    col = 2
+    i = 0
+    while i < len(colunas):
+        mes = colunas[i][0]
+        j = i
+        while j < len(colunas) and colunas[j][0] == mes:
+            j += 1
+        span = j - i
+        cell = ws.cell(row_mes, col, periodo_label(mes))
+        cell.fill = fill_azul_escuro
+        cell.font = font_branco_bold
+        cell.alignment = center
+        cell.border = thin
+        if span > 1:
+            ws.merge_cells(
+                start_row=row_mes,
+                start_column=col,
+                end_row=row_mes,
+                end_column=col + span - 1,
+            )
+            for k in range(span):
+                c = ws.cell(row_mes, col + k)
+                c.fill = fill_azul_escuro
+                c.border = thin
+        col += span
+        i = j
+
+    # Coluna TOTAL (mesclada nas duas linhas de cabeçalho)
+    col_total = 2 + len(colunas)
+    cell_total = ws.cell(row_mes, col_total, "TOTAL")
+    cell_total.fill = fill_azul_escuro
+    cell_total.font = font_branco_bold
+    cell_total.alignment = center
+    cell_total.border = thin
+    ws.merge_cells(start_row=row_mes, start_column=col_total, end_row=row_data, end_column=col_total)
+    ws.cell(row_data, col_total).border = thin
+    ws.cell(row_data, col_total).fill = fill_azul_escuro
+
+    # Subcabeçalho de datas
+    for idx, (mes, dia) in enumerate(colunas):
+        label = data_label(dia) if dia is not None else periodo_label(mes)
+        cell = ws.cell(row_data, 2 + idx, label)
+        cell.fill = fill_cinza_claro
+        cell.font = font_azul_bold
+        cell.alignment = center
+        cell.border = thin
+
+    # Linhas de dados
+    for r_idx, local in enumerate(locais):
+        row = row_data + 1 + r_idx
+
+        cell = ws.cell(row, 1, str(local))
+        cell.font = font_azul
+        cell.alignment = left_align
+        cell.border = thin
+        cell.fill = fill_branco
+
+        for idx in range(len(colunas)):
+            valor = int(matriz.loc[local, idx])
+            cell = ws.cell(row, 2 + idx, valor if valor else None)
+            cell.font = font_azul
+            cell.alignment = center
+            cell.border = thin
+            cell.fill = fill_branco
+            if valor:
+                cell.number_format = "#,##0"
+
+        total = int(matriz.loc[local, "__TOTAL__"])
+        cell = ws.cell(row, col_total, total if total else None)
+        cell.font = font_azul_bold
+        cell.alignment = center
+        cell.border = thin
+        cell.fill = fill_cinza_claro
+        if total:
+            cell.number_format = "#,##0"
+
+    # Linha TOTAL GERAL
+    row_tot = row_data + 1 + len(locais)
+    cell = ws.cell(row_tot, 1, "TOTAL GERAL")
+    cell.font = font_branco_bold
+    cell.alignment = left_align
+    cell.border = thin
+    cell.fill = fill_azul_escuro
+
+    for idx in range(len(colunas)):
+        valor = int(matriz[idx].sum())
+        cell = ws.cell(row_tot, 2 + idx, valor if valor else None)
+        cell.font = font_branco_bold
+        cell.alignment = center
+        cell.border = thin
+        cell.fill = fill_azul_escuro
+        if valor:
+            cell.number_format = "#,##0"
+
+    total_geral = int(matriz["__TOTAL__"].sum())
+    cell = ws.cell(row_tot, col_total, total_geral if total_geral else None)
+    cell.font = font_branco_bold
+    cell.alignment = center
+    cell.border = thin
+    cell.fill = fill_azul_escuro
+    if total_geral:
+        cell.number_format = "#,##0"
+
+    # Larguras de coluna
+    ws.column_dimensions["A"].width = 28
+    for idx in range(len(colunas)):
+        ws.column_dimensions[get_column_letter(2 + idx)].width = 11
+    ws.column_dimensions[get_column_letter(col_total)].width = 12
+
+    # Alturas
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 16
+    ws.row_dimensions[row_mes].height = 20
+    ws.row_dimensions[row_data].height = 18
+
+    # Congela painéis: LOCAL + cabeçalhos
+    ws.freeze_panes = "B6"
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 def aplicar_filtro_status(df, coluna_status, status):
     if not coluna_status or not status or status == "Todos":
         return df
@@ -2140,22 +2330,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# PNG da mesma estrutura da tabela.
-if "png_relatorio_fa" not in st.session_state:
-    st.session_state["png_relatorio_fa"] = None
+# ------------------------------------------------------------------
+# Downloads (PNG + Excel)
+# ------------------------------------------------------------------
+nome_base = (
+    f"RELATORIO_FA_{modulo}"
+    + (f"_{normalizar(base_selecionada).replace(' ', '_')}" if base_selecionada else "")
+    + (f"_{normalizar(cidade_selecionada).replace(' ', '_')}" if cidade_selecionada else "")
+)
 
-if st.button("ATUALIZAR PNG", type="secondary", use_container_width=True):
-    png = gerar_png_relatorio(
-        matriz,
-        locais,
-        colunas,
-        modulo,
-        base=base_selecionada,
-        status=status_selecionado if status_selecionado != "Todos" else None,
-    )
-    st.session_state["png_relatorio_fa"] = png.getvalue()
-
-# Sempre atualiza a imagem para refletir a tabela atual sem exigir botão.
+# PNG (sempre atualizado com a tabela atual)
 png_atual = gerar_png_relatorio(
     matriz,
     locais,
@@ -2164,17 +2348,33 @@ png_atual = gerar_png_relatorio(
     base=base_selecionada,
     status=status_selecionado if status_selecionado != "Todos" else None,
 )
-st.session_state["png_relatorio_fa"] = png_atual.getvalue()
 
-st.download_button(
-    "BAIXAR TABELA EM PNG",
-    data=st.session_state["png_relatorio_fa"],
-    file_name=(
-        f"RELATORIO_FA_{modulo}"
-        + (f"_{normalizar(base_selecionada).replace(' ', '_')}" if base_selecionada else "")
-        + (f"_{normalizar(cidade_selecionada).replace(' ', '_')}" if cidade_selecionada else "")
-        + ".png"
-    ),
-    mime="image/png",
-    use_container_width=True,
+# Excel com o mesmo design visual
+excel_atual = gerar_excel_relatorio(
+    matriz,
+    locais,
+    colunas,
+    modulo,
+    base=base_selecionada,
+    status=status_selecionado if status_selecionado != "Todos" else None,
 )
+
+col_dl1, col_dl2 = st.columns(2)
+
+with col_dl1:
+    st.download_button(
+        "BAIXAR TABELA EM PNG",
+        data=png_atual.getvalue(),
+        file_name=f"{nome_base}.png",
+        mime="image/png",
+        use_container_width=True,
+    )
+
+with col_dl2:
+    st.download_button(
+        "BAIXAR TABELA EM EXCEL",
+        data=excel_atual.getvalue(),
+        file_name=f"{nome_base}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
