@@ -61,6 +61,20 @@ if not verificar_autenticacao():
 
 
 # ============================================================
+# CONTROLE DE PERFIL
+# ============================================================
+perfil_atual = str(
+    st.session_state.get("perfil", "")
+).strip().lower()
+
+eh_operador = perfil_atual == "operador"
+
+# Operador é somente consulta/análise.
+# Admin e usuário mantêm as permissões de alteração existentes.
+pode_alterar_dados = not eh_operador
+
+
+# ============================================================
 # CONSTANTES
 # ============================================================
 LAT_BASE = -5.0892
@@ -95,32 +109,25 @@ COR_ALTA_PRESSAO = "#A11FFF"
 def classificar_pressao(pressao):
 
     try:
-
         valor = float(pressao)
-
     except (TypeError, ValueError):
-
         valor = 0.0
 
     if valor == 0:
-
         return "Sem Pressão", COR_SEM_PRESSAO
 
     elif valor <= 5:
-
         return "Baixa Pressão", COR_BAIXA_PRESSAO
 
     elif valor <= 15:
-
         return "Em Atenção", COR_EM_ATENCAO
 
     else:
-
         return "Alta Pressão", COR_ALTA_PRESSAO
 
 
 # ============================================================
-# CONEXÃO COM GOOGLE SHEETS
+# CONEXÃO COM GOOGLE SHEETS — ADMIN/USUÁRIO
 # ============================================================
 @st.cache_resource
 def conectar_google_sheets():
@@ -203,8 +210,6 @@ def conectar_google_sheets():
                 )
 
             # Garante a coluna Matricula na coluna I.
-            # Compatibilidade com instalações antigas
-            # que ainda possuem somente 8 colunas.
             if (
                 "Matricula" not in cabecalho_atual
                 and "Matrícula" not in cabecalho_atual
@@ -216,15 +221,57 @@ def conectar_google_sheets():
                 )
 
     except Exception:
-
         pass
 
     return ws
 
 
+# ============================================================
+# CONEXÃO GOOGLE SHEETS — OPERADOR
+# SOMENTE LEITURA
+# ============================================================
+@st.cache_resource
+def conectar_google_sheets_leitura():
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"
+    ]
+
+    credentials_dict = json.loads(
+        st.secrets["gcp_json"]
+    )
+
+    credentials = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes
+    )
+
+    gc = gspread.authorize(credentials)
+
+    sh = gc.open_by_key(
+        SPREADSHEET_ID
+    )
+
+    ws = sh.worksheet(
+        "baixa_pressao"
+    )
+
+    return ws
+
+
+# ============================================================
+# SELEÇÃO DA CONEXÃO DE ACORDO COM O PERFIL
+# ============================================================
 try:
 
-    worksheet = conectar_google_sheets()
+    if eh_operador:
+
+        worksheet = conectar_google_sheets_leitura()
+
+    else:
+
+        worksheet = conectar_google_sheets()
 
 except Exception as e:
 
@@ -297,7 +344,6 @@ def normalizar_texto_local(
 ) -> str:
 
     if valor is None:
-
         return padrao
 
     texto = str(
@@ -387,7 +433,6 @@ def normalizar_coordenada(
     )
 
     if num is None:
-
         return None
 
     if tipo == "lat" and not (
@@ -403,7 +448,6 @@ def normalizar_coordenada(
         return None
 
     if num == 0.0:
-
         return None
 
     return round(
@@ -536,7 +580,6 @@ def carregar_dados() -> pd.DataFrame:
     for col in COLUNAS_PADRAO:
 
         if col not in df.columns:
-
             df[col] = ""
 
     def limpar_id(v):
@@ -561,9 +604,6 @@ def carregar_dados() -> pd.DataFrame:
         normalizar_data
     )
 
-    # ========================================================
-    # NORMALIZAÇÃO DE MUNICÍPIO
-    # ========================================================
     df["Municipio"] = df["Municipio"].apply(
         lambda x:
         normalizar_texto_local(
@@ -572,9 +612,6 @@ def carregar_dados() -> pd.DataFrame:
         )
     )
 
-    # ========================================================
-    # NORMALIZAÇÃO DE BAIRRO
-    # ========================================================
     df["Bairro"] = df["Bairro"].apply(
         lambda x:
         normalizar_texto_local(
@@ -623,9 +660,6 @@ def carregar_dados() -> pd.DataFrame:
         })
     )
 
-    # ========================================================
-    # MATRÍCULA
-    # ========================================================
     df["Matricula"] = (
         df["Matricula"]
         .astype(str)
@@ -655,6 +689,9 @@ def limpar_cache():
     st.cache_data.clear()
 
 
+# ============================================================
+# FUNÇÕES DE ALTERAÇÃO — TODAS PROTEGIDAS
+# ============================================================
 def adicionar_ponto(
     municipio: str,
     matricula: str,
@@ -665,6 +702,12 @@ def adicionar_ponto(
     data_str: str,
     observacao: str
 ):
+
+    if not pode_alterar_dados:
+        st.error(
+            "Seu perfil não possui permissão para cadastrar pontos."
+        )
+        return None
 
     novo_id = gerar_id()
 
@@ -705,8 +748,13 @@ def adicionar_lote_seguro(
     linhas_dados: list
 ):
 
-    if not linhas_dados:
+    if not pode_alterar_dados:
+        st.error(
+            "Seu perfil não possui permissão para importar dados."
+        )
+        return 0
 
+    if not linhas_dados:
         return 0
 
     df_atual = carregar_dados()
@@ -733,8 +781,6 @@ def adicionar_lote_seguro(
                 else ""
             )
 
-            # Matrícula permanece fora da chave
-            # de duplicidade.
             chave = (
                 str(r["Data"]).strip(),
                 str(
@@ -860,6 +906,12 @@ def atualizar_ponto(
     observacao: str
 ) -> bool:
 
+    if not pode_alterar_dados:
+        st.error(
+            "Seu perfil não possui permissão para editar pontos."
+        )
+        return False
+
     try:
 
         celula = worksheet.find(
@@ -867,7 +919,6 @@ def atualizar_ponto(
         )
 
         if celula is None:
-
             return False
 
         linha = celula.row
@@ -912,6 +963,12 @@ def excluir_ponto(
     id_registro: str
 ) -> bool:
 
+    if not pode_alterar_dados:
+        st.error(
+            "Seu perfil não possui permissão para excluir pontos."
+        )
+        return False
+
     try:
 
         celula = worksheet.find(
@@ -919,7 +976,6 @@ def excluir_ponto(
         )
 
         if celula is None:
-
             return False
 
         worksheet.delete_rows(
@@ -1030,36 +1086,44 @@ def gerar_kml(df):
 hoje = date.today()
 
 if "data_inicial_selecionada" not in st.session_state:
-
     st.session_state.data_inicial_selecionada = hoje
 
 if "data_final_selecionada" not in st.session_state:
-
     st.session_state.data_final_selecionada = hoje
 
 if "clicked_lat" not in st.session_state:
-
     st.session_state.clicked_lat = None
 
 if "clicked_lon" not in st.session_state:
-
     st.session_state.clicked_lon = None
 
 if "modo_adicionar_mapa" not in st.session_state:
-
     st.session_state.modo_adicionar_mapa = False
 
 if "dados_upload_pendentes_bp" not in st.session_state:
-
     st.session_state.dados_upload_pendentes_bp = None
 
 if "nome_arquivo_pendente_bp" not in st.session_state:
-
     st.session_state.nome_arquivo_pendente_bp = None
 
 if "file_uploader_key_bp" not in st.session_state:
-
     st.session_state.file_uploader_key_bp = 0
+
+
+# ============================================================
+# GARANTIA DE ESTADO SEGURO PARA OPERADOR
+# ============================================================
+if eh_operador:
+
+    st.session_state.modo_adicionar_mapa = False
+
+    st.session_state.clicked_lat = None
+
+    st.session_state.clicked_lon = None
+
+    st.session_state.dados_upload_pendentes_bp = None
+
+    st.session_state.nome_arquivo_pendente_bp = None
 
 
 # ============================================================
@@ -1067,6 +1131,14 @@ if "file_uploader_key_bp" not in st.session_state:
 # ============================================================
 @st.dialog("➕ Cadastrar Novo Ponto")
 def modal_novo_ponto():
+
+    if not pode_alterar_dados:
+
+        st.error(
+            "Seu perfil não possui permissão para cadastrar pontos."
+        )
+
+        return
 
     lat_default = (
         st.session_state.clicked_lat
@@ -1187,20 +1259,30 @@ def modal_novo_ponto():
                     observacao.strip()
                 )
 
-                st.success(
-                    f"Ponto cadastrado com sucesso! ID: {novo_id}"
-                )
+                if novo_id:
 
-                st.session_state.clicked_lat = None
-                st.session_state.clicked_lon = None
+                    st.success(
+                        f"Ponto cadastrado com sucesso! ID: {novo_id}"
+                    )
 
-                st.rerun()
+                    st.session_state.clicked_lat = None
+                    st.session_state.clicked_lon = None
+
+                    st.rerun()
 
 
 @st.dialog("✏️ Editar Ponto")
 def modal_editar_ponto(
     id_registro: str
 ):
+
+    if not pode_alterar_dados:
+
+        st.error(
+            "Seu perfil não possui permissão para editar pontos."
+        )
+
+        return
 
     df_all = carregar_dados()
 
@@ -1367,7 +1449,6 @@ def modal_editar_ponto(
                         st.rerun()
 
             if cancelar_edicao:
-
                 st.rerun()
 
     else:
@@ -1379,6 +1460,14 @@ def modal_editar_ponto(
 
 @st.dialog("📋 Pré-visualização da Planilha")
 def modal_previa_upload():
+
+    if not pode_alterar_dados:
+
+        st.error(
+            "Seu perfil não possui permissão para importar dados."
+        )
+
+        return
 
     st.write(
         f"Arquivo carregado: "
@@ -1486,6 +1575,14 @@ with st.sidebar:
     st.caption(
         "Baixa Pressão • Tempo Real"
     )
+
+    if eh_operador:
+
+        st.info(
+            "👁️ **Modo consulta**\n\n"
+            "Visualização e análises liberadas. "
+            "Alterações, importações e exportações estão desabilitadas."
+        )
 
     st.markdown(
         "#### 📅 Selecionar Período"
@@ -1692,281 +1789,75 @@ with st.sidebar:
         key="filtro_pressao"
     )
 
-    st.divider()
-
-    st.markdown(
-        "#### ➕ Ações e Dados"
-    )
-
-    if st.button(
-        "Adicionar Novo Ponto",
-        type="primary",
-        use_container_width=True
-    ):
-
-        modal_novo_ponto()
-
-    arquivo_upload = st.file_uploader(
-        "📂 Enviar Planilha (XLSX/CSV)",
-        type=[
-            "xlsx",
-            "csv"
-        ],
-        key=(
-            f"upload_baixa_pressao_"
-            f"{st.session_state.file_uploader_key_bp}"
-        )
-    )
-
     # ========================================================
-    # MODELO XLSX
+    # AÇÕES E DADOS — SOMENTE ADMIN/USUÁRIO
     # ========================================================
-    df_modelo = pd.DataFrame(
-        [{
-            "Data": datetime.now().strftime(
-                "%d/%m/%Y"
-            ),
-            "Municipio": "TERESINA",
-            "Bairro": "CENTRO",
-            "Latitude": -5.0892,
-            "Longitude": -42.8019,
-            "Pressao_MCA": 2.5,
-            "Observacao": "EXEMPLO DE OBSERVAÇÃO",
-            "Matricula": "123456789"
-        }],
-        columns=COLUNAS_PADRAO[1:]
-    )
+    if pode_alterar_dados:
 
-    output_modelo = io.BytesIO()
+        st.divider()
 
-    with pd.ExcelWriter(
-        output_modelo,
-        engine="openpyxl"
-    ) as writer:
-
-        df_modelo.to_excel(
-            writer,
-            index=False,
-            sheet_name="Modelo"
+        st.markdown(
+            "#### ➕ Ações e Dados"
         )
 
-    st.download_button(
-        label="📥 Baixar Planilha Modelo",
-        data=output_modelo.getvalue(),
-        file_name=(
-            "modelo_importacao_"
-            "baixa_pressao.xlsx"
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True
-    )
-
-    # ========================================================
-    # UPLOAD
-    # ========================================================
-    if arquivo_upload is not None:
-
-        if (
-            st.session_state.nome_arquivo_pendente_bp
-            != arquivo_upload.name
+        if st.button(
+            "Adicionar Novo Ponto",
+            type="primary",
+            use_container_width=True
         ):
 
-            try:
+            modal_novo_ponto()
 
-                if arquivo_upload.name.endswith(
-                    ".csv"
-                ):
+        arquivo_upload = st.file_uploader(
+            "📂 Enviar Planilha (XLSX/CSV)",
+            type=[
+                "xlsx",
+                "csv"
+            ],
+            key=(
+                f"upload_baixa_pressao_"
+                f"{st.session_state.file_uploader_key_bp}"
+            )
+        )
 
-                    df_up = pd.read_csv(
-                        arquivo_upload
-                    )
+        # ====================================================
+        # MODELO XLSX
+        # ====================================================
+        df_modelo = pd.DataFrame(
+            [{
+                "Data": datetime.now().strftime(
+                    "%d/%m/%Y"
+                ),
+                "Municipio": "TERESINA",
+                "Bairro": "CENTRO",
+                "Latitude": -5.0892,
+                "Longitude": -42.8019,
+                "Pressao_MCA": 2.5,
+                "Observacao": "EXEMPLO DE OBSERVAÇÃO",
+                "Matricula": "123456789"
+            }],
+            columns=COLUNAS_PADRAO[1:]
+        )
 
-                else:
-
-                    df_up = pd.read_excel(
-                        arquivo_upload
-                    )
-
-                # Normaliza os nomes das colunas.
-                # Aceita Matricula, Matrícula, MATRICULA, etc.
-                df_up.columns = [
-                    normalizar_coluna(c)
-                    for c in df_up.columns
-                ]
-
-                lote_para_enviar = []
-
-                for _, row in df_up.iterrows():
-
-                    raw_data = row.get(
-                        "Data",
-                        row.get(
-                            "date",
-                            ""
-                        )
-                    )
-
-                    data_val = normalizar_data(
-                        raw_data
-                    )
-
-                    if not data_val:
-
-                        data_val = data_para_str(
-                            st.session_state
-                            .data_final_selecionada
-                        )
-
-                    muni = normalizar_texto_local(
-                        row.get(
-                            "Municipio",
-                            "TERESINA"
-                        ),
-                        padrao="TERESINA"
-                    )
-
-                    bair = normalizar_texto_local(
-                        row.get(
-                            "Bairro",
-                            ""
-                        ),
-                        padrao=""
-                    )
-
-                    matricula_val = str(
-                        row.get(
-                            "Matricula",
-                            ""
-                        )
-                    ).strip()
-
-                    if matricula_val.lower() in (
-                        "nan",
-                        "none"
-                    ):
-
-                        matricula_val = ""
-
-                    lat_val = normalizar_coordenada(
-                        row.get(
-                            "Latitude",
-                            row.get("Lat")
-                        ),
-                        "lat"
-                    )
-
-                    lon_val = normalizar_coordenada(
-                        row.get(
-                            "Longitude",
-                            row.get("Lon")
-                        ),
-                        "lon"
-                    )
-
-                    pres_val = parse_float(
-                        row.get(
-                            "Pressao_MCA",
-                            0.0
-                        ),
-                        0.0
-                    )
-
-                    obs_val = str(
-                        row.get(
-                            "Observacao",
-                            ""
-                        )
-                    ).strip()
-
-                    if obs_val.lower() in (
-                        "nan",
-                        "none"
-                    ):
-
-                        obs_val = ""
-
-                    if (
-                        bair
-                        and lat_val is not None
-                        and lon_val is not None
-                    ):
-
-                        lote_para_enviar.append([
-                            gerar_id(),
-                            data_val,
-                            muni,
-                            bair,
-                            float(lat_val),
-                            float(lon_val),
-                            float(pres_val),
-                            obs_val,
-                            matricula_val
-                        ])
-
-                if lote_para_enviar:
-
-                    st.session_state.dados_upload_pendentes_bp = (
-                        lote_para_enviar
-                    )
-
-                    st.session_state.nome_arquivo_pendente_bp = (
-                        arquivo_upload.name
-                    )
-
-                else:
-
-                    st.warning(
-                        "⚠️ Nenhum registro válido encontrado. "
-                        "Verifique se os nomes das colunas são: "
-                        "Data, Municipio, Matricula, Bairro, Latitude, "
-                        "Longitude, Pressao_MCA, Observacao."
-                    )
-
-            except Exception as e:
-
-                st.error(
-                    f"❌ Erro ao processar arquivo: {e}"
-                )
-
-    if (
-        st.session_state.dados_upload_pendentes_bp
-        is not None
-    ):
-
-        modal_previa_upload()
-
-    st.divider()
-
-    st.markdown(
-        "#### 📥 Exportar Dados"
-    )
-
-    if not df_all.empty:
-
-        output = io.BytesIO()
+        output_modelo = io.BytesIO()
 
         with pd.ExcelWriter(
-            output,
+            output_modelo,
             engine="openpyxl"
         ) as writer:
 
-            df_all.to_excel(
+            df_modelo.to_excel(
                 writer,
                 index=False,
-                sheet_name="Baixa_Pressao"
+                sheet_name="Modelo"
             )
 
-        excel_data = output.getvalue()
-
         st.download_button(
-            label="📊 Baixar em Excel (XLSX)",
-            data=excel_data,
+            label="📥 Baixar Planilha Modelo",
+            data=output_modelo.getvalue(),
             file_name=(
-                f"baixa_pressao_"
-                f"{datetime.now().strftime('%Y%m%d')}.xlsx"
+                "modelo_importacao_"
+                "baixa_pressao.xlsx"
             ),
             mime=(
                 "application/vnd.openxmlformats-officedocument."
@@ -1975,21 +1866,233 @@ with st.sidebar:
             use_container_width=True
         )
 
-        kml_string = gerar_kml(
-            df_all
+        # ====================================================
+        # UPLOAD
+        # ====================================================
+        if arquivo_upload is not None:
+
+            if (
+                st.session_state.nome_arquivo_pendente_bp
+                != arquivo_upload.name
+            ):
+
+                try:
+
+                    if arquivo_upload.name.endswith(
+                        ".csv"
+                    ):
+
+                        df_up = pd.read_csv(
+                            arquivo_upload
+                        )
+
+                    else:
+
+                        df_up = pd.read_excel(
+                            arquivo_upload
+                        )
+
+                    df_up.columns = [
+                        normalizar_coluna(c)
+                        for c in df_up.columns
+                    ]
+
+                    lote_para_enviar = []
+
+                    for _, row in df_up.iterrows():
+
+                        raw_data = row.get(
+                            "Data",
+                            row.get(
+                                "date",
+                                ""
+                            )
+                        )
+
+                        data_val = normalizar_data(
+                            raw_data
+                        )
+
+                        if not data_val:
+
+                            data_val = data_para_str(
+                                st.session_state
+                                .data_final_selecionada
+                            )
+
+                        muni = normalizar_texto_local(
+                            row.get(
+                                "Municipio",
+                                "TERESINA"
+                            ),
+                            padrao="TERESINA"
+                        )
+
+                        bair = normalizar_texto_local(
+                            row.get(
+                                "Bairro",
+                                ""
+                            ),
+                            padrao=""
+                        )
+
+                        matricula_val = str(
+                            row.get(
+                                "Matricula",
+                                ""
+                            )
+                        ).strip()
+
+                        if matricula_val.lower() in (
+                            "nan",
+                            "none"
+                        ):
+
+                            matricula_val = ""
+
+                        lat_val = normalizar_coordenada(
+                            row.get(
+                                "Latitude",
+                                row.get("Lat")
+                            ),
+                            "lat"
+                        )
+
+                        lon_val = normalizar_coordenada(
+                            row.get(
+                                "Longitude",
+                                row.get("Lon")
+                            ),
+                            "lon"
+                        )
+
+                        pres_val = parse_float(
+                            row.get(
+                                "Pressao_MCA",
+                                0.0
+                            ),
+                            0.0
+                        )
+
+                        obs_val = str(
+                            row.get(
+                                "Observacao",
+                                ""
+                            )
+                        ).strip()
+
+                        if obs_val.lower() in (
+                            "nan",
+                            "none"
+                        ):
+
+                            obs_val = ""
+
+                        if (
+                            bair
+                            and lat_val is not None
+                            and lon_val is not None
+                        ):
+
+                            lote_para_enviar.append([
+                                gerar_id(),
+                                data_val,
+                                muni,
+                                bair,
+                                float(lat_val),
+                                float(lon_val),
+                                float(pres_val),
+                                obs_val,
+                                matricula_val
+                            ])
+
+                    if lote_para_enviar:
+
+                        st.session_state.dados_upload_pendentes_bp = (
+                            lote_para_enviar
+                        )
+
+                        st.session_state.nome_arquivo_pendente_bp = (
+                            arquivo_upload.name
+                        )
+
+                    else:
+
+                        st.warning(
+                            "⚠️ Nenhum registro válido encontrado. "
+                            "Verifique se os nomes das colunas são: "
+                            "Data, Municipio, Matricula, Bairro, Latitude, "
+                            "Longitude, Pressao_MCA, Observacao."
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        f"❌ Erro ao processar arquivo: {e}"
+                    )
+
+        if (
+            st.session_state.dados_upload_pendentes_bp
+            is not None
+        ):
+
+            modal_previa_upload()
+
+        st.divider()
+
+        st.markdown(
+            "#### 📥 Exportar Dados"
         )
 
-        st.download_button(
-            label="🗺️ Baixar Mapa (KML/KMZ)",
-            data=kml_string,
-            file_name=(
-                f"baixa_pressao_"
-                f"{datetime.now().strftime('%Y%m%d')}.kml"
-            ),
-            mime="application/vnd.google-earth.kml+xml",
-            use_container_width=True
-        )
+        if not df_all.empty:
 
+            output = io.BytesIO()
+
+            with pd.ExcelWriter(
+                output,
+                engine="openpyxl"
+            ) as writer:
+
+                df_all.to_excel(
+                    writer,
+                    index=False,
+                    sheet_name="Baixa_Pressao"
+                )
+
+            excel_data = output.getvalue()
+
+            st.download_button(
+                label="📊 Baixar em Excel (XLSX)",
+                data=excel_data,
+                file_name=(
+                    f"baixa_pressao_"
+                    f"{datetime.now().strftime('%Y%m%d')}.xlsx"
+                ),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                use_container_width=True
+            )
+
+            kml_string = gerar_kml(
+                df_all
+            )
+
+            st.download_button(
+                label="🗺️ Baixar Mapa (KML/KMZ)",
+                data=kml_string,
+                file_name=(
+                    f"baixa_pressao_"
+                    f"{datetime.now().strftime('%Y%m%d')}.kml"
+                ),
+                mime="application/vnd.google-earth.kml+xml",
+                use_container_width=True
+            )
+
+    # ========================================================
+    # ATUALIZAÇÃO — DISPONÍVEL PARA TODOS
+    # ========================================================
     st.divider()
 
     st.markdown(
@@ -2034,7 +2137,6 @@ with st.sidebar:
     st.divider()
 
     if "modo_escuro_bp" not in st.session_state:
-
         st.session_state.modo_escuro_bp = False
 
     modo_escuro_bp = st.toggle(
@@ -2128,6 +2230,15 @@ with st.sidebar:
 st.title(
     "💧 Painel de Monitoramento de Baixa Pressão - COI"
 )
+
+if eh_operador:
+
+    st.info(
+        "👁️ **Modo consulta/análise — perfil OPERADOR**  \n"
+        "Você pode utilizar o mapa, filtros, tabela e análises. "
+        "Funções de inclusão, edição, exclusão, importação, "
+        "alteração e exportação estão desabilitadas."
+    )
 
 if periodo_valido:
 
@@ -2228,11 +2339,6 @@ elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
 
 elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
 
-    # ========================================================
-    # IMPORTANTE:
-    # O texto apresentado ao usuário permanece ≤ 10 MCA,
-    # mas a regra operacional continua sendo ≤ 15 MCA.
-    # ========================================================
     df_filtrado = df_filtrado[
         (
             df_filtrado["Pressao_MCA"] > 5
@@ -2394,10 +2500,21 @@ with c_map3:
 
 with c_map4:
 
-    st.session_state.modo_adicionar_mapa = st.checkbox(
-        "📍 Modo adicionar ponto",
-        value=st.session_state.modo_adicionar_mapa
-    )
+    if pode_alterar_dados:
+
+        st.session_state.modo_adicionar_mapa = st.checkbox(
+            "📍 Modo adicionar ponto",
+            value=st.session_state.modo_adicionar_mapa,
+            key="modo_adicionar_ponto_bp"
+        )
+
+    else:
+
+        st.session_state.modo_adicionar_mapa = False
+
+        st.caption(
+            "👁️ Somente visualização"
+        )
 
 
 if (
@@ -2471,13 +2588,6 @@ def gerar_pin_svg(
     cor: str,
     tamanho: str = "bairro"
 ) -> str:
-
-    """
-    Gera um pin SVG independente do CSS de rotação.
-
-    Isso evita problemas de renderização do pin
-    dentro do DivIcon do Folium.
-    """
 
     if tamanho == "individual":
 
@@ -2711,10 +2821,6 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                # --------------------------------------------
-                # RÓTULO INDIVIDUAL
-                # Matrícula NÃO entra aqui.
-                # --------------------------------------------
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -2894,9 +3000,6 @@ if not df_filtrado.empty:
                     str(municipio)
                 )
 
-                # =================================================
-                # DETALHES DAS MEDIÇÕES
-                # =================================================
                 linhas_medicoes = []
 
                 for _, registro in grupo.sort_values(
@@ -3088,9 +3191,6 @@ if not df_filtrado.empty:
                 </div>
                 """
 
-                # =================================================
-                # MARCADOR DO BAIRRO
-                # =================================================
                 if mostrar_rotulos:
 
                     marker_html = f"""
@@ -3206,13 +3306,9 @@ map_style_html = """
     .leaflet-marker-icon.pressao-individual-marker {
 
         background: transparent !important;
-
         border: 0 !important;
-
         overflow: visible !important;
-
         padding: 0 !important;
-
         margin: 0 !important;
     }
 
@@ -3221,11 +3317,8 @@ map_style_html = """
     .pressao-individual-marker .bp-marker-wrapper {
 
         position: relative !important;
-
         overflow: visible !important;
-
         pointer-events: auto !important;
-
         font-family: Arial, sans-serif;
     }
 
@@ -3233,13 +3326,9 @@ map_style_html = """
     .bp-pin-svg {
 
         display: block !important;
-
         visibility: visible !important;
-
         opacity: 1 !important;
-
         overflow: visible !important;
-
         pointer-events: auto !important;
     }
 
@@ -3474,26 +3563,26 @@ declutter_js = """
 
             if (posicao === "top") {
 
-    rotulo.style.left = "50%";
+                rotulo.style.left = "50%";
 
-    if (
-        rotulo.classList.contains(
-            "bp-label-card-bairro"
-        )
-    ) {
+                if (
+                    rotulo.classList.contains(
+                        "bp-label-card-bairro"
+                    )
+                ) {
 
-        rotulo.style.top = "-80px";
+                    rotulo.style.top = "-80px";
 
-    } else {
+                } else {
 
-        rotulo.style.top = "-180px";
+                    rotulo.style.top = "-180px";
 
-    }
+                }
 
-    rotulo.style.transform =
-        "translate(-50%, -100%)";
+                rotulo.style.transform =
+                    "translate(-50%, -100%)";
 
-}
+            }
 
             else if (posicao === "bottom") {
 
@@ -3565,14 +3654,11 @@ declutter_js = """
             var container = map.getContainer();
 
             if (!container) {
-
                 return;
             }
 
-
             var areaMapa =
                 container.getBoundingClientRect();
-
 
             var marcadores =
                 container.querySelectorAll(
@@ -3580,15 +3666,11 @@ declutter_js = """
                     ".pressao-individual-marker .bp-marker-wrapper"
                 );
 
-
             if (!marcadores.length) {
-
                 return;
             }
 
-
             var candidatos = [];
-
 
             marcadores.forEach(
                 function(wrapper) {
@@ -3598,18 +3680,14 @@ declutter_js = """
                             ".bp-label-card"
                         );
 
-
                     if (!rotulo) {
-
                         return;
                     }
-
 
                     var svg =
                         wrapper.querySelector(
                             ".bp-pin-svg"
                         );
-
 
                     if (svg) {
 
@@ -3635,19 +3713,16 @@ declutter_js = """
                         }
                     }
 
-
                     rotulo.style.display =
                         "block";
 
                     rotulo.style.visibility =
                         "hidden";
 
-
                     aplicarPosicao(
                         rotulo,
                         "top"
                     );
-
 
                     var prioridade =
                         parseInt(
@@ -3657,18 +3732,14 @@ declutter_js = """
                             10
                         );
 
-
                     if (isNaN(prioridade)) {
-
                         prioridade = 0;
                     }
-
 
                     var individual =
                         wrapper.classList.contains(
                             "bp-individual-marker-wrapper"
                         );
-
 
                     candidatos.push({
 
@@ -3702,7 +3773,6 @@ declutter_js = """
                             : -1;
                     }
 
-
                     if (
                         b.prioridade
                         !==
@@ -3715,7 +3785,6 @@ declutter_js = """
                             a.prioridade
                         );
                     }
-
 
                     return (
                         a.ordem
@@ -3750,9 +3819,7 @@ declutter_js = """
 
             var aceitos = [];
 
-
             var margem = 8;
-
 
             var margemMapa = 4;
 
@@ -3762,9 +3829,15 @@ declutter_js = """
 
                     var encontrouPosicao = false;
 
-                    // Caixa do pin (ou do wrapper) — o rótulo nunca pode sobrepor o próprio pin
-                    var pinEl = item.wrapper.querySelector(".bp-pin-svg") || item.wrapper;
-                    var caixaPin = pinEl.getBoundingClientRect();
+                    var pinEl =
+                        item.wrapper.querySelector(
+                            ".bp-pin-svg"
+                        )
+                        ||
+                        item.wrapper;
+
+                    var caixaPin =
+                        pinEl.getBoundingClientRect();
 
 
                     for (
@@ -3776,12 +3849,10 @@ declutter_js = """
                         var posicao =
                             posicoes[p];
 
-
                         aplicarPosicao(
                             item.rotulo,
                             posicao
                         );
-
 
                         var caixa =
                             item.rotulo
@@ -3800,7 +3871,6 @@ declutter_js = """
                         }
 
 
-                        // Não permite sobreposição com o próprio pin
                         if (
                             caixasSeSobrepoem(
                                 caixa,
@@ -3878,12 +3948,10 @@ declutter_js = """
                 );
             }
 
-
             agendamento = setTimeout(
                 function() {
 
                     recalcularRotulos();
-
 
                     requestAnimationFrame(
                         function() {
@@ -3892,7 +3960,6 @@ declutter_js = """
 
                         }
                     );
-
 
                     agendamento = null;
 
@@ -4083,8 +4150,12 @@ map_data = st_folium(
 )
 
 
+# ============================================================
+# CLIQUE NO MAPA — SOMENTE ADMIN/USUÁRIO
+# ============================================================
 if (
-    st.session_state.modo_adicionar_mapa
+    pode_alterar_dados
+    and st.session_state.modo_adicionar_mapa
     and map_data
     and map_data.get(
         "last_clicked"
@@ -4138,64 +4209,81 @@ if not df_filtrado.empty:
         drop=True
     )
 
-    evento = st.dataframe(
-        df_show,
-        use_container_width=True,
-        height=300,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="tabela_registros"
-    )
+    # ========================================================
+    # OPERADOR — SOMENTE VISUALIZAÇÃO
+    # ========================================================
+    if eh_operador:
 
-    linhas_selecionadas = (
-        evento.selection.rows
-        if evento and evento.selection
-        else []
-    )
-
-    if linhas_selecionadas:
-
-        idx = linhas_selecionadas[0]
-
-        registro = df_show.iloc[
-            idx
-        ]
-
-        id_sel = str(
-            registro["ID"]
+        st.dataframe(
+            df_show,
+            use_container_width=True,
+            height=300,
+            hide_index=True
         )
 
-        col_a, col_b, _ = st.columns(
-            [1, 1, 4]
+    # ========================================================
+    # ADMIN/USUÁRIO — TABELA INTERATIVA
+    # ========================================================
+    else:
+
+        evento = st.dataframe(
+            df_show,
+            use_container_width=True,
+            height=300,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="tabela_registros"
         )
 
-        with col_a:
+        linhas_selecionadas = (
+            evento.selection.rows
+            if evento and evento.selection
+            else []
+        )
 
-            if st.button(
-                "✏️ Editar",
-                use_container_width=True
-            ):
+        if linhas_selecionadas:
 
-                modal_editar_ponto(
-                    id_sel
-                )
+            idx = linhas_selecionadas[0]
 
-        with col_b:
+            registro = df_show.iloc[
+                idx
+            ]
 
-            if st.button(
-                "🗑️ Excluir",
-                use_container_width=True
-            ):
+            id_sel = str(
+                registro["ID"]
+            )
 
-                if excluir_ponto(
-                    id_sel
+            col_a, col_b, _ = st.columns(
+                [1, 1, 4]
+            )
+
+            with col_a:
+
+                if st.button(
+                    "✏️ Editar",
+                    use_container_width=True
                 ):
 
-                    st.success(
-                        "Excluído com sucesso."
+                    modal_editar_ponto(
+                        id_sel
                     )
 
-                    st.rerun()
+            with col_b:
+
+                if st.button(
+                    "🗑️ Excluir",
+                    use_container_width=True
+                ):
+
+                    if excluir_ponto(
+                        id_sel
+                    ):
+
+                        st.success(
+                            "Excluído com sucesso."
+                        )
+
+                        st.rerun()
 
 
 # ============================================================
