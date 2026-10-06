@@ -211,8 +211,11 @@ def converter_datetime_evento(valor):
     """
     Converte datas/horas da base de Eventos.
 
-    Formato principal:
+    Exemplos aceitos:
         24/09/2026 10:30h
+        24/09/2026 10:30
+        datetime
+        Timestamp
     """
 
     if valor is None:
@@ -232,6 +235,7 @@ def converter_datetime_evento(valor):
     if not texto:
         return pd.NaT
 
+    # Remove o "h" do final da hora.
     texto = re.sub(
         r"(\d{1,2}:\d{2})h\b",
         r"\1",
@@ -239,6 +243,7 @@ def converter_datetime_evento(valor):
         flags=re.IGNORECASE,
     )
 
+    # Formato principal.
     resultado = pd.to_datetime(
         texto,
         format="%d/%m/%Y %H:%M",
@@ -248,6 +253,7 @@ def converter_datetime_evento(valor):
     if not pd.isna(resultado):
         return resultado
 
+    # Fallback.
     return pd.to_datetime(
         texto,
         errors="coerce",
@@ -329,6 +335,13 @@ PADROES_TODO_MUNICIPIO = {
     "REGIAO TODA",
     "TODAS AS AREAS",
     "TODAS AREAS",
+    "TODOS OS BAIRROS",
+    "TODAS AS REGIOES",
+    "TODAS REGIOES",
+    "TODOS BAIRROS",
+    "MUNICIPIO INTEIRO",
+    "CIDADE INTEIRA",
+    "TODA A CIDADE",
 }
 
 
@@ -338,7 +351,126 @@ def eh_todo_municipio(valor) -> bool:
     if not texto:
         return False
 
-    return texto in PADROES_TODO_MUNICIPIO
+    if texto in PADROES_TODO_MUNICIPIO:
+        return True
+
+    # Tratamentos adicionais.
+    if "MUNICIPIO INTEIRO" in texto:
+        return True
+
+    if "CIDADE INTEIRA" in texto:
+        return True
+
+    if "TODOS OS BAIRROS" in texto:
+        return True
+
+    if "TODAS AS REGIOES" in texto:
+        return True
+
+    return False
+
+
+# ============================================================
+# SEPARAÇÃO DAS ÁREAS IMPACTADAS
+# ============================================================
+
+def separar_areas_impactadas(valor):
+    """
+    Interpreta o conteúdo original da coluna
+    'Áreas Impactadas'.
+
+    IMPORTANTE:
+    O texto é separado ANTES de ser normalizado.
+
+    Isso evita o problema anterior em que:
+        'CENTRO, SAO JOSE'
+    virava:
+        'CENTRO SAO JOSE'
+
+    e posteriormente não era mais possível descobrir
+    que existiam duas áreas diferentes.
+    """
+
+    if valor is None:
+        return []
+
+    try:
+        if pd.isna(valor):
+            return []
+    except Exception:
+        pass
+
+    texto_original = str(valor).strip()
+
+    if not texto_original:
+        return []
+
+    # --------------------------------------------------------
+    # MUNICÍPIO INTEIRO
+    # --------------------------------------------------------
+
+    if eh_todo_municipio(texto_original):
+        return ["TODA A CIDADE"]
+
+    # --------------------------------------------------------
+    # NORMALIZAÇÃO DOS SEPARADORES
+    # --------------------------------------------------------
+
+    texto = texto_original
+
+    # Quebras de linha.
+    texto = texto.replace("\r\n", "\n")
+    texto = texto.replace("\r", "\n")
+
+    # Alguns símbolos utilizados como separadores.
+    texto = texto.replace(";", ",")
+    texto = texto.replace("|", ",")
+    texto = texto.replace("/", ",")
+    texto = texto.replace("\\", ",")
+
+    # '&' como separador.
+    texto = re.sub(
+        r"\s*&\s*",
+        ",",
+        texto,
+    )
+
+    # " E " como separador.
+    texto = re.sub(
+        r"\s+E\s+",
+        ",",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    # --------------------------------------------------------
+    # SPLIT FINAL
+    # --------------------------------------------------------
+
+    partes = re.split(
+        r"[,;\n|]+",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    resultado = []
+
+    for parte in partes:
+
+        area = normalizar_texto(parte)
+
+        if not area:
+            continue
+
+        # Se por algum motivo uma das partes ainda representar
+        # o município inteiro, padroniza.
+        if eh_todo_municipio(area):
+            return ["TODA A CIDADE"]
+
+        if area not in resultado:
+            resultado.append(area)
+
+    return resultado
 
 
 # ============================================================
@@ -349,6 +481,7 @@ SINONIMOS_AREAS = {
     "CENTRO": {
         "CENTRO",
     },
+
     "SAO JOSE": {
         "SAO JOSE",
         "SAO JOSE I",
@@ -375,52 +508,18 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not area_evento or not bairro_os:
         return False
 
+    area = normalizar_texto(area_evento)
     bairro = normalizar_texto(bairro_os)
 
-    if not bairro:
-        return False
-
-    texto_area_original = str(area_evento).strip()
-
-    if not texto_area_original:
-        return False
-
-    # --------------------------------------------------------
-    # MUNICÍPIO INTEIRO
-    # --------------------------------------------------------
-
-    if eh_todo_municipio(texto_area_original):
-        return True
-
-    # --------------------------------------------------------
-    # SEPARAÇÃO DE MÚLTIPLAS ÁREAS
-    # --------------------------------------------------------
-
-    partes = re.split(
-        r"[;,|\n]+|\s+E\s+",
-        texto_area_original,
-        flags=re.IGNORECASE,
-    )
-
-    areas = []
-
-    for parte in partes:
-        area = normalizar_texto(parte)
-
-        if area:
-            areas.append(area)
-
-    if not areas:
+    if not area or not bairro:
         return False
 
     # --------------------------------------------------------
     # COMPARAÇÃO EXATA
     # --------------------------------------------------------
 
-    for area in areas:
-
-        if area == bairro:
-            return True
+    if area == bairro:
+        return True
 
     # --------------------------------------------------------
     # SINÔNIMOS EXPLÍCITOS
@@ -439,14 +538,23 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
             },
         }
 
-        area_equivalente = any(
-            area in equivalentes
-            for area in areas
-        )
+        if area in equivalentes and bairro in equivalentes:
+            return True
 
-        bairro_equivalente = bairro in equivalentes
+    # --------------------------------------------------------
+    # COMPARAÇÃO POR TOKENS
+    #
+    # Usada somente quando existe uma relação clara entre
+    # os nomes, evitando aceitar correspondências muito
+    # genéricas.
+    # --------------------------------------------------------
 
-        if area_equivalente and bairro_equivalente:
+    tokens_area = tokenizar_area(area)
+    tokens_bairro = tokenizar_area(bairro)
+
+    if tokens_area and tokens_bairro:
+
+        if tokens_area == tokens_bairro:
             return True
 
     return False
@@ -541,13 +649,45 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
     eventos = pd.DataFrame()
 
+    # --------------------------------------------------------
+    # CIDADE
+    # --------------------------------------------------------
+
     eventos["cidade"] = df[coluna_cidade].apply(
         normalizar_texto
     )
 
-    eventos["areas"] = df[coluna_area].apply(
+    # --------------------------------------------------------
+    # ÁREAS
+    #
+    # AQUI ESTÁ UMA DAS PRINCIPAIS CORREÇÕES:
+    # mantemos o texto original.
+    # --------------------------------------------------------
+
+    eventos["areas_original"] = (
+        df[coluna_area]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    # --------------------------------------------------------
+    # ÁREAS JÁ SEPARADAS
+    # --------------------------------------------------------
+
+    eventos["areas_lista"] = eventos["areas_original"].apply(
+        separar_areas_impactadas
+    )
+
+    # Mantemos também uma representação normalizada para
+    # verificações auxiliares.
+    eventos["areas"] = eventos["areas_original"].apply(
         normalizar_texto
     )
+
+    # --------------------------------------------------------
+    # DATAS
+    # --------------------------------------------------------
 
     eventos["inicio"] = df[coluna_inicio].apply(
         converter_datetime_evento
@@ -557,10 +697,18 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         converter_datetime_evento
     )
 
+    # --------------------------------------------------------
+    # FIM EFETIVO
+    # --------------------------------------------------------
+
     eventos["fim_efetivo"] = (
         eventos["fim_previsto"]
         + pd.Timedelta(hours=3)
     )
+
+    # --------------------------------------------------------
+    # DESCRIÇÃO
+    # --------------------------------------------------------
 
     if coluna_descricao is not None:
         eventos["descricao"] = (
@@ -572,9 +720,19 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     else:
         eventos["descricao"] = ""
 
-    eventos["todo_municipio"] = eventos["areas"].apply(
+    # --------------------------------------------------------
+    # TODO MUNICÍPIO
+    # --------------------------------------------------------
+
+    eventos["todo_municipio"] = eventos[
+        "areas_original"
+    ].apply(
         eh_todo_municipio
     )
+
+    # --------------------------------------------------------
+    # VALIDAÇÕES
+    # --------------------------------------------------------
 
     eventos["fim_anterior_inicio"] = (
         eventos["inicio"].notna()
@@ -601,6 +759,12 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         (eventos["cidade"] == "").sum()
     )
 
+    areas_vazias = int(
+        eventos["areas_lista"].apply(
+            lambda lista: len(lista) == 0
+        ).sum()
+    )
+
     if quantidade_inicio_invalido:
         avisos.append(
             f"{quantidade_inicio_invalido} evento(s) com "
@@ -625,11 +789,26 @@ def preparar_eventos(df_eventos: pd.DataFrame):
             "ignorados."
         )
 
+    if areas_vazias:
+        avisos.append(
+            f"{areas_vazias} evento(s) sem área impactada "
+            "válida serão ignorados."
+        )
+
+    # --------------------------------------------------------
+    # EVENTOS VÁLIDOS
+    # --------------------------------------------------------
+
     eventos_validos = eventos[
         eventos["inicio"].notna()
         & eventos["fim_previsto"].notna()
         & ~eventos["fim_anterior_inicio"]
         & (eventos["cidade"] != "")
+        & (
+            eventos["areas_lista"].apply(
+                lambda lista: len(lista) > 0
+            )
+        )
     ].copy()
 
     estatisticas = {
@@ -652,7 +831,10 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 # FORMATAÇÃO DO PERÍODO DO EVENTO
 # ============================================================
 
-def formatar_periodo_evento(inicio_evento, fim_previsto):
+def formatar_periodo_evento(
+    inicio_evento,
+    fim_previsto,
+):
 
     if inicio_evento.date() == fim_previsto.date():
         return str(inicio_evento.day)
@@ -796,6 +978,10 @@ def cruzar_eventos_com_backlog(
         .map(normalizar_texto)
     )
 
+    # ========================================================
+    # DATA/HORA DO SLA
+    # ========================================================
+
     df["inicio_sla"] = pd.to_datetime(
         df[coluna_inicio_sla],
         errors="coerce",
@@ -813,7 +999,8 @@ def cruzar_eventos_com_backlog(
             ),
             df[coluna_protocolo]
             .fillna("")
-            .astype(str),
+            .astype(str)
+            .str.strip(),
         )
     )
 
@@ -839,10 +1026,6 @@ def cruzar_eventos_com_backlog(
             evento.get("cidade", "")
         )
 
-        areas = str(
-            evento.get("areas", "") or ""
-        ).strip()
-
         inicio_evento = evento.get("inicio")
         fim_previsto = evento.get("fim_previsto")
         fim_efetivo = evento.get("fim_efetivo")
@@ -860,28 +1043,61 @@ def cruzar_eventos_com_backlog(
             continue
 
         # ----------------------------------------------------
-        # ÁREAS IMPACTADAS
+        # ÁREAS
         # ----------------------------------------------------
 
-        if bool(evento.get("todo_municipio", False)):
+        areas_evento = evento.get(
+            "areas_lista",
+            [],
+        )
 
-            areas_evento = [
-                "TODA A CIDADE"
-            ]
-
-        else:
-
-            partes = re.split(
-                r"[;,|\n]+|\s+E\s+",
-                areas,
-                flags=re.IGNORECASE,
+        if not isinstance(areas_evento, list):
+            areas_evento = separar_areas_impactadas(
+                areas_evento
             )
 
-            areas_evento = [
-                normalizar_texto(parte)
-                for parte in partes
-                if normalizar_texto(parte)
-            ]
+        if not areas_evento:
+            continue
+
+        # ----------------------------------------------------
+        # FILTRO POR CIDADE
+        #
+        # Feito uma vez por evento.
+        # ----------------------------------------------------
+
+        candidatos = df[
+            df["cidade_normalizada"] == cidade
+        ].copy()
+
+        if candidatos.empty:
+            avisos.append(
+                f"Evento em {cidade} entre "
+                f"{inicio_evento.strftime('%d/%m/%Y %H:%M')} "
+                f"e {fim_previsto.strftime('%d/%m/%Y %H:%M')} "
+                "não encontrou O.S. na mesma cidade."
+            )
+            continue
+
+        # ----------------------------------------------------
+        # FILTRO POR PERÍODO
+        # ----------------------------------------------------
+
+        candidatos = candidatos[
+            (candidatos["inicio_sla"] >= inicio_evento)
+            & (
+                candidatos["inicio_sla"]
+                <= fim_efetivo
+            )
+        ].copy()
+
+        if candidatos.empty:
+            avisos.append(
+                f"Evento em {cidade} entre "
+                f"{inicio_evento.strftime('%d/%m/%Y %H:%M')} "
+                f"e {fim_previsto.strftime('%d/%m/%Y %H:%M')} "
+                "não encontrou O.S. dentro do período."
+            )
+            continue
 
         # ----------------------------------------------------
         # CADA ÁREA
@@ -889,48 +1105,54 @@ def cruzar_eventos_com_backlog(
 
         for area_evento in areas_evento:
 
-            # ------------------------------------------------
-            # FILTRO POR CIDADE
-            # ------------------------------------------------
-
-            candidatos = df[
-                df["cidade_normalizada"] == cidade
-            ].copy()
+            if not area_evento:
+                continue
 
             # ------------------------------------------------
-            # FILTRO POR PERÍODO
+            # MUNICÍPIO INTEIRO
             # ------------------------------------------------
 
-            candidatos = candidatos[
-                (candidatos["inicio_sla"] >= inicio_evento)
-                & (
-                    candidatos["inicio_sla"]
-                    <= fim_efetivo
+            if area_evento == "TODA A CIDADE":
+
+                candidatos_area = candidatos.copy()
+
+            else:
+
+                # --------------------------------------------
+                # FILTRO POR BAIRRO
+                # --------------------------------------------
+
+                mascara_bairro = candidatos[
+                    "bairro_normalizado"
+                ].apply(
+                    lambda bairro: areas_evento_correspondem(
+                        area_evento,
+                        bairro,
+                    )
                 )
-            ]
+
+                candidatos_area = candidatos[
+                    mascara_bairro
+                ].copy()
+
+            # ------------------------------------------------
+            # CHAVES ÚNICAS DE O.S.
+            # ------------------------------------------------
 
             chaves_os_evento = set()
 
-            # ------------------------------------------------
-            # FILTRO POR BAIRRO
-            # ------------------------------------------------
-
-            for _, os_row in candidatos.iterrows():
-
-                if area_evento != "TODA A CIDADE":
-
-                    if not areas_evento_correspondem(
-                        area_evento,
-                        os_row["bairro_normalizado"],
-                    ):
-                        continue
+            for _, os_row in candidatos_area.iterrows():
 
                 chave_os = os_row["chave_os"]
 
-                if chave_os in chaves_os_evento:
+                # Evita contabilizar registros sem chave
+                # identificável.
+                if not chave_os[0] and not chave_os[1]:
                     continue
 
-                chaves_os_evento.add(chave_os)
+                chaves_os_evento.add(
+                    chave_os
+                )
 
             # ------------------------------------------------
             # QUANTIDADE
@@ -1414,7 +1636,11 @@ def render_eventos():
 
                 st.download_button(
                     "📥 Baixar lote",
-                    data=arquivo if arquivo is not None else b"",
+                    data=(
+                        arquivo
+                        if arquivo is not None
+                        else b""
+                    ),
                     file_name=nome_arquivo,
                     mime=(
                         "application/vnd.openxmlformats-"
