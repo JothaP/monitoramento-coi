@@ -260,7 +260,7 @@ def tokenizar_area(valor):
     texto = normalizar_nome_area_com_qualificadores(valor)
 
     if not texto:
-        return set()
+        return ""
 
     return {
         token
@@ -292,12 +292,14 @@ def separar_areas_impactadas(valor):
     texto = texto_original
 
     texto = re.sub(r"[;|/\\&]+", ",", texto)
+
     texto = re.sub(
         r"\s+\bE\b\s+",
         ",",
         texto,
         flags=re.IGNORECASE,
     )
+
     texto = texto.replace("\n", ",")
 
     partes = [
@@ -333,8 +335,13 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not area_evento or not bairro_os:
         return False
 
-    area = normalizar_nome_area_com_qualificadores(area_evento)
-    bairro = normalizar_nome_area_com_qualificadores(bairro_os)
+    area = normalizar_nome_area_com_qualificadores(
+        area_evento
+    )
+
+    bairro = normalizar_nome_area_com_qualificadores(
+        bairro_os
+    )
 
     if not area or not bairro:
         return False
@@ -377,6 +384,7 @@ def evento_afeta_municipio_inteiro(areas):
         return False
 
     for area in areas:
+
         normalizado = normalizar_texto(area)
 
         if normalizado in PADROES_MUNICIPIO_INTEIRO:
@@ -390,6 +398,7 @@ def evento_afeta_municipio_inteiro(areas):
 # ============================================================
 
 def preparar_eventos(df_eventos: pd.DataFrame):
+
     df = df_eventos.copy()
 
     coluna_cidade = encontrar_coluna(
@@ -476,7 +485,8 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     if faltantes:
         raise ValueError(
             "Não foi possível localizar as seguintes colunas "
-            f"obrigatórias no arquivo de eventos: {', '.join(faltantes)}"
+            f"obrigatórias no arquivo de eventos: "
+            f"{', '.join(faltantes)}"
         )
 
     if (
@@ -484,9 +494,9 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         and coluna_previsao_termino is None
     ):
         raise ValueError(
-            "Não foi encontrada nenhuma coluna de término do evento. "
-            "É necessário possuir 'Término Real' ou "
-            "'Previsão de Término'."
+            "Não foi encontrada nenhuma coluna de término "
+            "do evento. É necessário possuir "
+            "'Término Real' ou 'Previsão de Término'."
         )
 
     # --------------------------------------------------------
@@ -526,6 +536,7 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     )
 
     # Início da janela = início do evento - 1 hora
+
     df["inicio_janela"] = (
         df["inicio"]
         - pd.Timedelta(hours=1)
@@ -536,10 +547,13 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     # --------------------------------------------------------
 
     if coluna_termino_real is not None:
+
         df["termino_real"] = parse_coluna_data(
             df[coluna_termino_real]
         )
+
     else:
+
         df["termino_real"] = pd.NaT
 
     # --------------------------------------------------------
@@ -547,10 +561,13 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     # --------------------------------------------------------
 
     if coluna_previsao_termino is not None:
+
         df["previsao_termino"] = parse_coluna_data(
             df[coluna_previsao_termino]
         )
+
     else:
+
         df["previsao_termino"] = pd.NaT
 
     # --------------------------------------------------------
@@ -559,9 +576,6 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     # Prioridade:
     # 1. Término Real
     # 2. Previsão de Término
-    #
-    # combine_first também trata corretamente casos em que
-    # a coluna existe, mas o registro específico está vazio.
     # --------------------------------------------------------
 
     df["termino_referencia"] = (
@@ -584,6 +598,7 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     # --------------------------------------------------------
 
     if coluna_descricao is not None:
+
         df["descricao"] = df[coluna_descricao].apply(
             lambda valor: (
                 ""
@@ -591,7 +606,9 @@ def preparar_eventos(df_eventos: pd.DataFrame):
                 else str(valor).strip()
             )
         )
+
     else:
+
         df["descricao"] = ""
 
     # --------------------------------------------------------
@@ -615,6 +632,7 @@ def cruzar_eventos_com_backlog(
     df_eventos: pd.DataFrame,
     df_backlog: pd.DataFrame,
 ):
+
     df_os = df_backlog.copy()
 
     # --------------------------------------------------------
@@ -670,27 +688,32 @@ def cruzar_eventos_com_backlog(
 
     if coluna_cidade is None:
         raise ValueError(
-            "Não foi encontrada a coluna de cidade no backlog de O.S."
+            "Não foi encontrada a coluna de cidade "
+            "no backlog de O.S."
         )
 
     if coluna_bairro is None:
         raise ValueError(
-            "Não foi encontrada a coluna de bairro no backlog de O.S."
+            "Não foi encontrada a coluna de bairro "
+            "no backlog de O.S."
         )
 
     if coluna_inicio_sla is None:
         raise ValueError(
-            "Não foi encontrada a coluna 'Início do SLA' no backlog."
+            "Não foi encontrada a coluna "
+            "'Início do SLA' no backlog."
         )
 
     if coluna_protocolo is None:
         raise ValueError(
-            "Não foi encontrada a coluna de protocolo no backlog."
+            "Não foi encontrada a coluna de protocolo "
+            "no backlog."
         )
 
     if coluna_matricula is None:
         raise ValueError(
-            "Não foi encontrada a coluna de matrícula no backlog."
+            "Não foi encontrada a coluna de matrícula "
+            "no backlog."
         )
 
     # --------------------------------------------------------
@@ -768,14 +791,6 @@ def cruzar_eventos_com_backlog(
 
         # ----------------------------------------------------
         # Filtra período
-        #
-        # Início do evento - 1h
-        #
-        # até
-        #
-        # Término Real + 3h
-        #
-        # ou Previsão de Término + 3h
         # ----------------------------------------------------
 
         candidatos = candidatos[
@@ -855,6 +870,7 @@ def cruzar_eventos_com_backlog(
         # ----------------------------------------------------
 
         inicio_evento = evento["inicio"]
+
         termino_referencia = (
             evento["termino_referencia"]
         )
@@ -954,6 +970,7 @@ def cruzar_eventos_com_backlog(
                 )
 
     if not resultados:
+
         return pd.DataFrame(
             columns=COLUNAS_LOTE
         )
@@ -992,7 +1009,8 @@ def carregar_arquivo_eventos(
 
     if base is None:
         raise ValueError(
-            "Não foi possível localizar a base de eventos carregada."
+            "Não foi possível localizar a base "
+            "de eventos carregada."
         )
 
     if isinstance(base, pd.DataFrame):
@@ -1001,6 +1019,7 @@ def carregar_arquivo_eventos(
     if isinstance(base, dict):
 
         if nome_arquivo in base:
+
             valor = base[nome_arquivo]
 
             if isinstance(valor, pd.DataFrame):
@@ -1016,7 +1035,11 @@ def carregar_arquivo_eventos(
                 normalizar_texto(chave)
                 == nome_normalizado
             ):
-                if isinstance(valor, pd.DataFrame):
+
+                if isinstance(
+                    valor,
+                    pd.DataFrame,
+                ):
                     return valor.copy()
 
     raise ValueError(
@@ -1031,40 +1054,109 @@ def carregar_arquivo_eventos(
 
 def carregar_backlog(modo):
     """
-    O backlog utilizado no cruzamento depende do modo:
+    O backlog utilizado no cruzamento depende do modo.
 
-        API -> base 'api'
-        THE -> base 'the'
+    O componente selecionar_modo_api_the() pode retornar:
+
+        "API"
+        "THE"
+
+    ou:
+
+        ("API", dataframe)
+        ("THE", dataframe)
+
+    Quando o DataFrame já vier junto com o modo,
+    ele será utilizado diretamente.
     """
 
+    df_fornecido = None
+
+    # --------------------------------------------------------
+    # Trata retorno no formato:
+    #
+    # ("THE", dataframe)
+    # --------------------------------------------------------
+
+    if isinstance(modo, tuple):
+
+        if len(modo) >= 1:
+            modo_selecionado = modo[0]
+        else:
+            modo_selecionado = None
+
+        if len(modo) >= 2:
+
+            if isinstance(
+                modo[1],
+                pd.DataFrame,
+            ):
+                df_fornecido = modo[1]
+
+    else:
+
+        modo_selecionado = modo
+
     modo_normalizado = normalizar_texto(
-        modo
+        modo_selecionado
     )
 
+    # --------------------------------------------------------
+    # Se o componente já forneceu o DataFrame,
+    # utiliza diretamente.
+    # --------------------------------------------------------
+
+    if df_fornecido is not None:
+        return df_fornecido.copy()
+
+    # --------------------------------------------------------
+    # Caso contrário, localiza a base pelo modo.
+    # --------------------------------------------------------
+
     if modo_normalizado == "API":
+
         nome_base = "api"
 
     elif modo_normalizado == "THE":
+
         nome_base = "the"
 
     else:
+
         raise ValueError(
-            f"Modo inválido para carregamento do backlog: {modo}"
+            f"Modo inválido para carregamento do backlog: "
+            f"{modo_selecionado}"
         )
 
-    base = obter_base(nome_base)
+    base = obter_base(
+        nome_base
+    )
 
     if base is None:
+
         raise ValueError(
             f"A base '{nome_base}' não está carregada."
         )
 
+    # --------------------------------------------------------
     # Caso a base seja diretamente um DataFrame
-    if isinstance(base, pd.DataFrame):
+    # --------------------------------------------------------
+
+    if isinstance(
+        base,
+        pd.DataFrame,
+    ):
+
         return base.copy()
 
+    # --------------------------------------------------------
     # Caso a base contenha vários DataFrames
-    if isinstance(base, dict):
+    # --------------------------------------------------------
+
+    if isinstance(
+        base,
+        dict,
+    ):
 
         palavras_prioridade = [
             "OS",
@@ -1075,6 +1167,7 @@ def carregar_backlog(modo):
 
         # Primeiro tenta encontrar uma chave relacionada
         # ao backlog/O.S.
+
         for chave, valor in base.items():
 
             if not isinstance(
@@ -1091,15 +1184,18 @@ def carregar_backlog(modo):
                 palavra in chave_normalizada
                 for palavra in palavras_prioridade
             ):
+
                 return valor.copy()
 
         # Fallback: primeiro DataFrame disponível
+
         for valor in base.values():
 
             if isinstance(
                 valor,
                 pd.DataFrame,
             ):
+
                 return valor.copy()
 
     raise ValueError(
@@ -1113,6 +1209,7 @@ def carregar_backlog(modo):
 # ============================================================
 
 def render_eventos():
+
     aplicar_modo_visual()
 
     st.title("Análise de Eventos")
@@ -1131,9 +1228,11 @@ def render_eventos():
     modo = selecionar_modo_api_the()
 
     if modo is None:
+
         st.info(
             "Selecione um modo para continuar."
         )
+
         return
 
     # --------------------------------------------------------
@@ -1142,7 +1241,11 @@ def render_eventos():
 
     nome_arquivo_eventos = (
         NOME_ARQUIVO_API
-        if normalizar_texto(modo) == "API"
+        if normalizar_texto(
+            modo[0]
+            if isinstance(modo, tuple)
+            else modo
+        ) == "API"
         else NOME_ARQUIVO_THE
     )
 
@@ -1166,7 +1269,8 @@ def render_eventos():
     except Exception as erro:
 
         st.error(
-            f"Não foi possível carregar os eventos: {erro}"
+            f"Não foi possível carregar os eventos: "
+            f"{erro}"
         )
 
         return
@@ -1235,21 +1339,26 @@ def render_eventos():
         )
 
         if df_backlog is None:
+
             st.warning(
-                "Não foi encontrada uma base de O.S. carregada."
+                "Não foi encontrada uma base de O.S. "
+                "carregada."
             )
+
             return
 
     except Exception as erro:
 
         st.error(
-            f"Erro ao localizar o backlog de O.S.: {erro}"
+            f"Erro ao localizar o backlog de O.S.: "
+            f"{erro}"
         )
 
         return
 
     st.caption(
-        f"{len(df_backlog):,} registros disponíveis para análise."
+        f"{len(df_backlog):,} registros disponíveis "
+        f"para análise."
         .replace(",", ".")
     )
 
@@ -1279,7 +1388,8 @@ def render_eventos():
             except Exception as erro:
 
                 st.error(
-                    f"Erro durante o cruzamento: {erro}"
+                    f"Erro durante o cruzamento: "
+                    f"{erro}"
                 )
 
                 return
@@ -1329,6 +1439,7 @@ def render_eventos():
             limpar_resultado()
 
             if "resultado_eventos" in st.session_state:
+
                 del st.session_state[
                     "resultado_eventos"
                 ]
@@ -1400,7 +1511,8 @@ def render_eventos():
     except Exception as erro:
 
         st.warning(
-            f"Não foi possível preparar o Excel: {erro}"
+            f"Não foi possível preparar o Excel: "
+            f"{erro}"
         )
 
     # --------------------------------------------------------
@@ -1420,6 +1532,7 @@ def render_eventos():
             limpar_resultado()
 
             if "resultado_eventos" in st.session_state:
+
                 del st.session_state[
                     "resultado_eventos"
                 ]
@@ -1437,14 +1550,16 @@ def render_eventos():
             limpar_resultado()
 
             if "resultado_eventos" in st.session_state:
+
                 del st.session_state[
                     "resultado_eventos"
                 ]
 
-            # Muito importante:
-            # limpa a ferramenta atual antes de retornar.
-            # Caso contrário, ao abrir novamente a página
+            # Limpa a ferramenta atual antes de retornar.
+            #
+            # Caso contrário, ao abrir novamente a página,
             # ela poderia entrar diretamente em "eventos".
+
             st.session_state[
                 "ferramenta_atual"
             ] = None
