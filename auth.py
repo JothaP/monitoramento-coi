@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -508,4 +507,3 @@ def fazer_logout():
     ):
 
         del st.session_state[key]
-```
