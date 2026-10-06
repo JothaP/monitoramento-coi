@@ -354,7 +354,6 @@ def eh_todo_municipio(valor) -> bool:
     if texto in PADROES_TODO_MUNICIPIO:
         return True
 
-    # Tratamentos adicionais.
     if "MUNICIPIO INTEIRO" in texto:
         return True
 
@@ -379,16 +378,7 @@ def separar_areas_impactadas(valor):
     Interpreta o conteúdo original da coluna
     'Áreas Impactadas'.
 
-    IMPORTANTE:
     O texto é separado ANTES de ser normalizado.
-
-    Isso evita o problema anterior em que:
-        'CENTRO, SAO JOSE'
-    virava:
-        'CENTRO SAO JOSE'
-
-    e posteriormente não era mais possível descobrir
-    que existiam duas áreas diferentes.
     """
 
     if valor is None:
@@ -418,24 +408,20 @@ def separar_areas_impactadas(valor):
 
     texto = texto_original
 
-    # Quebras de linha.
     texto = texto.replace("\r\n", "\n")
     texto = texto.replace("\r", "\n")
 
-    # Alguns símbolos utilizados como separadores.
     texto = texto.replace(";", ",")
     texto = texto.replace("|", ",")
     texto = texto.replace("/", ",")
     texto = texto.replace("\\", ",")
 
-    # '&' como separador.
     texto = re.sub(
         r"\s*&\s*",
         ",",
         texto,
     )
 
-    # " E " como separador.
     texto = re.sub(
         r"\s+E\s+",
         ",",
@@ -462,8 +448,6 @@ def separar_areas_impactadas(valor):
         if not area:
             continue
 
-        # Se por algum motivo uma das partes ainda representar
-        # o município inteiro, padroniza.
         if eh_todo_municipio(area):
             return ["TODA A CIDADE"]
 
@@ -490,8 +474,57 @@ SINONIMOS_AREAS = {
 }
 
 
-def tokenizar_area(valor):
+# ============================================================
+# NORMALIZAÇÃO ESPECÍFICA DO NOME DO BAIRRO
+# ============================================================
+
+def normalizar_nome_area_com_qualificadores(valor):
+    """
+    Remove qualificadores operacionais que aparecem na
+    descrição das áreas impactadas, mas não fazem parte
+    do nome do bairro.
+
+    Exemplos:
+
+        SAO PEDRO (PARCIAL)
+            -> SAO PEDRO
+
+        MONTE CASTELO (PARCIAL)
+            -> MONTE CASTELO
+
+        SAO PEDRO (TOTAL)
+            -> SAO PEDRO
+
+        BAIRRO X (PARCIALMENTE)
+            -> BAIRRO X
+
+    A remoção é feita somente para qualificadores conhecidos.
+    """
+
     texto = normalizar_texto(valor)
+
+    if not texto:
+        return ""
+
+    # Remove qualificadores no final do nome.
+    qualificadores = {
+        "PARCIAL",
+        "PARCIALMENTE",
+        "TOTAL",
+        "INTEGRAL",
+        "PARTE",
+    }
+
+    tokens = texto.split()
+
+    while tokens and tokens[-1] in qualificadores:
+        tokens.pop()
+
+    return " ".join(tokens).strip()
+
+
+def tokenizar_area(valor):
+    texto = normalizar_nome_area_com_qualificadores(valor)
 
     if not texto:
         return set()
@@ -508,8 +541,17 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
     if not area_evento or not bairro_os:
         return False
 
-    area = normalizar_texto(area_evento)
-    bairro = normalizar_texto(bairro_os)
+    # --------------------------------------------------------
+    # NORMALIZAÇÃO
+    # --------------------------------------------------------
+
+    area = normalizar_nome_area_com_qualificadores(
+        area_evento
+    )
+
+    bairro = normalizar_nome_area_com_qualificadores(
+        bairro_os
+    )
 
     if not area or not bairro:
         return False
@@ -527,14 +569,22 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
 
     for grupo, sinonimos in SINONIMOS_AREAS.items():
 
-        grupo_normalizado = normalizar_texto(grupo)
+        grupo_normalizado = (
+            normalizar_nome_area_com_qualificadores(
+                grupo
+            )
+        )
 
         equivalentes = {
             grupo_normalizado,
             *{
-                normalizar_texto(sinonimo)
+                normalizar_nome_area_com_qualificadores(
+                    sinonimo
+                )
                 for sinonimo in sinonimos
-                if normalizar_texto(sinonimo)
+                if normalizar_nome_area_com_qualificadores(
+                    sinonimo
+                )
             },
         }
 
@@ -543,10 +593,6 @@ def areas_evento_correspondem(area_evento, bairro_os) -> bool:
 
     # --------------------------------------------------------
     # COMPARAÇÃO POR TOKENS
-    #
-    # Usada somente quando existe uma relação clara entre
-    # os nomes, evitando aceitar correspondências muito
-    # genéricas.
     # --------------------------------------------------------
 
     tokens_area = tokenizar_area(area)
@@ -659,9 +705,6 @@ def preparar_eventos(df_eventos: pd.DataFrame):
 
     # --------------------------------------------------------
     # ÁREAS
-    #
-    # AQUI ESTÁ UMA DAS PRINCIPAIS CORREÇÕES:
-    # mantemos o texto original.
     # --------------------------------------------------------
 
     eventos["areas_original"] = (
@@ -671,17 +714,15 @@ def preparar_eventos(df_eventos: pd.DataFrame):
         .str.strip()
     )
 
-    # --------------------------------------------------------
-    # ÁREAS JÁ SEPARADAS
-    # --------------------------------------------------------
-
-    eventos["areas_lista"] = eventos["areas_original"].apply(
+    eventos["areas_lista"] = eventos[
+        "areas_original"
+    ].apply(
         separar_areas_impactadas
     )
 
-    # Mantemos também uma representação normalizada para
-    # verificações auxiliares.
-    eventos["areas"] = eventos["areas_original"].apply(
+    eventos["areas"] = eventos[
+        "areas_original"
+    ].apply(
         normalizar_texto
     )
 
@@ -698,8 +739,17 @@ def preparar_eventos(df_eventos: pd.DataFrame):
     )
 
     # --------------------------------------------------------
-    # FIM EFETIVO
+    # JANELA DE CORRESPONDÊNCIA
+    #
+    # REGRA:
+    #   1 hora antes do início
+    #   até 3 horas depois do término
     # --------------------------------------------------------
+
+    eventos["inicio_janela"] = (
+        eventos["inicio"]
+        - pd.Timedelta(hours=1)
+    )
 
     eventos["fim_efetivo"] = (
         eventos["fim_previsto"]
@@ -1028,6 +1078,7 @@ def cruzar_eventos_com_backlog(
 
         inicio_evento = evento.get("inicio")
         fim_previsto = evento.get("fim_previsto")
+        inicio_janela = evento.get("inicio_janela")
         fim_efetivo = evento.get("fim_efetivo")
 
         descricao = str(
@@ -1038,6 +1089,7 @@ def cruzar_eventos_com_backlog(
             not cidade
             or pd.isna(inicio_evento)
             or pd.isna(fim_previsto)
+            or pd.isna(inicio_janela)
             or pd.isna(fim_efetivo)
         ):
             continue
@@ -1061,8 +1113,6 @@ def cruzar_eventos_com_backlog(
 
         # ----------------------------------------------------
         # FILTRO POR CIDADE
-        #
-        # Feito uma vez por evento.
         # ----------------------------------------------------
 
         candidatos = df[
@@ -1080,10 +1130,15 @@ def cruzar_eventos_com_backlog(
 
         # ----------------------------------------------------
         # FILTRO POR PERÍODO
+        #
+        # REGRA:
+        # início do evento - 1 hora
+        # até
+        # término previsto + 3 horas
         # ----------------------------------------------------
 
         candidatos = candidatos[
-            (candidatos["inicio_sla"] >= inicio_evento)
+            (candidatos["inicio_sla"] >= inicio_janela)
             & (
                 candidatos["inicio_sla"]
                 <= fim_efetivo
@@ -1095,7 +1150,10 @@ def cruzar_eventos_com_backlog(
                 f"Evento em {cidade} entre "
                 f"{inicio_evento.strftime('%d/%m/%Y %H:%M')} "
                 f"e {fim_previsto.strftime('%d/%m/%Y %H:%M')} "
-                "não encontrou O.S. dentro do período."
+                f"não encontrou O.S. dentro da janela "
+                f"de correspondência "
+                f"({inicio_janela.strftime('%d/%m/%Y %H:%M')} "
+                f"até {fim_efetivo.strftime('%d/%m/%Y %H:%M')})."
             )
             continue
 
@@ -1399,13 +1457,12 @@ def render_eventos():
             **Critérios para identificação das O.S.:**
 
             - A cidade da O.S. deve ser a mesma do evento.
-            - O **INÍCIO DO SLA** da O.S. deve estar entre o
-              início e o fim efetivo do evento.
-            - O fim efetivo corresponde ao **Prev. Término + 3 horas**.
-            - Eventos que abrangem todo o município têm correspondência
-              automática.
-            - Nos demais eventos, o bairro é comparado com as
-              **Áreas Impactadas**.
+            - O **INÍCIO DO SLA** da O.S. deve estar entre **1 hora antes do início do evento** e **3 horas após o término previsto**.
+            - O início da janela corresponde ao **Início do evento - 1 hora**.
+            - O fim da janela corresponde ao **Prev. Término + 3 horas**.
+            - Eventos que abrangem todo o município têm correspondência automática.
+            - Nos demais eventos, o bairro é comparado com as **Áreas Impactadas**.
+            - Qualificadores como **(parcial)**, **(parcialmente)** e **(total)** não são considerados parte do nome do bairro.
             - A mesma O.S. é contabilizada uma única vez por área do evento.
             - A coluna **Data** não é utilizada.
             - O resultado é consolidado por evento e área impactada.
@@ -1674,11 +1731,8 @@ def render_eventos():
 
         st.session_state["ferramenta_atual"] = None
 
-        # Limpa somente resultados globais.
-        # As bases permanecem intactas.
         limpar_resultado()
 
-        # Limpa somente o estado específico de Eventos.
         limpar_estado_eventos()
 
         st.rerun()
