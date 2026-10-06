@@ -384,6 +384,10 @@ def aplicar_filtro_horario(
 
     horas = horas.astype("Float64")
 
+    # --------------------------------------------------------
+    # Somente horário inicial
+    # --------------------------------------------------------
+
     if (
         hora_inicial is not None
         and hora_final is None
@@ -407,6 +411,10 @@ def aplicar_filtro_horario(
         return resultado.loc[
             mascara
         ]
+
+    # --------------------------------------------------------
+    # Somente horário final
+    # --------------------------------------------------------
 
     if (
         hora_inicial is None
@@ -437,6 +445,10 @@ def aplicar_filtro_horario(
         return resultado.loc[
             mascara
         ]
+
+    # --------------------------------------------------------
+    # Horário inicial + final
+    # --------------------------------------------------------
 
     inicio_minutos = hora_para_minutos(
         hora_inicial
@@ -518,6 +530,7 @@ def aplicar_filtros(
 ):
 
     if df is None or df.empty:
+
         return pd.DataFrame(
             columns=(
                 df.columns
@@ -829,6 +842,7 @@ def aplicar_filtros_arquivo_eventos(
         or df_eventos is None
         or df_eventos.empty
     ):
+
         return (
             pd.DataFrame(
                 columns=(
@@ -989,12 +1003,14 @@ def aplicar_filtros_arquivo_eventos(
 
         filtro = aplicar_filtros(
             df=df_base,
+
             coluna_cidade=coluna_cidade,
             cidades=(
                 [cidade]
                 if cidade is not None
                 else []
             ),
+
             coluna_bairro=coluna_bairro,
             bairros=(
                 [bairro]
@@ -1004,18 +1020,23 @@ def aplicar_filtros_arquivo_eventos(
                 != "TODA A CIDADE"
                 else []
             ),
+
             coluna_data=coluna_data,
+
             anos=(
                 [ano]
                 if ano is not None
                 else []
             ),
+
             meses=(
                 [mes]
                 if mes is not None
                 else []
             ),
+
             dias=dias,
+
             hora_inicial=hora_inicial,
             hora_final=hora_final,
         )
@@ -1069,8 +1090,6 @@ def aplicar_filtros_arquivo_eventos(
             ignore_index=True,
         )
 
-        # Remove duplicidades quando a mesma O.S
-        # estiver abrangida por mais de um evento.
         coluna_matricula = localizar_coluna(
             resultado_final,
             "matricula",
@@ -1222,6 +1241,7 @@ def gerar_lote_cancelamento(
         df_filtrado is None
         or df_filtrado.empty
     ):
+
         return (
             pd.DataFrame(),
             pd.DataFrame(),
@@ -1243,21 +1263,27 @@ def gerar_lote_cancelamento(
     )
 
     if coluna_protocolo is None:
+
         raise ValueError(
-            "A coluna 'COD. PROTOCOLO ORIGEM' não foi localizada."
+            "A coluna 'COD. PROTOCOLO ORIGEM' "
+            "não foi localizada."
         )
 
     if coluna_matricula is None:
+
         raise ValueError(
-            "A coluna 'MATRICULA' não foi localizada."
+            "A coluna 'MATRICULA' "
+            "não foi localizada."
         )
 
     if (
         modo == "API"
         and coluna_cidade is None
     ):
+
         raise ValueError(
-            "A coluna 'CIDADE' não foi localizada."
+            "A coluna 'CIDADE' "
+            "não foi localizada."
         )
 
     registros = []
@@ -1379,17 +1405,6 @@ def gerar_lote_cancelamento(
 # ============================================================
 
 def obter_filtros_visuais_eventos(df_eventos):
-    """
-    Extrai os valores do arquivo de Eventos que serão exibidos
-    nos filtros da tela.
-
-    Importante:
-    esses valores servem para preencher visualmente os filtros.
-    A aplicação efetiva do arquivo continua sendo feita pela
-    função aplicar_filtros_arquivo_eventos(), que preserva a
-    combinação de Cidade + Bairro + Data + Horário de cada linha
-    do arquivo.
-    """
 
     filtros = {
         "cidades": [],
@@ -1420,8 +1435,14 @@ def obter_filtros_visuais_eventos(df_eventos):
     )
 
     coluna_mes = (
-        localizar_coluna_eventos(df_eventos, "Mês")
-        or localizar_coluna_eventos(df_eventos, "Mes")
+        localizar_coluna_eventos(
+            df_eventos,
+            "Mês",
+        )
+        or localizar_coluna_eventos(
+            df_eventos,
+            "Mes",
+        )
     )
 
     coluna_dia = localizar_coluna_eventos(
@@ -1440,120 +1461,249 @@ def obter_filtros_visuais_eventos(df_eventos):
     )
 
     if coluna_cidade:
-        filtros["cidades"] = obter_valores_unicos(
-            df_eventos,
-            coluna_cidade,
+
+        filtros["cidades"] = (
+            obter_valores_unicos(
+                df_eventos,
+                coluna_cidade,
+            )
         )
 
     if coluna_bairro:
+
         bairros = obter_valores_unicos(
             df_eventos,
             coluna_bairro,
         )
 
-        # "TODA A CIDADE" significa que o evento não deve
-        # restringir o bairro. Não colocamos esse valor no
-        # multiselect, pois ele não representa um bairro real.
         filtros["bairros"] = [
             bairro
             for bairro in bairros
-            if normalizar_texto(bairro) != "TODA A CIDADE"
+            if normalizar_texto(bairro)
+            != "TODA A CIDADE"
         ]
 
     if coluna_ano:
+
         anos = []
 
-        for valor in df_eventos[coluna_ano].dropna():
+        for valor in df_eventos[
+            coluna_ano
+        ].dropna():
+
             try:
-                ano = int(float(valor))
+
+                ano = int(
+                    float(valor)
+                )
+
                 if ano not in anos:
                     anos.append(ano)
+
             except Exception:
                 continue
 
-        filtros["anos"] = sorted(anos)
+        filtros["anos"] = sorted(
+            anos
+        )
 
     if coluna_mes:
+
         meses = []
 
-        for valor in df_eventos[coluna_mes].dropna():
+        for valor in df_eventos[
+            coluna_mes
+        ].dropna():
+
             try:
-                mes = int(float(valor))
-                if 1 <= mes <= 12 and mes not in meses:
+
+                mes = int(
+                    float(valor)
+                )
+
+                if (
+                    1 <= mes <= 12
+                    and mes not in meses
+                ):
                     meses.append(mes)
+
             except Exception:
                 continue
 
-        filtros["meses"] = sorted(meses)
+        filtros["meses"] = sorted(
+            meses
+        )
 
     if coluna_dia:
+
         dias = set()
 
-        for valor in df_eventos[coluna_dia].dropna():
-            for dia in extrair_dias_evento(valor):
+        for valor in df_eventos[
+            coluna_dia
+        ].dropna():
+
+            for dia in extrair_dias_evento(
+                valor
+            ):
+
                 if 1 <= dia <= 31:
                     dias.add(dia)
 
-        filtros["dias"] = sorted(dias)
+        filtros["dias"] = sorted(
+            dias
+        )
 
-    # O arquivo pode conter várias janelas de horário diferentes.
-    # Como a tela possui apenas um par de campos, só o preenchemos
-    # quando existe uma única combinação de horário no arquivo.
+    # --------------------------------------------------------
+    # Horários
+    # --------------------------------------------------------
+
     pares_horarios = set()
 
-    if coluna_hora_inicial and coluna_hora_final:
+    if (
+        coluna_hora_inicial
+        and coluna_hora_final
+    ):
+
         for _, linha in df_eventos.iterrows():
+
             inicial = obter_hora_evento(
-                linha[coluna_hora_inicial]
-            )
-            final = obter_hora_evento(
-                linha[coluna_hora_final]
+                linha[
+                    coluna_hora_inicial
+                ]
             )
 
-            if inicial is None and final is None:
+            final = obter_hora_evento(
+                linha[
+                    coluna_hora_final
+                ]
+            )
+
+            if (
+                inicial is None
+                and final is None
+            ):
                 continue
 
             pares_horarios.add(
                 (
-                    inicial.strftime("%H:%M")
+                    inicial.strftime(
+                        "%H:%M"
+                    )
                     if inicial is not None
                     else "",
-                    final.strftime("%H:%M")
+                    final.strftime(
+                        "%H:%M"
+                    )
                     if final is not None
                     else "",
                 )
             )
 
     if len(pares_horarios) == 1:
-        hora_inicial, hora_final = next(
-            iter(pares_horarios)
+
+        hora_inicial, hora_final = (
+            next(
+                iter(pares_horarios)
+            )
         )
-        filtros["hora_inicial"] = hora_inicial
-        filtros["hora_final"] = hora_final
+
+        filtros[
+            "hora_inicial"
+        ] = hora_inicial
+
+        filtros[
+            "hora_final"
+        ] = hora_final
 
     return filtros
 
 
-def obter_identificador_upload(arquivo_eventos, modo):
-    """Gera um identificador estável para detectar novo upload."""
+# ============================================================
+# IDENTIFICADOR DO UPLOAD
+# ============================================================
+
+def obter_identificador_upload(
+    arquivo_eventos,
+    modo,
+):
 
     if arquivo_eventos is None:
         return None
 
     try:
-        conteudo = arquivo_eventos.getvalue()
+
+        conteudo = (
+            arquivo_eventos.getvalue()
+        )
+
         assinatura = hashlib.md5(
             conteudo,
             usedforsecurity=False,
         ).hexdigest()
+
     except Exception:
+
         assinatura = ""
 
     return (
-        f"{modo}|{arquivo_eventos.name}|"
+        f"{modo}|"
+        f"{arquivo_eventos.name}|"
         f"{getattr(arquivo_eventos, 'size', 0)}|"
         f"{assinatura}"
     )
+
+
+# ============================================================
+# LIMPEZA DOS FILTROS
+# ============================================================
+
+def limpar_filtros_tela():
+
+    chaves_widgets = [
+        "filtragem_cidades",
+        "filtragem_bairros",
+        "filtragem_anos",
+        "filtragem_meses",
+        "filtragem_dias",
+        "filtragem_hora_inicial",
+        "filtragem_hora_final",
+        "filtragem_observacao_lote",
+        "upload_arquivo_eventos",
+    ]
+
+    # --------------------------------------------------------
+    # Flag usada para informar aos widgets, na próxima
+    # execução, que devem iniciar vazios.
+    # --------------------------------------------------------
+
+    st.session_state[
+        "filtragem_resetar"
+    ] = True
+
+    # --------------------------------------------------------
+    # Estados relacionados ao processamento
+    # --------------------------------------------------------
+
+    for chave in [
+        "arquivo_eventos_processado",
+        "df_eventos",
+        "df_comparacao_eventos",
+        "df_resultado",
+        "df_resultado_lote",
+        "df_log",
+        "nome_arquivo_resultado",
+    ]:
+
+        st.session_state.pop(
+            chave,
+            None,
+        )
+
+    # --------------------------------------------------------
+    # Limpa resultado global do módulo
+    # --------------------------------------------------------
+
+    limpar_resultado()
 
 
 # ============================================================
@@ -1567,7 +1717,8 @@ def render_filtragem():
     )
 
     st.caption(
-        "Filtre a base carregada no Hub e gere o lote de cancelamento."
+        "Filtre a base carregada no Hub e gere "
+        "o lote de cancelamento."
     )
 
     if st.button(
@@ -1595,6 +1746,15 @@ def render_filtragem():
 
     if modo is None or df_base is None:
         return
+
+    # ========================================================
+    # CONTROLE DE RESET DOS FILTROS
+    # ========================================================
+
+    resetar_filtros = st.session_state.get(
+        "filtragem_resetar",
+        False,
+    )
 
     # ========================================================
     # UPLOAD DO ARQUIVO DE EVENTOS
@@ -1647,18 +1807,20 @@ def render_filtragem():
     )
 
     # ========================================================
-    # APLICAÇÃO AUTOMÁTICA DO ARQUIVO DE EVENTOS
+    # PROCESSAMENTO DO ARQUIVO DE EVENTOS
     # ========================================================
 
-    arquivo_eventos_ativo = False
+    arquivo_eventos_ativo = (
+        arquivo_eventos is not None
+    )
 
-    if arquivo_eventos is not None:
+    if arquivo_eventos_ativo:
 
-        arquivo_eventos_ativo = True
-
-        identificador_upload = obter_identificador_upload(
-            arquivo_eventos,
-            modo,
+        identificador_upload = (
+            obter_identificador_upload(
+                arquivo_eventos,
+                modo,
+            )
         )
 
         if (
@@ -1685,10 +1847,10 @@ def render_filtragem():
                     coluna_data=coluna_data,
                 )
 
-                # Guarda o próprio arquivo processado para que o
-                # botão "Aplicar Filtros" possa reaplicar exatamente
-                # a mesma lógica sem cair no filtro manual vazio.
-                st.session_state.df_eventos = df_eventos
+                st.session_state.df_eventos = (
+                    df_eventos
+                )
+
                 st.session_state.df_resultado = (
                     df_resultado_eventos
                 )
@@ -1702,8 +1864,7 @@ def render_filtragem():
                 )
 
                 # ------------------------------------------------
-                # Preenche visualmente os filtros com os valores
-                # existentes no arquivo de Eventos.
+                # Preenche visualmente os filtros.
                 # ------------------------------------------------
 
                 filtros_eventos = (
@@ -1712,39 +1873,59 @@ def render_filtragem():
                     )
                 )
 
-                # Os valores são colocados no session_state antes
-                # da criação dos widgets abaixo.
                 st.session_state[
                     "filtragem_cidades"
-                ] = filtros_eventos["cidades"]
+                ] = filtros_eventos[
+                    "cidades"
+                ]
 
                 st.session_state[
                     "filtragem_bairros"
-                ] = filtros_eventos["bairros"]
+                ] = filtros_eventos[
+                    "bairros"
+                ]
 
                 st.session_state[
                     "filtragem_anos"
-                ] = filtros_eventos["anos"]
+                ] = filtros_eventos[
+                    "anos"
+                ]
 
                 st.session_state[
                     "filtragem_meses"
-                ] = filtros_eventos["meses"]
+                ] = filtros_eventos[
+                    "meses"
+                ]
 
                 st.session_state[
                     "filtragem_dias"
-                ] = filtros_eventos["dias"]
+                ] = filtros_eventos[
+                    "dias"
+                ]
 
                 st.session_state[
                     "filtragem_hora_inicial"
-                ] = filtros_eventos["hora_inicial"]
+                ] = filtros_eventos[
+                    "hora_inicial"
+                ]
 
                 st.session_state[
                     "filtragem_hora_final"
-                ] = filtros_eventos["hora_final"]
+                ] = filtros_eventos[
+                    "hora_final"
+                ]
 
-                st.session_state.df_resultado_lote = None
-                st.session_state.df_log = None
-                st.session_state.nome_arquivo_resultado = None
+                st.session_state.df_resultado_lote = (
+                    None
+                )
+
+                st.session_state.df_log = (
+                    None
+                )
+
+                st.session_state.nome_arquivo_resultado = (
+                    None
+                )
 
             except Exception as erro:
 
@@ -1753,16 +1934,32 @@ def render_filtragem():
                     None,
                 )
 
+                st.session_state.pop(
+                    "df_resultado",
+                    None,
+                )
+
                 st.error(
-                    f"Erro ao processar o arquivo de Eventos: {erro}"
+                    "Erro ao processar o arquivo de Eventos: "
+                    f"{erro}"
                 )
 
     else:
 
-        # Sem arquivo, a tela volta a trabalhar exclusivamente
-        # com os filtros manuais.
+        # Se não existe arquivo, não mantemos o estado
+        # do processamento anterior.
         st.session_state.pop(
             "df_eventos",
+            None,
+        )
+
+        st.session_state.pop(
+            "df_comparacao_eventos",
+            None,
+        )
+
+        st.session_state.pop(
+            "arquivo_eventos_processado",
             None,
         )
 
@@ -1813,26 +2010,50 @@ def render_filtragem():
     # FILTROS
     # ========================================================
 
-    st.subheader("🎯 Filtros")
+    st.subheader(
+        "🎯 Filtros"
+    )
 
     col1, col2 = st.columns(2)
 
     with col1:
 
-        cidades = []
+        cidades_disponiveis = (
+            obter_valores_unicos(
+                df_base,
+                coluna_cidade,
+            )
+            if coluna_cidade
+            else []
+        )
 
         if coluna_cidade:
 
+            if resetar_filtros:
+                valor_cidades = []
+
+            else:
+                valor_cidades = st.session_state.get(
+                    "filtragem_cidades",
+                    [],
+                )
+
+            valor_cidades = [
+                valor
+                for valor in valor_cidades
+                if valor in cidades_disponiveis
+            ]
+
             cidades = st.multiselect(
                 "Cidade",
-                obter_valores_unicos(
-                    df_base,
-                    coluna_cidade,
-                ),
+                cidades_disponiveis,
+                default=valor_cidades,
                 key="filtragem_cidades",
             )
 
         else:
+
+            cidades = []
 
             st.info(
                 "Coluna CIDADE não encontrada."
@@ -1840,20 +2061,42 @@ def render_filtragem():
 
     with col2:
 
-        bairros = []
+        bairros_disponiveis = (
+            obter_valores_unicos(
+                df_base,
+                coluna_bairro,
+            )
+            if coluna_bairro
+            else []
+        )
 
         if coluna_bairro:
 
+            if resetar_filtros:
+                valor_bairros = []
+
+            else:
+                valor_bairros = st.session_state.get(
+                    "filtragem_bairros",
+                    [],
+                )
+
+            valor_bairros = [
+                valor
+                for valor in valor_bairros
+                if valor in bairros_disponiveis
+            ]
+
             bairros = st.multiselect(
                 "Bairro",
-                obter_valores_unicos(
-                    df_base,
-                    coluna_bairro,
-                ),
+                bairros_disponiveis,
+                default=valor_bairros,
                 key="filtragem_bairros",
             )
 
         else:
+
+            bairros = []
 
             st.info(
                 "Coluna BAIRRO não encontrada."
@@ -1869,13 +2112,19 @@ def render_filtragem():
         )
 
         if (
-            not st.session_state.get("filtragem_hora_inicial")
-            and not st.session_state.get("filtragem_hora_final")
+            not st.session_state.get(
+                "filtragem_hora_inicial"
+            )
+            and not st.session_state.get(
+                "filtragem_hora_final"
+            )
         ):
+
             st.caption(
                 "ℹ️ O arquivo possui mais de uma janela de horário. "
-                "Por isso os campos de horário permanecem vazios; as "
-                "janelas de cada evento serão aplicadas individualmente."
+                "Por isso os campos de horário permanecem vazios; "
+                "as janelas de cada evento serão aplicadas "
+                "individualmente."
             )
 
     # ========================================================
@@ -1917,32 +2166,81 @@ def render_filtragem():
 
         with col3:
 
+            if resetar_filtros:
+                valor_anos = []
+
+            else:
+                valor_anos = st.session_state.get(
+                    "filtragem_anos",
+                    [],
+                )
+
+            valor_anos = [
+                valor
+                for valor in valor_anos
+                if valor in anos_disponiveis
+            ]
+
             anos = st.multiselect(
                 "Ano",
                 anos_disponiveis,
+                default=valor_anos,
                 key="filtragem_anos",
             )
 
         with col4:
 
+            if resetar_filtros:
+                valor_meses = []
+
+            else:
+                valor_meses = st.session_state.get(
+                    "filtragem_meses",
+                    [],
+                )
+
+            valor_meses = [
+                valor
+                for valor in valor_meses
+                if valor in meses_disponiveis
+            ]
+
             meses = st.multiselect(
                 "Mês",
                 meses_disponiveis,
+                default=valor_meses,
                 key="filtragem_meses",
             )
 
         with col5:
 
+            if resetar_filtros:
+                valor_dias = []
+
+            else:
+                valor_dias = st.session_state.get(
+                    "filtragem_dias",
+                    [],
+                )
+
+            valor_dias = [
+                valor
+                for valor in valor_dias
+                if valor in dias_disponiveis
+            ]
+
             dias = st.multiselect(
                 "Dia",
                 dias_disponiveis,
+                default=valor_dias,
                 key="filtragem_dias",
             )
 
     else:
 
         st.error(
-            "A coluna 'INÍCIO DO SLA' não foi encontrada na base."
+            "A coluna 'INÍCIO DO SLA' "
+            "não foi encontrada na base."
         )
 
     # ========================================================
@@ -1963,16 +2261,44 @@ def render_filtragem():
 
     with col6:
 
+        if resetar_filtros:
+
+            valor_hora_inicial = ""
+
+        else:
+
+            valor_hora_inicial = (
+                st.session_state.get(
+                    "filtragem_hora_inicial",
+                    "",
+                )
+            )
+
         hora_inicial_texto = st.text_input(
             "Hora Inicial",
+            value=valor_hora_inicial,
             placeholder="HH:MM",
             key="filtragem_hora_inicial",
         )
 
     with col7:
 
+        if resetar_filtros:
+
+            valor_hora_final = ""
+
+        else:
+
+            valor_hora_final = (
+                st.session_state.get(
+                    "filtragem_hora_final",
+                    "",
+                )
+            )
+
         hora_final_texto = st.text_input(
             "Hora Final",
+            value=valor_hora_final,
             placeholder="HH:MM",
             key="filtragem_hora_final",
         )
@@ -1991,7 +2317,9 @@ def render_filtragem():
 
         except ValueError as erro:
 
-            st.error(str(erro))
+            st.error(
+                str(erro)
+            )
 
             erro_horario = True
 
@@ -2005,7 +2333,9 @@ def render_filtragem():
 
         except ValueError as erro:
 
-            st.error(str(erro))
+            st.error(
+                str(erro)
+            )
 
             erro_horario = True
 
@@ -2036,9 +2366,11 @@ def render_filtragem():
 
         st.info(
             f"⏱️ Janela efetiva do filtro: "
-            f"**{inicio_efetivo // 60:02d}:{inicio_efetivo % 60:02d}** "
+            f"**{inicio_efetivo // 60:02d}:"
+            f"{inicio_efetivo % 60:02d}** "
             f"até "
-            f"**{fim_efetivo // 60:02d}:{fim_efetivo % 60:02d}** "
+            f"**{fim_efetivo // 60:02d}:"
+            f"{fim_efetivo % 60:02d}** "
             f"(margem de -1h / +3h)."
         )
 
@@ -2054,7 +2386,8 @@ def render_filtragem():
 
         st.info(
             f"⏱️ O.S. abertas a partir de "
-            f"**{inicio_efetivo // 60:02d}:{inicio_efetivo % 60:02d}** "
+            f"**{inicio_efetivo // 60:02d}:"
+            f"{inicio_efetivo % 60:02d}** "
             f"(1h antes do horário inicial)."
         )
 
@@ -2070,7 +2403,8 @@ def render_filtragem():
 
         st.info(
             f"⏱️ O.S. abertas até "
-            f"**{fim_efetivo // 60:02d}:{fim_efetivo % 60:02d}** "
+            f"**{fim_efetivo // 60:02d}:"
+            f"{fim_efetivo % 60:02d}** "
             f"(3h após o horário final)."
         )
 
@@ -2087,8 +2421,20 @@ def render_filtragem():
         "**Observações** de todas as O.S. incluídas no lote."
     )
 
+    if resetar_filtros:
+
+        valor_observacao = ""
+
+    else:
+
+        valor_observacao = st.session_state.get(
+            "filtragem_observacao_lote",
+            "",
+        )
+
     observacao_lote = st.text_input(
         "Observação",
+        value=valor_observacao,
         placeholder=(
             "Digite a observação que será gravada no lote..."
         ),
@@ -2099,12 +2445,14 @@ def render_filtragem():
     # COMPARAÇÃO COM ARQUIVO DE EVENTOS
     # ========================================================
 
-    comparacao_eventos = st.session_state.get(
-        "df_comparacao_eventos"
+    comparacao_eventos = (
+        st.session_state.get(
+            "df_comparacao_eventos"
+        )
     )
 
     if (
-        arquivo_eventos is not None
+        arquivo_eventos_ativo
         and comparacao_eventos is not None
     ):
 
@@ -2114,20 +2462,24 @@ def render_filtragem():
             "📊 Comparação com o Arquivo de Eventos"
         )
 
-        # Correção: o valor pode existir na sessão como None.
-        # Nesse caso, usamos um DataFrame vazio para evitar
-        # TypeError ao executar len(None).
-        df_resultado_comparacao = st.session_state.get(
-            "df_resultado"
+        df_resultado_comparacao = (
+            st.session_state.get(
+                "df_resultado"
+            )
         )
 
         if df_resultado_comparacao is None:
-            df_resultado_comparacao = pd.DataFrame()
+
+            df_resultado_comparacao = (
+                pd.DataFrame()
+            )
 
         texto_comparacao = (
             gerar_texto_comparacao_eventos(
                 comparacao_eventos,
-                len(df_resultado_comparacao),
+                len(
+                    df_resultado_comparacao
+                ),
             )
         )
 
@@ -2159,63 +2511,44 @@ def render_filtragem():
             key="filtragem_limpar",
         )
 
+    # ========================================================
+    # LIMPAR FILTROS
+    # ========================================================
+
     if limpar:
 
-        for chave in [
-            "filtragem_cidades",
-            "filtragem_bairros",
-            "filtragem_anos",
-            "filtragem_meses",
-            "filtragem_dias",
-            "filtragem_hora_inicial",
-            "filtragem_hora_final",
-            "filtragem_observacao_lote",
-            "upload_arquivo_eventos",
-            "arquivo_eventos_processado",
-            "df_comparacao_eventos",
-            "df_eventos",
-        ]:
-
-            st.session_state.pop(
-                chave,
-                None,
-            )
-
-        limpar_resultado()
+        limpar_filtros_tela()
 
         st.rerun()
 
     # ========================================================
-    # APLICAÇÃO AUTOMÁTICA DO ARQUIVO DE EVENTOS
+    # APLICAÇÃO DOS FILTROS
     # ========================================================
 
-    arquivo_eventos_ativo = False
+    if aplicar:
 
-    if arquivo_eventos is not None:
+        try:
 
-        arquivo_eventos_ativo = True
+            # ------------------------------------------------
+            # COM ARQUIVO DE EVENTOS
+            # ------------------------------------------------
 
-        identificador_upload = obter_identificador_upload(
-            arquivo_eventos,
-            modo,
-        )
+            if (
+                arquivo_eventos_ativo
+                and st.session_state.get(
+                    "df_eventos"
+                ) is not None
+            ):
 
-        if (
-            st.session_state.get(
-                "arquivo_eventos_processado"
-            )
-            != identificador_upload
-        ):
-
-            try:
-
-                df_eventos = pd.read_excel(
-                    arquivo_eventos
+                df_eventos = (
+                    st.session_state.get(
+                        "df_eventos"
+                    )
                 )
 
                 (
                     df_resultado_eventos,
-                    comparacao_eventos,
+                    comparacao_eventos_nova,
                 ) = aplicar_filtros_arquivo_eventos(
                     df_base=df_base,
                     df_eventos=df_eventos,
@@ -2224,87 +2557,79 @@ def render_filtragem():
                     coluna_data=coluna_data,
                 )
 
-                # Guarda o próprio arquivo processado para que o
-                # botão "Aplicar Filtros" possa reaplicar exatamente
-                # a mesma lógica sem cair no filtro manual vazio.
-                st.session_state.df_eventos = df_eventos
                 st.session_state.df_resultado = (
                     df_resultado_eventos
                 )
 
                 st.session_state.df_comparacao_eventos = (
-                    comparacao_eventos
+                    comparacao_eventos_nova
                 )
 
-                st.session_state.arquivo_eventos_processado = (
-                    identificador_upload
+            # ------------------------------------------------
+            # SEM ARQUIVO DE EVENTOS
+            # ------------------------------------------------
+
+            else:
+
+                df_filtrado = aplicar_filtros(
+                    df=df_base,
+
+                    coluna_cidade=coluna_cidade,
+                    cidades=cidades,
+
+                    coluna_bairro=coluna_bairro,
+                    bairros=bairros,
+
+                    coluna_data=coluna_data,
+                    anos=anos,
+                    meses=meses,
+                    dias=dias,
+
+                    hora_inicial=hora_inicial,
+                    hora_final=hora_final,
                 )
 
-                # ------------------------------------------------
-                # Preenche visualmente os filtros com os valores
-                # existentes no arquivo de Eventos.
-                # ------------------------------------------------
-
-                filtros_eventos = (
-                    obter_filtros_visuais_eventos(
-                        df_eventos
-                    )
+                st.session_state.df_resultado = (
+                    df_filtrado
                 )
 
-                # Os valores são colocados no session_state antes
-                # da criação dos widgets abaixo.
-                st.session_state[
-                    "filtragem_cidades"
-                ] = filtros_eventos["cidades"]
-
-                st.session_state[
-                    "filtragem_bairros"
-                ] = filtros_eventos["bairros"]
-
-                st.session_state[
-                    "filtragem_anos"
-                ] = filtros_eventos["anos"]
-
-                st.session_state[
-                    "filtragem_meses"
-                ] = filtros_eventos["meses"]
-
-                st.session_state[
-                    "filtragem_dias"
-                ] = filtros_eventos["dias"]
-
-                st.session_state[
-                    "filtragem_hora_inicial"
-                ] = filtros_eventos["hora_inicial"]
-
-                st.session_state[
-                    "filtragem_hora_final"
-                ] = filtros_eventos["hora_final"]
-
-                st.session_state.df_resultado_lote = None
-                st.session_state.df_log = None
-                st.session_state.nome_arquivo_resultado = None
-
-            except Exception as erro:
-
-                st.session_state.pop(
-                    "df_eventos",
-                    None,
+                st.session_state.df_comparacao_eventos = (
+                    None
                 )
 
-                st.error(
-                    f"Erro ao processar o arquivo de Eventos: {erro}"
-                )
+            # ------------------------------------------------
+            # Novo filtro invalida lote anterior
+            # ------------------------------------------------
 
-    else:
+            st.session_state.df_resultado_lote = (
+                None
+            )
 
-        # Sem arquivo, a tela volta a trabalhar exclusivamente
-        # com os filtros manuais.
-        st.session_state.pop(
-            "df_eventos",
-            None,
-        )
+            st.session_state.df_log = (
+                None
+            )
 
+            st.session_state.nome_arquivo_resultado = (
+                None
+            )
+
+            st.rerun()
+
+        except Exception as erro:
+
+            st.error(
+                f"Erro ao aplicar os filtros: {erro}"
+            )
+
+    # ========================================================
+    # FINALIZA RESET
+    # ========================================================
+
+    if resetar_filtros:
+
+        st.session_state[
+            "filtragem_resetar"
+        ] = False
 
     # ========================================================
     # RESULTADO
@@ -2345,7 +2670,8 @@ def render_filtragem():
     if df_resultado.empty:
 
         st.warning(
-            "Nenhum registro corresponde aos filtros selecionados."
+            "Nenhum registro corresponde aos "
+            "filtros selecionados."
         )
 
         return
@@ -2378,7 +2704,7 @@ def render_filtragem():
         )
 
     # ========================================================
-    # GERAÇÃO
+    # GERAÇÃO DO LOTE
     # ========================================================
 
     st.divider()
@@ -2402,8 +2728,13 @@ def render_filtragem():
                 observacao=observacao_lote,
             )
 
-            st.session_state.df_resultado_lote = lote
-            st.session_state.df_log = log
+            st.session_state.df_resultado_lote = (
+                lote
+            )
+
+            st.session_state.df_log = (
+                log
+            )
 
             timestamp = datetime.now().strftime(
                 "%Y%m%d_%H%M%S"
@@ -2438,7 +2769,9 @@ def render_filtragem():
 
     st.divider()
 
-    st.subheader("✅ Lote Gerado")
+    st.subheader(
+        "✅ Lote Gerado"
+    )
 
     col1, col2, col3 = st.columns(3)
 
@@ -2510,18 +2843,22 @@ def render_filtragem():
     # LOG
     # ========================================================
 
-    st.subheader("📝 LOG")
+    st.subheader(
+        "📝 LOG"
+    )
 
     if log is None or log.empty:
 
         st.success(
-            "Nenhuma inconsistência foi encontrada durante a geração."
+            "Nenhuma inconsistência foi encontrada "
+            "durante a geração."
         )
 
     else:
 
         st.warning(
-            f"{len(log)} registro(s) não foram incluídos no lote."
+            f"{len(log)} registro(s) não foram "
+            "incluídos no lote."
         )
 
         st.dataframe(
@@ -2545,7 +2882,8 @@ def render_filtragem():
                 "⬇️ Baixar LOG",
                 data=arquivo_log,
                 file_name=(
-                    f"LOG_Cancelamento_{modo}_{timestamp}.xlsx"
+                    f"LOG_Cancelamento_"
+                    f"{modo}_{timestamp}.xlsx"
                 ),
                 mime=(
                     "application/vnd.openxmlformats-officedocument."
