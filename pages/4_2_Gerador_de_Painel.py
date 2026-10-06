@@ -1,17 +1,13 @@
 import streamlit as st
 import io
 import re
+import html
 from pathlib import Path
 from datetime import datetime, date
 
 import pandas as pd
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.utils import get_column_letter
 
 
 # ============================================================
@@ -1181,391 +1177,6 @@ def contar_os(series):
 
 
 # ============================================================
-# PLANILHA API — MODELO INTERATIVO
-# ============================================================
-
-def _cabecalhos_unicos(colunas):
-    """Garante cabeçalhos únicos e compatíveis com Tabelas do Excel."""
-
-    usados = set()
-    resultado = []
-
-    for coluna in colunas:
-        base = str(coluna).strip() or "COLUNA"
-        nome = base
-        contador = 2
-
-        while nome in usados:
-            nome = f"{base}_{contador}"
-            contador += 1
-
-        usados.add(nome)
-        resultado.append(nome)
-
-    return resultado
-
-
-def gerar_planilha_api(
-    df,
-    base_inicial=None,
-    modo="Por dia",
-):
-    """
-    Gera um XLSX para o modo API com:
-      - DADOS: tabela estruturada com os registros consolidados;
-      - BASES_CIDADES: cadastro oficial Base x Cidade;
-      - PAINEL_API: tabela dinâmica simulada por fórmulas, com
-        segmentação por Base através de lista suspensa.
-
-    A solução evita imagem estática. A planilha continua editável no Excel
-    e a troca da Base atualiza a visão do painel.
-    """
-
-    if df is None or df.empty:
-        raise ValueError("Não existem dados para gerar a planilha API.")
-
-    dados = df.copy()
-
-    if "_BASE" not in dados.columns or "_LOCAL" not in dados.columns:
-        raise ValueError("Os dados API não possuem Base/Cidade preparados.")
-
-    # ------------------------------------------------------------
-    # CONTAGENS ÚNICAS — mesma regra do relatório atual
-    # ------------------------------------------------------------
-    dados["_DATA"] = pd.to_datetime(dados["_DATA"], errors="coerce").dt.normalize()
-    dados["_MES_ORDEM"] = pd.to_datetime(dados["_MES_ORDEM"], errors="coerce").dt.to_period("M").dt.to_timestamp()
-
-    chave_dia = pd.DataFrame({
-        "base": dados["_BASE"].fillna("").astype(str),
-        "cidade": dados["_LOCAL"].fillna("").astype(str),
-        "data": dados["_DATA"],
-        "protocolo": dados["_PROTOCOLO"],
-    })
-    chave_dia["tem_protocolo"] = chave_dia["protocolo"].notna()
-
-    cont_dia = pd.Series(1, index=dados.index, dtype="int64")
-    mask_proto = chave_dia["tem_protocolo"]
-    cont_dia.loc[mask_proto] = (~chave_dia.loc[mask_proto].duplicated(
-        subset=["base", "cidade", "data", "protocolo"],
-        keep="first",
-    )).astype("int64")
-    dados["_CONTAGEM_DIA"] = cont_dia.astype(int)
-
-    chave_mes = pd.DataFrame({
-        "base": dados["_BASE"].fillna("").astype(str),
-        "cidade": dados["_LOCAL"].fillna("").astype(str),
-        "mes": dados["_MES_ORDEM"],
-        "protocolo": dados["_PROTOCOLO"],
-    })
-    chave_mes["tem_protocolo"] = chave_mes["protocolo"].notna()
-
-    cont_mes = pd.Series(1, index=dados.index, dtype="int64")
-    mask_proto_mes = chave_mes["tem_protocolo"]
-    cont_mes.loc[mask_proto_mes] = (~chave_mes.loc[mask_proto_mes].duplicated(
-        subset=["base", "cidade", "mes", "protocolo"],
-        keep="first",
-    )).astype("int64")
-    dados["_CONTAGEM_MES"] = cont_mes.astype(int)
-
-    # ------------------------------------------------------------
-    # EXCEL
-    # ------------------------------------------------------------
-    wb = Workbook()
-    ws_painel = wb.active
-    ws_painel.title = "PAINEL_API"
-    ws_dados = wb.create_sheet("DADOS")
-    ws_mapa = wb.create_sheet("BASES_CIDADES")
-
-    # ------------------------------------------------------------
-    # DADOS
-    # ------------------------------------------------------------
-    colunas_originais = [
-        c for c in dados.columns
-        if not str(c).startswith("_")
-    ]
-
-    colunas_saida = colunas_originais + [
-        "COI_Data_Abertura",
-        "COI_Data",
-        "COI_Mes",
-        "COI_Cidade",
-        "COI_Base",
-        "COI_Protocolo",
-        "COI_Contagem_Dia",
-        "COI_Contagem_Mes",
-    ]
-    colunas_saida = _cabecalhos_unicos(colunas_saida)
-
-    ws_dados.append(colunas_saida)
-
-    mapa_coluna_saida = dict(zip(
-        [str(c) for c in colunas_originais],
-        colunas_saida[:len(colunas_originais)],
-    ))
-
-    for idx in dados.index:
-        linha = []
-
-        for coluna in colunas_originais:
-            valor = dados.at[idx, coluna]
-            if pd.isna(valor):
-                valor = None
-            elif isinstance(valor, pd.Timestamp):
-                valor = valor.to_pydatetime()
-            linha.append(valor)
-
-        linha.extend([
-            dados.at[idx, "_ABERTURA"].to_pydatetime() if pd.notna(dados.at[idx, "_ABERTURA"]) else None,
-            dados.at[idx, "_DATA"].to_pydatetime() if pd.notna(dados.at[idx, "_DATA"]) else None,
-            dados.at[idx, "_MES_ORDEM"].to_pydatetime() if pd.notna(dados.at[idx, "_MES_ORDEM"]) else None,
-            normalizar_cidade(dados.at[idx, "_LOCAL"]) if pd.notna(dados.at[idx, "_LOCAL"]) else "",
-            str(dados.at[idx, "_BASE"]) if pd.notna(dados.at[idx, "_BASE"]) else "",
-            str(dados.at[idx, "_PROTOCOLO"]) if pd.notna(dados.at[idx, "_PROTOCOLO"]) else "",
-            int(dados.at[idx, "_CONTAGEM_DIA"]),
-            int(dados.at[idx, "_CONTAGEM_MES"]),
-        ])
-
-        ws_dados.append(linha)
-
-    header_fill = PatternFill("solid", fgColor="123B5D")
-    header_font = Font(color="FFFFFF", bold=True)
-    thin_gray = Side(style="thin", color="D9E2EC")
-
-    for cell in ws_dados[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    ws_dados.freeze_panes = "A2"
-    ws_dados.auto_filter.ref = ws_dados.dimensions
-
-    # Formatação de datas
-    nomes_data = {"COI_Data_Abertura", "COI_Data", "COI_Mes"}
-    for cell in ws_dados[1]:
-        if cell.value in nomes_data:
-            col_idx = cell.column
-            for row in range(2, ws_dados.max_row + 1):
-                ws_dados.cell(row, col_idx).number_format = "dd/mm/yyyy"
-
-    ref_dados = f"A1:{get_column_letter(ws_dados.max_column)}{ws_dados.max_row}"
-    tabela_dados = Table(displayName="TabelaDadosAPI", ref=ref_dados)
-    tabela_dados.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws_dados.add_table(tabela_dados)
-
-    # Larguras razoáveis sem alterar a estrutura dos dados.
-    for col_idx, cell in enumerate(ws_dados[1], start=1):
-        valores = [str(ws_dados.cell(r, col_idx).value or "") for r in range(1, min(ws_dados.max_row, 150) + 1)]
-        largura = min(max(max((len(v) for v in valores), default=10) + 2, 10), 38)
-        ws_dados.column_dimensions[get_column_letter(col_idx)].width = largura
-
-    # ------------------------------------------------------------
-    # BASES_CIDADES
-    # ------------------------------------------------------------
-    ws_mapa.append(["BASE", "CIDADE"])
-    for cell in ws_mapa[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-
-    pares = []
-    for cidade, base in BASE_POR_CIDADE.items():
-        pares.append((str(base), str(cidade)))
-    pares.sort(key=lambda x: (normalizar(x[0]), normalizar(x[1])))
-
-    for base, cidade in pares:
-        ws_mapa.append([base, cidade])
-
-    ws_mapa.freeze_panes = "A2"
-    ref_mapa = f"A1:B{ws_mapa.max_row}"
-    tabela_mapa = Table(displayName="TabelaBasesCidades", ref=ref_mapa)
-    tabela_mapa.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws_mapa.add_table(tabela_mapa)
-    ws_mapa.column_dimensions["A"].width = 28
-    ws_mapa.column_dimensions["B"].width = 34
-
-    # ------------------------------------------------------------
-    # LISTA DE BASES PARA A SEGMENTAÇÃO
-    # ------------------------------------------------------------
-    ws_aux = wb.create_sheet("LISTAS")
-    ws_aux.sheet_state = "hidden"
-    bases = sorted(set(BASE_POR_CIDADE.values()), key=normalizar)
-    ws_aux["A1"] = "Todas"
-    for i, base in enumerate(bases, start=2):
-        ws_aux.cell(i, 1, base)
-
-    # ------------------------------------------------------------
-    # PAINEL API
-    # ------------------------------------------------------------
-    ws_painel.sheet_view.showGridLines = False
-    ws_painel["A1"] = "RELATÓRIO DE FALTA DE ÁGUA — API"
-    ws_painel["A1"].font = Font(size=18, bold=True, color="123B5D")
-    ws_painel.merge_cells("A1:H1")
-
-    ws_painel["A3"] = "SEGMENTAÇÃO — BASE"
-    ws_painel["A3"].font = Font(bold=True, color="123B5D")
-    ws_painel["B3"] = base_inicial if base_inicial else "Todas"
-    ws_painel["B3"].font = Font(bold=True)
-    ws_painel["B3"].fill = PatternFill("solid", fgColor="EAF2F8")
-    ws_painel["B3"].border = Border(bottom=Side(style="thin", color="123B5D"))
-
-    dv_base = DataValidation(
-        type="list",
-        formula1=f"=LISTAS!$A$1:$A${len(bases) + 1}",
-        allow_blank=False,
-    )
-    dv_base.error = "Selecione uma base válida."
-    dv_base.errorTitle = "Base inválida"
-    dv_base.prompt = "Escolha a base para atualizar o painel."
-    dv_base.promptTitle = "Segmentação por Base"
-    ws_painel.add_data_validation(dv_base)
-    dv_base.add(ws_painel["B3"])
-
-    ws_painel["D3"] = "MODO"
-    ws_painel["D3"].font = Font(bold=True, color="123B5D")
-    ws_painel["E3"] = modo
-    ws_painel["E3"].font = Font(bold=True)
-
-    ws_painel["A5"] = "Cidade"
-    ws_painel["A5"].fill = header_fill
-    ws_painel["A5"].font = header_font
-    ws_painel["A5"].alignment = Alignment(horizontal="center")
-
-    periodos = sorted(dados["_DATA"].dropna().unique()) if modo == "Por dia" else sorted(dados["_MES_ORDEM"].dropna().unique())
-    if not periodos:
-        raise ValueError("Não foram encontradas datas válidas para o painel API.")
-
-    for j, periodo in enumerate(periodos, start=2):
-        cell = ws_painel.cell(5, j)
-        cell.value = pd.Timestamp(periodo).to_pydatetime()
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center")
-        cell.number_format = "dd/mm/yyyy" if modo == "Por dia" else "mm/yyyy"
-
-    col_total = 2 + len(periodos)
-    ws_painel.cell(5, col_total, "Total")
-    ws_painel.cell(5, col_total).fill = header_fill
-    ws_painel.cell(5, col_total).font = header_font
-    ws_painel.cell(5, col_total).alignment = Alignment(horizontal="center")
-
-    # Todas as 242 cidades do cadastro aparecem; a fórmula decide quais
-    # pertencem à Base selecionada e retorna 0 para cidades sem O.S.
-    cidades = cidades_da_base(None)
-    primeira_linha = 6
-
-    for i, cidade in enumerate(cidades, start=primeira_linha):
-        ws_painel.cell(i, 1, cidade)
-
-        for j, periodo in enumerate(periodos, start=2):
-            letra = get_column_letter(j)
-            data_ref = f"{letra}$5"
-
-            if modo == "Por dia":
-                formula = (
-                    f'=IF(COUNTIFS(TabelaBasesCidades[BASE],$B$3,'
-                    f'TabelaBasesCidades[CIDADE],$A{i})=0,"",'
-                    f'SUMIFS(TabelaDadosAPI[COI_Contagem_Dia],TabelaDadosAPI[COI_Base],$B$3,'
-                    f'TabelaDadosAPI[COI_Cidade],$A{i},TabelaDadosAPI[COI_Data],{data_ref}))'
-                )
-            else:
-                formula = (
-                    f'=IF(COUNTIFS(TabelaBasesCidades[BASE],$B$3,'
-                    f'TabelaBasesCidades[CIDADE],$A{i})=0,"",'
-                    f'SUMIFS(TabelaDadosAPI[COI_Contagem_Mes],TabelaDadosAPI[COI_Base],$B$3,'
-                    f'TabelaDadosAPI[COI_Cidade],$A{i},TabelaDadosAPI[COI_Mes],{data_ref}))'
-                )
-
-            ws_painel.cell(i, j, formula)
-            ws_painel.cell(i, j).alignment = Alignment(horizontal="center")
-
-        faixa = f"B{i}:{get_column_letter(col_total - 1)}{i}"
-        ws_painel.cell(i, col_total, f'=IF(COUNT({faixa})=0,"",SUM({faixa}))')
-        ws_painel.cell(i, col_total).alignment = Alignment(horizontal="center")
-
-    ultima_linha = primeira_linha + len(cidades) - 1
-    linha_total = ultima_linha + 1
-    ws_painel.cell(linha_total, 1, "TOTAL")
-    ws_painel.cell(linha_total, 1).font = Font(bold=True)
-
-    for j in range(2, col_total + 1):
-        letra = get_column_letter(j)
-        ws_painel.cell(
-            linha_total,
-            j,
-            f'=IF(COUNT({letra}{primeira_linha}:{letra}{ultima_linha})=0,"",SUM({letra}{primeira_linha}:{letra}{ultima_linha}))',
-        )
-        ws_painel.cell(linha_total, j).font = Font(bold=True)
-        ws_painel.cell(linha_total, j).alignment = Alignment(horizontal="center")
-
-    # Estilo do painel
-    for row in ws_painel.iter_rows(min_row=5, max_row=linha_total, min_col=1, max_col=col_total):
-        for cell in row:
-            cell.border = Border(bottom=thin_gray)
-            cell.alignment = Alignment(
-                horizontal="center" if cell.column > 1 else "left",
-                vertical="center",
-            )
-
-    for cell in ws_painel[linha_total]:
-        cell.fill = PatternFill("solid", fgColor="EAF2F8")
-
-    ws_painel.freeze_panes = "B6"
-    ws_painel.column_dimensions["A"].width = 34
-    for j in range(2, col_total + 1):
-        ws_painel.column_dimensions[get_column_letter(j)].width = 12
-
-    # Filtro na tabela visual do painel.
-    ref_painel = f"A5:{get_column_letter(col_total)}{ultima_linha}"
-    tabela_painel = Table(displayName="TabelaPainelAPI", ref=ref_painel)
-    tabela_painel.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws_painel.add_table(tabela_painel)
-
-    # Observação de uso.
-    ws_painel.cell(linha_total + 2, 1, "Como usar:")
-    ws_painel.cell(linha_total + 2, 1).font = Font(bold=True, color="123B5D")
-    ws_painel.cell(
-        linha_total + 3,
-        1,
-        "Altere a célula B3 para segmentar o painel por Base. As cidades vinculadas à Base permanecem no painel mesmo quando não possuem O.S.; nesses casos o valor é 0.",
-    )
-    ws_painel.merge_cells(start_row=linha_total + 3, start_column=1, end_row=linha_total + 4, end_column=min(col_total, 8))
-    ws_painel.cell(linha_total + 3, 1).alignment = Alignment(wrap_text=True, vertical="top")
-
-    # Cálculo automático ao abrir no Excel.
-    try:
-        wb.calculation.fullCalcOnLoad = True
-        wb.calculation.forceFullCalc = True
-        wb.calculation.calcMode = "auto"
-    except Exception:
-        pass
-
-    # Painel primeiro, depois dados auxiliares.
-    wb.active = 0
-
-    saida = io.BytesIO()
-    wb.save(saida)
-    saida.seek(0)
-    return saida
-
-
-# ============================================================
 # TABELA
 # ============================================================
 
@@ -1701,872 +1312,385 @@ def gerar_tabela_local_periodo(
 
 
 # ============================================================
-# DESENHO
+# TABELA DINÂMICA / RELATÓRIO
 # ============================================================
 
-def texto_centralizado(
-    draw,
-    box,
-    texto,
-    fonte_obj,
-    fill,
-):
+def periodo_label(mes):
+    return f"{MESES_PT[mes.month]}/{mes.year}"
 
-    x1, y1, x2, y2 = box
 
-    bbox = draw.textbbox(
-        (0, 0),
-        texto,
-        font=fonte_obj,
-    )
+def data_label(data):
+    return f"{data.day:02d}/{MESES_PT[data.month]}"
 
-    largura = bbox[2] - bbox[0]
-    altura = bbox[3] - bbox[1]
 
-    x = (
-        x1
-        + ((x2 - x1) - largura) / 2
-    )
+def contar_bloco(dados):
+    if dados is None or dados.empty:
+        return 0
+    if "_PROTOCOLO" in dados.columns:
+        validos = dados["_PROTOCOLO"].dropna()
+        if not validos.empty:
+            return int(validos.nunique())
+    return int(len(dados))
 
-    y = (
-        y1
-        + ((y2 - y1) - altura) / 2
-        - 2
-    )
 
-    draw.text(
-        (x, y),
-        texto,
-        font=fonte_obj,
-        fill=fill,
+def meses_disponiveis(dados):
+    if dados is None or dados.empty:
+        return []
+    return sorted(
+        [pd.Timestamp(x) for x in dados["_MES_ORDEM"].dropna().unique()]
     )
 
 
-def cor_intensidade(
-    valor,
-    maximo,
+def montar_colunas_relatorio(dados, meses, meses_expandidos):
+    """Retorna [(mes, data_ou_none)] em ordem visual."""
+    colunas = []
+    for mes in meses:
+        if mes in meses_expandidos:
+            dias = sorted(
+                dados.loc[
+                    dados["_MES_ORDEM"] == mes,
+                    "_DATA",
+                ].dropna().unique()
+            )
+            for dia in dias:
+                colunas.append((mes, dia))
+        else:
+            colunas.append((mes, None))
+    return colunas
+
+
+def gerar_matriz_relatorio(
+    dados,
+    locais,
+    colunas,
 ):
+    """Gera a matriz final e o total por linha."""
+    matriz = pd.DataFrame(
+        0,
+        index=locais,
+        columns=range(len(colunas)),
+        dtype=int,
+    )
 
-    if maximo <= 0 or valor <= 0:
-        return "#F1F4F7"
+    for idx, (mes, dia) in enumerate(colunas):
+        bloco_mes = dados[dados["_MES_ORDEM"] == mes]
+        if dia is not None:
+            bloco_mes = bloco_mes[
+                bloco_mes["_DATA"] == dia
+            ]
 
-    proporcao = valor / maximo
+        if bloco_mes.empty:
+            continue
 
-    if proporcao >= 0.75:
-        return "#123B5D"
-
-    if proporcao >= 0.50:
-        return "#2B8CC4"
-
-    if proporcao >= 0.25:
-        return "#7BB8D8"
-
-    return "#DCECF5"
-
-
-def cor_texto_celula(
-    valor,
-    maximo,
-):
-
-    if (
-        maximo > 0
-        and valor / maximo >= 0.75
-    ):
-
-        return BRANCO
-
-    return AZUL_ESCURO
-
-
-def desenhar_logo(
-    imagem,
-    logo_path,
-    x,
-    y,
-    max_width,
-    max_height,
-):
-
-    if not logo_path.exists():
-        return
-
-    try:
-
-        logo = Image.open(
-            logo_path
-        ).convert("RGBA")
-
-        logo.thumbnail(
-            (
-                max_width,
-                max_height,
-            ),
-            Image.Resampling.LANCZOS,
+        contagens = (
+            bloco_mes.groupby("_LOCAL", sort=False)
+            .apply(contar_bloco)
         )
+        for local, valor in contagens.items():
+            if local in matriz.index:
+                matriz.loc[local, idx] = int(valor)
 
-        imagem.alpha_composite(
-            logo,
-            (
-                x,
-                y,
-            ),
-        )
-
-    except Exception:
-        pass
+    matriz["__TOTAL__"] = matriz.sum(axis=1).astype(int)
+    return matriz
 
 
-# ============================================================
-# PAINEL
-# ============================================================
-
-def gerar_painel(
-    df,
+def construir_tabela_html(
+    matriz,
+    locais,
+    colunas,
     modulo,
-    modo,
-    base=None,
+    filtro_base=None,
 ):
+    """Tabela visual no padrão do modelo enviado pelo usuário."""
+    partes = []
+    partes.append('<div class="relatorio-scroll">')
+    partes.append('<table class="relatorio-fa">')
+    partes.append('<thead>')
 
-    if df is None or df.empty:
+    # Linha de agrupamento por mês.
+    partes.append('<tr class="mes-header">')
+    partes.append('<th rowspan="2" class="local-header">LOCAL</th>')
 
-        raise ValueError(
-            "Não existem dados para gerar o relatório."
+    i = 0
+    while i < len(colunas):
+        mes = colunas[i][0]
+        j = i
+        while j < len(colunas) and colunas[j][0] == mes:
+            j += 1
+        span = j - i
+        label = periodo_label(mes)
+        partes.append(
+            f'<th colspan="{span}" class="mes-header-cell">'
+            f'{html.escape(label)}'
+            f'</th>'
         )
+        i = j
 
-    dados = df.copy()
+    partes.append('<th rowspan="2" class="total-header">TOTAL</th>')
+    partes.append('</tr>')
 
-    # ========================================================
-    # FILTRO DE BASE — API
-    # ========================================================
-
-    if modulo == "API" and base:
-
-        dados = dados[
-            dados["_BASE"] == base
-        ].copy()
-
-    # ========================================================
-    # LOCAIS ESPERADOS
-    # ========================================================
-    # API não deve depender da cidade possuir O.S. no arquivo para
-    # aparecer no relatório. O cadastro oficial Base x Cidade define
-    # quais cidades pertencem à base selecionada.
-    #
-    # Assim, ao selecionar uma base, TODAS as cidades daquela base
-    # aparecem; as que não possuem O.S. no período ficam vazias/zeradas.
-    # ========================================================
-
-    locais_forcados = None
-
-    if modulo == "API":
-
-        if base:
-            locais_forcados = cidades_da_base(base)
-        else:
-            locais_forcados = cidades_da_base(None)
-
-    if dados.empty and not locais_forcados:
-
-        raise ValueError(
-            "Não existem registros para o filtro selecionado."
+    # Linha das datas.
+    partes.append('<tr class="data-header">')
+    for mes, dia in colunas:
+        label = data_label(dia) if dia is not None else periodo_label(mes)
+        partes.append(
+            f'<th class="data-header-cell">{html.escape(label)}</th>'
         )
+    partes.append('</tr>')
+    partes.append('</thead>')
+    partes.append('<tbody>')
 
-    # ========================================================
-    # GERA TABELA
-    # ========================================================
+    maximo = int(matriz.drop(columns=["__TOTAL__"]).to_numpy().max()) if len(matriz) else 0
 
-    tabela = gerar_tabela_local_periodo(
-        dados,
-        modo,
-        locais_forcados=locais_forcados,
+    for local in locais:
+        partes.append('<tr>')
+        partes.append(
+            f'<td class="local-cell">{html.escape(str(local))}</td>'
+        )
+        for idx in range(len(colunas)):
+            valor = int(matriz.loc[local, idx])
+            classe = " valor" if valor else " vazio"
+            partes.append(
+                f'<td class="numero-cell{classe}">'
+                f'{formatar_numero(valor) if valor else ""}'
+                f'</td>'
+            )
+        total = int(matriz.loc[local, "__TOTAL__"])
+        partes.append(
+            f'<td class="total-cell">{formatar_numero(total)}</td>'
+        )
+        partes.append('</tr>')
+
+    # Total geral.
+    partes.append('<tr class="total-geral">')
+    partes.append('<td class="local-cell total-label">TOTAL GERAL</td>')
+    for idx in range(len(colunas)):
+        valor = int(matriz[idx].sum())
+        partes.append(
+            f'<td class="numero-cell total-geral-cell">'
+            f'{formatar_numero(valor) if valor else ""}'
+            f'</td>'
+        )
+    total_geral = int(matriz["__TOTAL__"].sum())
+    partes.append(
+        f'<td class="total-cell total-geral-cell">'
+        f'{formatar_numero(total_geral)}'
+        f'</td>'
     )
+    partes.append('</tr>')
 
-    if tabela.empty:
+    partes.append('</tbody>')
+    partes.append('</table>')
+    partes.append('</div>')
+    return "".join(partes)
 
-        raise ValueError(
-            "Não foi possível gerar a tabela."
-        )
 
-    tabela = tabela.sort_index()
+def gerar_png_relatorio(
+    matriz,
+    locais,
+    colunas,
+    modulo,
+    base=None,
+    status=None,
+):
+    """Gera PNG simples da mesma tabela exibida no Streamlit."""
+    largura_local = 235
+    largura_coluna = 82
+    largura_total = 92
+    altura_linha = 30
+    altura_header = 32
+    altura_subheader = 30
+    margem = 24
 
-    periodos = list(
-        tabela.columns
+    largura = (
+        margem * 2
+        + largura_local
+        + len(colunas) * largura_coluna
+        + largura_total
     )
-
-    locais = list(
-        tabela.index
-    )
-
-    # ========================================================
-    # DIMENSÕES
-    # ========================================================
-
-    margem = 60
-
-    largura = 1500
-
-    altura_cabecalho = 260
-
-    altura_linha = 58
-
-    largura_local = 390
-
-    largura_periodo = 90
-
-    largura_total = 110
-
-    # Número de datas/meses por bloco
-    periodos_por_bloco = 10
-
-    blocos_periodos = [
-        periodos[
-            i:i + periodos_por_bloco
-        ]
-        for i in range(
-            0,
-            len(periodos),
-            periodos_por_bloco,
-        )
-    ]
-
-    if not blocos_periodos:
-        blocos_periodos = [[]]
-
-    altura_tabela_total = 0
-
-    for bloco in blocos_periodos:
-
-        altura_tabela_total += (
-            45
-            + altura_linha
-            + len(locais)
-            * altura_linha
-            + 45
-        )
-
-    altura_rodape = 90
-
     altura = (
-        altura_cabecalho
-        + altura_tabela_total
-        + altura_rodape
+        margem * 2
+        + 58
+        + altura_header
+        + altura_subheader
+        + (len(locais) + 1) * altura_linha
     )
 
-    # ========================================================
-    # CANVAS
-    # ========================================================
+    imagem = Image.new("RGB", (largura, altura), "white")
+    draw = ImageDraw.Draw(imagem)
 
-    imagem = Image.new(
-        "RGBA",
-        (
-            largura,
-            altura,
-        ),
-        FUNDO,
-    )
+    f_titulo = fonte(22, True)
+    f_pequena = fonte(12, False)
+    f_header = fonte(12, True)
+    f_local = fonte(11, False)
+    f_num = fonte(10, False)
+    f_total = fonte(10, True)
 
-    draw = ImageDraw.Draw(
-        imagem
-    )
+    titulo = TITULOS.get(modulo, "Relatório de Falta de Água")
+    draw.text((margem, 8), titulo, font=f_titulo, fill=AZUL_ESCURO)
 
-    # ========================================================
-    # FAIXA SUPERIOR
-    # ========================================================
+    info = []
+    if base:
+        info.append(f"Base: {base}")
+    if status:
+        info.append(f"Status: {status}")
+    if info:
+        draw.text((margem, 36), " | ".join(info), font=f_pequena, fill=CINZA)
 
+    y0 = margem + 58
+    x0 = margem
+
+    # Cabeçalho de meses.
     draw.rectangle(
-        (
-            0,
-            0,
-            largura,
-            12,
-        ),
+        (x0, y0, x0 + largura_local, y0 + altura_header + altura_subheader),
         fill=AZUL_ESCURO,
+        outline="#B8C2CC",
     )
-
-    # ========================================================
-    # TÍTULO
-    # ========================================================
-
-    titulo = TITULOS[
-        modulo
-    ]
-
-    if modulo == "API":
-
-        if base:
-
-            subtitulo = (
-                "Reclamações de Falta de Água "
-                f"• Base: {base}"
-            )
-
-        else:
-
-            subtitulo = (
-                "Reclamações de Falta de Água "
-                "• Todas as bases"
-            )
-
-    else:
-
-        subtitulo = (
-            "Reclamações de Falta de Água"
-        )
-
     draw.text(
-        (
-            margem,
-            50,
-        ),
-        titulo,
-        font=fonte(
-            38,
-            True,
-        ),
-        fill=AZUL_ESCURO,
+        (x0 + 8, y0 + 22),
+        "LOCAL",
+        font=f_header,
+        fill=BRANCO,
     )
 
-    draw.text(
-        (
-            margem,
-            108,
-        ),
-        subtitulo,
-        font=fonte(
-            21,
-        ),
-        fill=CINZA,
-    )
-
-    # ========================================================
-    # PERÍODO
-    # ========================================================
-
-    data_min = dados[
-        "_DATA"
-    ].min()
-
-    data_max = dados[
-        "_DATA"
-    ].max()
-
-    if modo == "Por dia":
-
-        periodo_texto = (
-            f"Período: "
-            f"{data_min.strftime('%d/%m/%Y')} "
-            f"a "
-            f"{data_max.strftime('%d/%m/%Y')}"
-        )
-
-    else:
-
-        periodo_texto = (
-            f"Período: "
-            f"{MESES_PT[data_min.month]}/"
-            f"{data_min.year} "
-            f"a "
-            f"{MESES_PT[data_max.month]}/"
-            f"{data_max.year}"
-        )
-
-    draw.text(
-        (
-            margem,
-            155,
-        ),
-        periodo_texto,
-        font=fonte(
-            17
-        ),
-        fill=CINZA,
-    )
-
-    # ========================================================
-    # TIPO DE VISUALIZAÇÃO
-    # ========================================================
-
-    draw.text(
-        (
-            margem,
-            190,
-        ),
-        (
-            "Visualização: "
-            + modo
-            + " • "
-            + (
-                "Bairros"
-                if modulo in ["THE", "TIM"]
-                else "Cidades"
-            )
-        ),
-        font=fonte(
-            16
-        ),
-        fill=CINZA,
-    )
-
-    # ========================================================
-    # LOGO
-    # ========================================================
-
-    desenhar_logo(
-        imagem,
-        LOGOS[modulo],
-        largura - margem - 280,
-        45,
-        280,
-        120,
-    )
-
-    # ========================================================
-    # POSIÇÃO INICIAL
-    # ========================================================
-
-    y_atual = altura_cabecalho
-
-    # ========================================================
-    # MÁXIMO GLOBAL
-    # ========================================================
-
-    if periodos:
-
-        maximo = int(
-            tabela[
-                periodos
-            ].max().max()
-        )
-
-    else:
-
-        maximo = 0
-
-    # ========================================================
-    # BLOCOS
-    # ========================================================
-
-    for numero_bloco, bloco in enumerate(
-        blocos_periodos
-    ):
-
-        # ====================================================
-        # TÍTULO DO BLOCO
-        # ====================================================
-
-        if modo == "Por dia":
-
-            titulo_bloco = (
-                "VOLUME POR "
-                + (
-                    "BAIRRO"
-                    if modulo in ["THE", "TIM"]
-                    else "CIDADE"
-                )
-                + " — "
-                + (
-                    f"{bloco[0].strftime('%d/%m')}"
-                    if len(bloco) == 1
-                    else
-                    f"{bloco[0].strftime('%d/%m')} "
-                    f"a "
-                    f"{bloco[-1].strftime('%d/%m')}"
-                )
-            )
-
-        else:
-
-            titulo_bloco = (
-                "VOLUME POR "
-                + (
-                    "BAIRRO"
-                    if modulo in ["THE", "TIM"]
-                    else "CIDADE"
-                )
-                + " — "
-                + (
-                    texto_cabecalho_periodo(
-                        bloco[0],
-                        modo,
-                    )
-                    if len(bloco) == 1
-                    else
-                    f"{texto_cabecalho_periodo(bloco[0], modo)} "
-                    f"a "
-                    f"{texto_cabecalho_periodo(bloco[-1], modo)}"
-                )
-            )
-
-        draw.text(
-            (
-                margem,
-                y_atual,
-            ),
-            titulo_bloco,
-            font=fonte(
-                24,
-                True,
-            ),
+    x = x0 + largura_local
+    i = 0
+    while i < len(colunas):
+        mes = colunas[i][0]
+        j = i
+        while j < len(colunas) and colunas[j][0] == mes:
+            j += 1
+        w = (j - i) * largura_coluna
+        draw.rectangle(
+            (x, y0, x + w, y0 + altura_header),
             fill=AZUL_ESCURO,
+            outline="#B8C2CC",
         )
-
-        # ====================================================
-        # CABEÇALHO DA TABELA
-        # ====================================================
-
-        y_inicio = (
-            y_atual + 45
-        )
-
-        largura_tabela = (
-            largura_local
-            + len(bloco)
-            * largura_periodo
-            + largura_total
-        )
-
-        x_inicio = margem
-
-        draw.rounded_rectangle(
-            (
-                x_inicio,
-                y_inicio,
-                x_inicio + largura_tabela,
-                y_inicio + altura_linha,
-            ),
-            radius=8,
-            fill=AZUL_ESCURO,
-        )
-
-        nome_local = (
-            "BAIRRO"
-            if modulo in ["THE", "TIM"]
-            else "CIDADE"
-        )
-
+        label = periodo_label(mes)
+        bbox = draw.textbbox((0, 0), label, font=f_header)
         draw.text(
-            (
-                x_inicio + 18,
-                y_inicio + 17,
-            ),
-            nome_local,
-            font=fonte(
-                17,
-                True,
-            ),
+            (x + (w - (bbox[2] - bbox[0])) / 2, y0 + 8),
+            label,
+            font=f_header,
             fill=BRANCO,
         )
+        x += w
+        i = j
 
-        # ====================================================
-        # CABEÇALHO DOS PERÍODOS
-        # ====================================================
+    draw.rectangle(
+        (x, y0, x + largura_total, y0 + altura_header + altura_subheader),
+        fill=AZUL_ESCURO,
+        outline="#B8C2CC",
+    )
+    draw.text((x + 12, y0 + 22), "TOTAL", font=f_header, fill=BRANCO)
 
-        for indice, periodo in enumerate(
-            bloco
-        ):
-
-            x = (
-                x_inicio
-                + largura_local
-                + indice
-                * largura_periodo
-            )
-
-            titulo_periodo = (
-                texto_cabecalho_periodo(
-                    periodo,
-                    modo,
-                )
-            )
-
-            texto_centralizado(
-                draw,
-                (
-                    x,
-                    y_inicio,
-                    x + largura_periodo,
-                    y_inicio + altura_linha,
-                ),
-                titulo_periodo,
-                fonte(
-                    14,
-                    True,
-                ),
-                BRANCO,
-            )
-
-        # ====================================================
-        # COLUNA TOTAL
-        # ====================================================
-
-        x_total = (
-            x_inicio
-            + largura_local
-            + len(bloco)
-            * largura_periodo
+    # Subcabeçalho.
+    x = x0 + largura_local
+    for mes, dia in colunas:
+        draw.rectangle(
+            (x, y0 + altura_header, x + largura_coluna, y0 + altura_header + altura_subheader),
+            fill="#E8EDF2",
+            outline="#B8C2CC",
         )
-
-        texto_centralizado(
-            draw,
-            (
-                x_total,
-                y_inicio,
-                x_total + largura_total,
-                y_inicio + altura_linha,
-            ),
-            "TOTAL",
-            fonte(
-                15,
-                True,
-            ),
-            BRANCO,
+        label = data_label(dia) if dia is not None else periodo_label(mes)
+        bbox = draw.textbbox((0, 0), label, font=f_header)
+        draw.text(
+            (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y0 + altura_header + 7),
+            label,
+            font=f_header,
+            fill=AZUL_ESCURO,
         )
+        x += largura_coluna
 
-        # ====================================================
-        # LINHAS
-        # ====================================================
+    y = y0 + altura_header + altura_subheader
+    maximo = int(matriz.drop(columns=["__TOTAL__"]).to_numpy().max()) if len(matriz) else 0
 
-        for linha_idx, local in enumerate(
-            locais
-        ):
+    for local in locais:
+        draw.rectangle(
+            (x0, y, x0 + largura_local, y + altura_linha),
+            fill="white",
+            outline="#C8CDD2",
+        )
+        texto = abreviar_texto(local, 31)
+        draw.text((x0 + 7, y + 8), texto, font=f_local, fill=AZUL_ESCURO)
 
-            y = (
-                y_inicio
-                + altura_linha
-                + linha_idx
-                * altura_linha
-            )
-
-            fill_linha = (
-                BRANCO
-                if linha_idx % 2 == 0
-                else "#F8FAFC"
-            )
-
+        x = x0 + largura_local
+        for idx in range(len(colunas)):
+            valor = int(matriz.loc[local, idx])
             draw.rectangle(
-                (
-                    x_inicio,
-                    y,
-                    x_inicio + largura_tabela,
-                    y + altura_linha,
-                ),
-                fill=fill_linha,
+                (x, y, x + largura_coluna, y + altura_linha),
+                fill="white",
+                outline="#D3D8DD",
             )
-
-            # =================================================
-            # NOME DO LOCAL
-            # =================================================
-
-            texto_local = abreviar_texto(
-                local,
-                38,
-            )
-
-            draw.text(
-                (
-                    x_inicio + 18,
-                    y + 17,
-                ),
-                texto_local,
-                font=fonte(
-                    15,
-                    True,
-                ),
-                fill=AZUL_ESCURO,
-            )
-
-            # =================================================
-            # VALORES POR DATA/MÊS
-            # =================================================
-
-            for indice, periodo in enumerate(
-                bloco
-            ):
-
-                x = (
-                    x_inicio
-                    + largura_local
-                    + indice
-                    * largura_periodo
+            if valor:
+                bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_num)
+                draw.text(
+                    (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 8),
+                    formatar_numero(valor),
+                    font=f_num,
+                    fill=AZUL_ESCURO,
                 )
+            x += largura_coluna
 
-                valor = int(
-                    tabela.loc[
-                        local,
-                        periodo,
-                    ]
-                )
-
-                # =============================================
-                # CÉLULA
-                # =============================================
-
-                cor = cor_intensidade(
-                    valor,
-                    maximo,
-                )
-
-                draw.rectangle(
-                    (
-                        x + 2,
-                        y + 2,
-                        x
-                        + largura_periodo
-                        - 2,
-                        y
-                        + altura_linha
-                        - 2,
-                    ),
-                    fill=cor,
-                )
-
-                # =============================================
-                # IMPORTANTE:
-                #
-                # Se valor == 0:
-                #   não escreve nada.
-                #
-                # Assim a célula fica visualmente vazia.
-                # =============================================
-
-                if valor > 0:
-
-                    texto_centralizado(
-                        draw,
-                        (
-                            x,
-                            y,
-                            x + largura_periodo,
-                            y + altura_linha,
-                        ),
-                        formatar_numero(
-                            valor
-                        ),
-                        fonte(
-                            14,
-                            True,
-                        ),
-                        cor_texto_celula(
-                            valor,
-                            maximo,
-                        ),
-                    )
-
-            # =================================================
-            # TOTAL DO LOCAL
-            # =================================================
-
-            total_local = int(
-                tabela.loc[
-                    local,
-                    periodos,
-                ].sum()
-            )
-
-            texto_centralizado(
-                draw,
-                (
-                    x_total,
-                    y,
-                    x_total + largura_total,
-                    y + altura_linha,
-                ),
-                formatar_numero(
-                    total_local
-                ),
-                fonte(
-                    15,
-                    True,
-                ),
-                AZUL_ESCURO,
-            )
-
-        # ====================================================
-        # PRÓXIMO BLOCO
-        # ====================================================
-
-        y_atual = (
-            y_inicio
-            + altura_linha
-            + len(locais)
-            * altura_linha
-            + 45
+        total = int(matriz.loc[local, "__TOTAL__"])
+        draw.rectangle(
+            (x, y, x + largura_total, y + altura_linha),
+            fill="#E8EDF2",
+            outline="#B8C2CC",
         )
+        draw.text((x + 22, y + 8), formatar_numero(total), font=f_total, fill=AZUL_ESCURO)
+        y += altura_linha
 
-    # ========================================================
-    # RODAPÉ
-    # ========================================================
-
-    y_rodape = (
-        altura
-        - altura_rodape
-        + 20
+    # Total geral.
+    draw.rectangle(
+        (x0, y, x0 + largura_local, y + altura_linha),
+        fill=AZUL_ESCURO,
+        outline=AZUL_ESCURO,
     )
+    draw.text((x0 + 7, y + 8), "TOTAL GERAL", font=f_total, fill=BRANCO)
 
-    draw.line(
-        (
-            margem,
-            y_rodape,
-            largura - margem,
-            y_rodape,
-        ),
-        fill=CINZA_CLARO,
-        width=2,
+    x = x0 + largura_local
+    for idx in range(len(colunas)):
+        valor = int(matriz[idx].sum())
+        draw.rectangle(
+            (x, y, x + largura_coluna, y + altura_linha),
+            fill=AZUL_ESCURO,
+            outline=AZUL_ESCURO,
+        )
+        if valor:
+            bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_total)
+            draw.text(
+                (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 8),
+                formatar_numero(valor),
+                font=f_total,
+                fill=BRANCO,
+            )
+        x += largura_coluna
+
+    total_geral = int(matriz["__TOTAL__"].sum())
+    draw.rectangle(
+        (x, y, x + largura_total, y + altura_linha),
+        fill=AZUL_ESCURO,
+        outline=AZUL_ESCURO,
     )
-
-    empresa = NOMES_EMPRESAS[
-        modulo
-    ]
-
-    draw.text(
-        (
-            margem,
-            y_rodape + 25,
-        ),
-        (
-            f"{empresa} • "
-            "Controle Operacional Integrado — COI"
-        ),
-        font=fonte(
-            15,
-        ),
-        fill=CINZA,
-    )
-
-    draw.text(
-        (
-            largura - margem - 250,
-            y_rodape + 25,
-        ),
-        datetime.now().strftime(
-            "Gerado em %d/%m/%Y %H:%M"
-        ),
-        font=fonte(
-            14,
-        ),
-        fill=CINZA,
-    )
-
-    # ========================================================
-    # EXPORTAÇÃO
-    # ========================================================
+    draw.text((x + 22, y + 8), formatar_numero(total_geral), font=f_total, fill=BRANCO)
 
     output = io.BytesIO()
-
-    imagem_rgb = imagem.convert(
-        "RGB"
-    )
-
-    imagem_rgb.save(
-        output,
-        format="PNG",
-        optimize=True,
-    )
-
+    imagem.save(output, format="PNG", optimize=True)
     output.seek(0)
-
     return output
+
+
+def aplicar_filtro_status(df, coluna_status, status):
+    if not coluna_status or not status or status == "Todos":
+        return df
+    return df[
+        df[coluna_status]
+        .fillna("NÃO INFORMADO")
+        .astype(str)
+        .str.strip()
+        .eq(status)
+    ].copy()
 
 
 # ============================================================
@@ -2574,123 +1698,157 @@ def gerar_painel(
 # ============================================================
 
 st.markdown(
-    '<div class="module-title">'
-    "Relatório de Falta de Água - COI"
-    "</div>",
+    '<div class="module-title">Relatório de Falta de Água - COI</div>',
     unsafe_allow_html=True,
 )
-
 st.markdown(
-    '<div class="module-subtitle">'
-    "Geração de relatório consolidado de reclamações de Falta de Água."
-    "</div>",
+    '<div class="module-subtitle">Tabela operacional para acompanhamento das O.S. de Falta de Água.</div>',
     unsafe_allow_html=True,
 )
 
-
-# ============================================================
-# UPLOADS
-# ============================================================
-
-col_api, col_the, col_tim = st.columns(
-    3,
-    gap="medium",
-)
-
+col_api, col_the, col_tim = st.columns(3, gap="medium")
 
 with col_api:
-
     st.markdown("### API")
-
     arquivos_api = st.file_uploader(
         "Planilha(s) API",
-        type=[
-            "xlsx",
-            "xls",
-            "xlsb",
-        ],
+        type=["xlsx", "xls", "xlsb"],
         accept_multiple_files=True,
         key="upload_api",
     )
 
-
 with col_the:
-
     st.markdown("### THE")
-
     arquivos_the = st.file_uploader(
         "Planilha(s) THE",
-        type=[
-            "xlsx",
-            "xls",
-            "xlsb",
-        ],
+        type=["xlsx", "xls", "xlsb"],
         accept_multiple_files=True,
         key="upload_the",
     )
 
-
 with col_tim:
-
     st.markdown("### TIM")
-
     arquivos_tim = st.file_uploader(
         "Planilha(s) TIM",
-        type=[
-            "xlsx",
-            "xls",
-            "xlsb",
-        ],
+        type=["xlsx", "xls", "xlsb"],
         accept_multiple_files=True,
         key="upload_tim",
     )
 
-
 st.divider()
 
-
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
-
 st.markdown(
-    "### Configuração do relatório"
+    """
+    <style>
+        .relatorio-scroll {
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 72vh;
+            border: 1px solid #B8C2CC;
+            background: white;
+        }
+
+        table.relatorio-fa {
+            border-collapse: collapse;
+            width: max-content;
+            min-width: 100%;
+            font-size: 12px;
+            color: #123B5D;
+            background: white;
+        }
+
+        table.relatorio-fa th,
+        table.relatorio-fa td {
+            border: 1px solid #C8CDD2;
+            padding: 4px 7px;
+            height: 25px;
+            box-sizing: border-box;
+            white-space: nowrap;
+        }
+
+        table.relatorio-fa .local-header,
+        table.relatorio-fa .total-header,
+        table.relatorio-fa .mes-header-cell {
+            background: #123B5D;
+            color: white;
+            font-weight: 700;
+            text-align: center;
+            position: sticky;
+            top: 0;
+            z-index: 4;
+        }
+
+        table.relatorio-fa .local-header {
+            left: 0;
+            min-width: 210px;
+            text-align: left;
+            z-index: 6;
+        }
+
+        table.relatorio-fa .data-header-cell {
+            background: #E8EDF2;
+            color: #123B5D;
+            font-weight: 700;
+            text-align: center;
+            position: sticky;
+            top: 29px;
+            z-index: 3;
+        }
+
+        table.relatorio-fa .local-cell {
+            background: white;
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            min-width: 210px;
+            text-align: left;
+            font-weight: 500;
+        }
+
+        table.relatorio-fa .numero-cell {
+            min-width: 62px;
+            text-align: center;
+        }
+
+        table.relatorio-fa .vazio {
+            color: transparent;
+        }
+
+        table.relatorio-fa .total-cell {
+            min-width: 78px;
+            background: #E8EDF2;
+            text-align: center;
+            font-weight: 700;
+        }
+
+        table.relatorio-fa .total-geral td {
+            background: #123B5D;
+            color: white;
+            font-weight: 700;
+        }
+
+        table.relatorio-fa .total-geral .local-cell {
+            background: #123B5D;
+            color: white;
+        }
+
+        table.relatorio-fa .total-geral-cell {
+            background: #123B5D !important;
+            color: white !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-col1, col2 = st.columns(
-    [1, 1],
-    gap="large",
-)
-
-
+col1, col2, col3 = st.columns([1, 1, 1], gap="large")
 with col1:
-
     modulo = st.radio(
         "Empresa / operação",
-        [
-            "API",
-            "THE",
-            "TIM",
-        ],
+        ["API", "THE", "TIM"],
         horizontal=True,
     )
-
-
-with col2:
-
-    modo = st.radio(
-        "Apresentação temporal",
-        [
-            "Por dia",
-            "Por mês",
-        ],
-        horizontal=True,
-    )
-
-
-# ============================================================
-# ARQUIVOS
-# ============================================================
 
 arquivos = {
     "API": arquivos_api,
@@ -2698,273 +1856,181 @@ arquivos = {
     "TIM": arquivos_tim,
 }
 
-arquivos_selecionados = arquivos[
-    modulo
-]
-
-
-# ============================================================
-# LEITURA E CONSOLIDAÇÃO
-# ============================================================
+arquivos_selecionados = arquivos[modulo]
 
 if not arquivos_selecionados:
-
-    st.info(
-        f"Carregue uma ou mais planilhas de {modulo} "
-        "para gerar o relatório."
-    )
-
+    st.info(f"Carregue uma ou mais planilhas de {modulo} para gerar o relatório.")
     st.stop()
 
-
-with st.spinner(
-    f"Consolidando os dados de {modulo}..."
-):
-
-    df_original = ler_planilhas_consolidadas(
-        arquivos_selecionados
-    )
-
+with st.spinner(f"Consolidando os dados de {modulo}..."):
+    df_original = ler_planilhas_consolidadas(arquivos_selecionados)
     if df_original is None:
         st.stop()
-
-    df, erro = preparar_dados(
-        df_original,
-        modulo,
-    )
-
+    df, erro = preparar_dados(df_original, modulo)
 
 if erro:
-
-    st.error(
-        erro
-    )
-
+    st.error(erro)
     st.stop()
 
-
-# ============================================================
-# API — BASE
-# ============================================================
-
-# O cadastro oficial Base x Cidade possui 242 vínculos e é usado
-# exclusivamente para determinar a abrangência de cada base API.
-base_selecionada = None
-
-
-if modulo == "API":
-
-    st.markdown(
-        "#### Base operacional"
-    )
-
-    bases_disponiveis = sorted(
-        [
-            b
-            for b in df["_BASE"]
-            .dropna()
-            .unique()
-            if b
-        ]
-    )
-
-    opcoes_base = [
-        "Todas"
-    ] + bases_disponiveis
-
-    base_escolhida = st.selectbox(
-        "Selecione a base",
-        opcoes_base,
-    )
-
-    if base_escolhida != "Todas":
-
-        base_selecionada = (
-            base_escolhida
-        )
-
-        cidades_base = cidades_da_base(
-            base_selecionada
-        )
-
-        st.caption(
-            f"{len(cidades_base)} cidade(s) vinculada(s) à base "
-            f"{base_selecionada}. Todas serão consideradas no relatório."
-        )
-
-
-st.divider()
-
-
-# ============================================================
-# BOTÃO
-# ============================================================
-
-st.markdown("")
-
-gerar = st.button(
-    "GERAR RELATÓRIO",
-    type="primary",
-    use_container_width=True,
+# Status da Atividade é opcional, mas acompanha o padrão do modelo enviado.
+coluna_status = localizar_coluna(
+    df,
+    [
+        "Status da Atividade",
+        "Status Atividade",
+        "Status",
+    ],
 )
 
+status_selecionado = "Todos"
+if coluna_status:
+    status_valores = sorted(
+        [
+            str(v).strip()
+            for v in df[coluna_status].dropna().unique()
+            if str(v).strip()
+        ],
+        key=normalizar,
+    )
+    opcoes_status = ["Todos"] + status_valores
+    padrao = opcoes_status.index("Pendente") if "Pendente" in opcoes_status else 0
+    with col2:
+        status_selecionado = st.selectbox(
+            "Status da Atividade",
+            opcoes_status,
+            index=padrao,
+        )
 
-# ============================================================
-# GERAÇÃO
-# ============================================================
+base_selecionada = None
+if modulo == "API":
+    with col3:
+        bases_disponiveis = sorted(
+            [b for b in df["_BASE"].dropna().unique() if b],
+            key=normalizar,
+        )
+        opcoes_base = ["Todas"] + bases_disponiveis
+        base_escolhida = st.selectbox(
+            "Base / fonte de dados",
+            opcoes_base,
+        )
+    if base_escolhida != "Todas":
+        base_selecionada = base_escolhida
 
-if gerar:
+# Filtro aplicado apenas para o relatório.
+dados = aplicar_filtro_status(df, coluna_status, status_selecionado)
 
-    with st.spinner(
-        "Gerando relatório..."
-    ):
+if modulo == "API" and base_selecionada:
+    dados = dados[dados["_BASE"] == base_selecionada].copy()
 
-        try:
-
-            if modulo == "API":
-
-                planilha_bytes = gerar_planilha_api(
-                    df=df,
-                    base_inicial=base_selecionada,
-                    modo=modo,
-                )
-
-                st.session_state[
-                    "relatorio_gerado_xlsx"
-                ] = planilha_bytes.getvalue()
-
-                st.session_state[
-                    "relatorio_modulo"
-                ] = modulo
-
-                st.session_state[
-                    "relatorio_modo"
-                ] = modo
-
-                st.session_state[
-                    "relatorio_base"
-                ] = base_selecionada
-
-            else:
-
-                imagem_bytes = gerar_painel(
-                    df=df,
-                    modulo=modulo,
-                    modo=modo,
-                    base=base_selecionada,
-                )
-
-                st.session_state[
-                    "relatorio_gerado"
-                ] = imagem_bytes.getvalue()
-
-                st.session_state[
-                    "relatorio_modulo"
-                ] = modulo
-
-                st.session_state[
-                    "relatorio_modo"
-                ] = modo
-
-                st.session_state[
-                    "relatorio_base"
-                ] = base_selecionada
-
-        except Exception as erro:
-
-            st.error(
-                f"Erro ao gerar o relatório: {erro}"
-            )
-
-            st.stop()
-
-
-# ============================================================
-# RESULTADO
-# ============================================================
-
-if "relatorio_modulo" in st.session_state:
-
-    st.divider()
-
-    st.markdown(
-        "### Relatório gerado"
+# Cadastro oficial de cidades para garantir que a seleção de Base API
+# mostre todas as cidades da base, inclusive as que estão zeradas.
+if modulo == "API":
+    locais = cidades_da_base(base_selecionada)
+    if not base_selecionada:
+        locais = cidades_da_base(None)
+else:
+    locais = sorted(
+        dados["_LOCAL"].dropna().astype(str).unique(),
+        key=normalizar,
     )
 
-    modulo_final = st.session_state[
-        "relatorio_modulo"
-    ]
+if not locais:
+    st.warning("Não há localidades disponíveis para este relatório.")
+    st.stop()
 
-    modo_final = st.session_state[
-        "relatorio_modo"
-    ]
+# Meses disponíveis na seleção. Se a seleção ficar sem registros, usa a base
+# completa para manter a estrutura temporal do relatório.
+dados_periodos = dados if not dados.empty else df
+meses = meses_disponiveis(dados_periodos)
+if not meses:
+    st.warning("Não foi encontrada nenhuma data válida para montar as colunas.")
+    st.stop()
 
-    base_final = st.session_state[
-        "relatorio_base"
-    ]
+mes_atual = pd.Timestamp.today().to_period("M").to_timestamp()
 
-    if modulo_final == "API" and "relatorio_gerado_xlsx" in st.session_state:
+# O mês atual inicia expandido. Os demais começam agrupados.
+if "meses_expandidos_fa" not in st.session_state:
+    st.session_state["meses_expandidos_fa"] = {mes_atual}
 
-        planilha_final = st.session_state[
-            "relatorio_gerado_xlsx"
-        ]
+# Remove meses que não existem mais e mantém o mês atual expandido.
+st.session_state["meses_expandidos_fa"] = {
+    m for m in st.session_state["meses_expandidos_fa"] if m in meses
+}
+st.session_state["meses_expandidos_fa"].add(mes_atual if mes_atual in meses else meses[-1])
 
-        if base_final:
-            nome_arquivo = (
-                f"RELATORIO_FA_API_"
-                f"{normalizar(base_final).replace(' ', '_')}_"
-                f"{modo_final.replace(' ', '_')}.xlsx"
-            )
-        else:
-            nome_arquivo = (
-                f"RELATORIO_FA_API_"
-                f"{modo_final.replace(' ', '_')}.xlsx"
-            )
+st.markdown("### Período")
+st.caption("Use + para detalhar um mês em dias. O mês atual inicia detalhado automaticamente.")
 
-        st.success(
-            "Planilha API pronta. Abra no Excel e use a célula "
-            "'SEGMENTAÇÃO — BASE' para trocar a Base do painel."
-        )
-
-        st.download_button(
-            label="BAIXAR PLANILHA API",
-            data=planilha_final,
-            file_name=nome_arquivo,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+# Botões de expansão/recolhimento.
+controles = st.columns(min(max(len(meses), 1), 8))
+for i, mes in enumerate(meses):
+    with controles[i % len(controles)]:
+        expandido = mes in st.session_state["meses_expandidos_fa"]
+        simbolo = "−" if expandido else "+"
+        if st.button(
+            f"{simbolo} {periodo_label(mes)}",
+            key=f"toggle_mes_{modulo}_{mes.strftime('%Y%m')}",
             use_container_width=True,
-        )
+        ):
+            if expandido and mes == mes_atual:
+                # O mês atual permanece detalhado por padrão, mas pode ser recolhido.
+                st.session_state["meses_expandidos_fa"].discard(mes)
+            elif expandido:
+                st.session_state["meses_expandidos_fa"].discard(mes)
+            else:
+                st.session_state["meses_expandidos_fa"].add(mes)
+            st.rerun()
 
-    elif "relatorio_gerado" in st.session_state:
+meses_expandidos = st.session_state["meses_expandidos_fa"]
+colunas = montar_colunas_relatorio(dados_periodos, meses, meses_expandidos)
+matriz = gerar_matriz_relatorio(dados, locais, colunas)
 
-        imagem_final = st.session_state[
-            "relatorio_gerado"
-        ]
+st.markdown(
+    construir_tabela_html(
+        matriz,
+        locais,
+        colunas,
+        modulo,
+        base_selecionada,
+    ),
+    unsafe_allow_html=True,
+)
 
-        if base_final:
-            nome_arquivo = (
-                f"RELATORIO_FA_"
-                f"{modulo_final}_"
-                f"{normalizar(base_final).replace(' ', '_')}_"
-                f"{modo_final.replace(' ', '_')}.png"
-            )
+# PNG da mesma estrutura da tabela.
+if "png_relatorio_fa" not in st.session_state:
+    st.session_state["png_relatorio_fa"] = None
 
-        else:
-            nome_arquivo = (
-                f"RELATORIO_FA_"
-                f"{modulo_final}_"
-                f"{modo_final.replace(' ', '_')}.png"
-            )
+if st.button("ATUALIZAR PNG", type="secondary", use_container_width=True):
+    png = gerar_png_relatorio(
+        matriz,
+        locais,
+        colunas,
+        modulo,
+        base=base_selecionada,
+        status=status_selecionado if status_selecionado != "Todos" else None,
+    )
+    st.session_state["png_relatorio_fa"] = png.getvalue()
 
-        st.image(
-            imagem_final,
-            use_container_width=True,
-        )
+# Sempre atualiza a imagem para refletir a tabela atual sem exigir botão.
+png_atual = gerar_png_relatorio(
+    matriz,
+    locais,
+    colunas,
+    modulo,
+    base=base_selecionada,
+    status=status_selecionado if status_selecionado != "Todos" else None,
+)
+st.session_state["png_relatorio_fa"] = png_atual.getvalue()
 
-        st.download_button(
-            label="BAIXAR RELATÓRIO EM PNG",
-            data=imagem_final,
-            file_name=nome_arquivo,
-            mime="image/png",
-            use_container_width=True,
-        )
+st.download_button(
+    "BAIXAR TABELA EM PNG",
+    data=st.session_state["png_relatorio_fa"],
+    file_name=(
+        f"RELATORIO_FA_{modulo}"
+        + (f"_{normalizar(base_selecionada).replace(' ', '_')}" if base_selecionada else "")
+        + ".png"
+    ),
+    mime="image/png",
+    use_container_width=True,
+)
 
