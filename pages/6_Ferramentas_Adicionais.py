@@ -82,20 +82,6 @@ if not st.session_state.get("autenticado"):
 
     st.stop()
 
-
-if st.session_state.get("perfil") != "admin":
-    st.error("Este módulo é restrito a administradores.")
-
-    if st.button(
-        "↩️ Voltar ao Hub",
-        key="voltar_hub_restrito_ferramentas",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
-
-    st.stop()
-
-
 # ============================================================
 # MODO ESCURO
 # ============================================================
