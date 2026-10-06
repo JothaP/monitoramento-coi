@@ -1525,18 +1525,26 @@ def gerar_png_relatorio(
     base=None,
     status=None,
 ):
-    """Gera PNG em alta densidade, mantendo a nitidez mesmo para tabelas extensas."""
-    # Renderiza em 3x a densidade lógica. A tabela mantém as mesmas proporções,
-    # mas textos e linhas possuem muito mais pixels para o PNG e para o WhatsApp.
+    """Gera PNG otimizado para envio no WhatsApp (nitidez + legibilidade após compressão)."""
+    # ------------------------------------------------------------------
+    # Estratégia para WhatsApp:
+    # 1. Células e fontes MAIORES na base (texto sobrevive ao downscale).
+    # 2. Render em alta densidade (escala 3x).
+    # 3. No final, redimensionamos nós mesmos para ~1600 px de largura
+    #    com LANCZOS (qualidade alta). Assim o WhatsApp quase não
+    #    redimensiona de novo e o texto continua legível.
+    # ------------------------------------------------------------------
     escala = 3
+    espessura = max(1, escala)  # bordas visíveis após compressão
 
-    largura_local = 235
-    largura_coluna = 82
-    largura_total = 92
-    altura_linha = 30
-    altura_header = 32
-    altura_subheader = 30
-    margem = 24
+    # Tamanhos lógicos maiores → texto legível mesmo depois do WhatsApp
+    largura_local = 260
+    largura_coluna = 90
+    largura_total = 100
+    altura_linha = 36
+    altura_header = 38
+    altura_subheader = 34
+    margem = 28
 
     largura = (
         margem * 2
@@ -1546,7 +1554,7 @@ def gerar_png_relatorio(
     )
     altura = (
         margem * 2
-        + 58
+        + 64
         + altura_header
         + altura_subheader
         + (len(locais) + 1) * altura_linha
@@ -1559,8 +1567,6 @@ def gerar_png_relatorio(
     )
     draw_base = ImageDraw.Draw(imagem)
 
-    # Proxy para desenhar usando coordenadas lógicas, automaticamente
-    # convertidas para a resolução final.
     class _DrawEscalado:
         def __init__(self, draw, fator):
             self._draw = draw
@@ -1572,25 +1578,31 @@ def gerar_png_relatorio(
             return xy
 
         def rectangle(self, xy, **kwargs):
+            if "width" not in kwargs:
+                kwargs["width"] = espessura
             return self._draw.rectangle(self._xy(xy), **kwargs)
 
         def text(self, xy, text, **kwargs):
             return self._draw.text(self._xy(xy), text, **kwargs)
 
         def textbbox(self, xy, text, **kwargs):
-            return self._draw.textbbox(self._xy(xy), text, **kwargs)
+            # Retorna bbox em coordenadas LÓGICAS (corrige centramento).
+            bbox = self._draw.textbbox(self._xy(xy), text, **kwargs)
+            f = float(self._fator)
+            return (bbox[0] / f, bbox[1] / f, bbox[2] / f, bbox[3] / f)
 
     draw = _DrawEscalado(draw_base, escala)
 
-    f_titulo = fonte(22 * escala, True)
-    f_pequena = fonte(12 * escala, False)
-    f_header = fonte(12 * escala, True)
-    f_local = fonte(11 * escala, False)
-    f_num = fonte(10 * escala, False)
-    f_total = fonte(10 * escala, True)
+    # Fontes maiores para sobreviver à compressão do WhatsApp
+    f_titulo = fonte(24 * escala, True)
+    f_pequena = fonte(13 * escala, False)
+    f_header = fonte(13 * escala, True)
+    f_local = fonte(12 * escala, False)
+    f_num = fonte(12 * escala, False)
+    f_total = fonte(12 * escala, True)
 
     titulo = TITULOS.get(modulo, "Relatório de Falta de Água")
-    draw.text((margem, 8), titulo, font=f_titulo, fill=AZUL_ESCURO)
+    draw.text((margem, 10), titulo, font=f_titulo, fill=AZUL_ESCURO)
 
     info = []
     if base:
@@ -1598,19 +1610,19 @@ def gerar_png_relatorio(
     if status:
         info.append(f"Status: {status}")
     if info:
-        draw.text((margem, 36), " | ".join(info), font=f_pequena, fill=CINZA)
+        draw.text((margem, 40), " | ".join(info), font=f_pequena, fill=CINZA)
 
-    y0 = margem + 58
+    y0 = margem + 64
     x0 = margem
 
-    # Cabeçalho de meses.
+    # Cabeçalho de meses
     draw.rectangle(
         (x0, y0, x0 + largura_local, y0 + altura_header + altura_subheader),
         fill=AZUL_ESCURO,
         outline="#B8C2CC",
     )
     draw.text(
-        (x0 + 8, y0 + 22),
+        (x0 + 10, y0 + 26),
         "LOCAL",
         font=f_header,
         fill=BRANCO,
@@ -1632,7 +1644,7 @@ def gerar_png_relatorio(
         label = periodo_label(mes)
         bbox = draw.textbbox((0, 0), label, font=f_header)
         draw.text(
-            (x + (w - (bbox[2] - bbox[0])) / 2, y0 + 8),
+            (x + (w - (bbox[2] - bbox[0])) / 2, y0 + 10),
             label,
             font=f_header,
             fill=BRANCO,
@@ -1645,9 +1657,9 @@ def gerar_png_relatorio(
         fill=AZUL_ESCURO,
         outline="#B8C2CC",
     )
-    draw.text((x + 12, y0 + 22), "TOTAL", font=f_header, fill=BRANCO)
+    draw.text((x + 18, y0 + 26), "TOTAL", font=f_header, fill=BRANCO)
 
-    # Subcabeçalho.
+    # Subcabeçalho (datas)
     x = x0 + largura_local
     for mes, dia in colunas:
         draw.rectangle(
@@ -1658,7 +1670,7 @@ def gerar_png_relatorio(
         label = data_label(dia) if dia is not None else periodo_label(mes)
         bbox = draw.textbbox((0, 0), label, font=f_header)
         draw.text(
-            (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y0 + altura_header + 7),
+            (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y0 + altura_header + 9),
             label,
             font=f_header,
             fill=AZUL_ESCURO,
@@ -1666,7 +1678,6 @@ def gerar_png_relatorio(
         x += largura_coluna
 
     y = y0 + altura_header + altura_subheader
-    maximo = int(matriz.drop(columns=["__TOTAL__"]).to_numpy().max()) if len(matriz) else 0
 
     for local in locais:
         draw.rectangle(
@@ -1674,8 +1685,8 @@ def gerar_png_relatorio(
             fill="white",
             outline="#C8CDD2",
         )
-        texto = abreviar_texto(local, 31)
-        draw.text((x0 + 7, y + 8), texto, font=f_local, fill=AZUL_ESCURO)
+        texto = abreviar_texto(local, 28)
+        draw.text((x0 + 8, y + 10), texto, font=f_local, fill=AZUL_ESCURO)
 
         x = x0 + largura_local
         for idx in range(len(colunas)):
@@ -1688,7 +1699,7 @@ def gerar_png_relatorio(
             if valor:
                 bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_num)
                 draw.text(
-                    (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 8),
+                    (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 10),
                     formatar_numero(valor),
                     font=f_num,
                     fill=AZUL_ESCURO,
@@ -1701,16 +1712,16 @@ def gerar_png_relatorio(
             fill="#E8EDF2",
             outline="#B8C2CC",
         )
-        draw.text((x + 22, y + 8), formatar_numero(total), font=f_total, fill=AZUL_ESCURO)
+        draw.text((x + 24, y + 10), formatar_numero(total), font=f_total, fill=AZUL_ESCURO)
         y += altura_linha
 
-    # Total geral.
+    # Total geral
     draw.rectangle(
         (x0, y, x0 + largura_local, y + altura_linha),
         fill=AZUL_ESCURO,
         outline=AZUL_ESCURO,
     )
-    draw.text((x0 + 7, y + 8), "TOTAL GERAL", font=f_total, fill=BRANCO)
+    draw.text((x0 + 8, y + 10), "TOTAL GERAL", font=f_total, fill=BRANCO)
 
     x = x0 + largura_local
     for idx in range(len(colunas)):
@@ -1723,7 +1734,7 @@ def gerar_png_relatorio(
         if valor:
             bbox = draw.textbbox((0, 0), formatar_numero(valor), font=f_total)
             draw.text(
-                (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 8),
+                (x + (largura_coluna - (bbox[2] - bbox[0])) / 2, y + 10),
                 formatar_numero(valor),
                 font=f_total,
                 fill=BRANCO,
@@ -1736,12 +1747,30 @@ def gerar_png_relatorio(
         fill=AZUL_ESCURO,
         outline=AZUL_ESCURO,
     )
-    draw.text((x + 22, y + 8), formatar_numero(total_geral), font=f_total, fill=BRANCO)
+    draw.text((x + 24, y + 10), formatar_numero(total_geral), font=f_total, fill=BRANCO)
+
+    # ------------------------------------------------------------------
+    # Redimensionamento controlado para o WhatsApp
+    # Alvo: largura máxima ~1600 px (WhatsApp quase não redimensiona).
+    # Usamos LANCZOS para manter a nitidez do texto.
+    # ------------------------------------------------------------------
+    MAX_LARGURA_WHATSAPP = 1600
+    if imagem.width > MAX_LARGURA_WHATSAPP:
+        ratio = MAX_LARGURA_WHATSAPP / imagem.width
+        nova_altura = int(imagem.height * ratio)
+        imagem = imagem.resize(
+            (MAX_LARGURA_WHATSAPP, nova_altura),
+            Image.Resampling.LANCZOS,
+        )
 
     output = io.BytesIO()
-    # PNG é lossless; o parâmetro de escala acima garante alta densidade de
-    # pixels sem depender do tamanho final da tabela.
-    imagem.save(output, format="PNG", optimize=True, compress_level=6)
+    imagem.save(
+        output,
+        format="PNG",
+        optimize=True,
+        compress_level=6,
+        dpi=(300, 300),
+    )
     output.seek(0)
     return output
 
