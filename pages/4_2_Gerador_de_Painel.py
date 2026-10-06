@@ -1525,7 +1525,11 @@ def gerar_png_relatorio(
     base=None,
     status=None,
 ):
-    """Gera PNG simples da mesma tabela exibida no Streamlit."""
+    """Gera PNG em alta densidade, mantendo a nitidez mesmo para tabelas extensas."""
+    # Renderiza em 3x a densidade lógica. A tabela mantém as mesmas proporções,
+    # mas textos e linhas possuem muito mais pixels para o PNG e para o WhatsApp.
+    escala = 3
+
     largura_local = 235
     largura_coluna = 82
     largura_total = 92
@@ -1548,15 +1552,42 @@ def gerar_png_relatorio(
         + (len(locais) + 1) * altura_linha
     )
 
-    imagem = Image.new("RGB", (largura, altura), "white")
-    draw = ImageDraw.Draw(imagem)
+    imagem = Image.new(
+        "RGB",
+        (largura * escala, altura * escala),
+        "white",
+    )
+    draw_base = ImageDraw.Draw(imagem)
 
-    f_titulo = fonte(22, True)
-    f_pequena = fonte(12, False)
-    f_header = fonte(12, True)
-    f_local = fonte(11, False)
-    f_num = fonte(10, False)
-    f_total = fonte(10, True)
+    # Proxy para desenhar usando coordenadas lógicas, automaticamente
+    # convertidas para a resolução final.
+    class _DrawEscalado:
+        def __init__(self, draw, fator):
+            self._draw = draw
+            self._fator = fator
+
+        def _xy(self, xy):
+            if isinstance(xy, tuple):
+                return tuple(int(round(v * self._fator)) for v in xy)
+            return xy
+
+        def rectangle(self, xy, **kwargs):
+            return self._draw.rectangle(self._xy(xy), **kwargs)
+
+        def text(self, xy, text, **kwargs):
+            return self._draw.text(self._xy(xy), text, **kwargs)
+
+        def textbbox(self, xy, text, **kwargs):
+            return self._draw.textbbox(self._xy(xy), text, **kwargs)
+
+    draw = _DrawEscalado(draw_base, escala)
+
+    f_titulo = fonte(22 * escala, True)
+    f_pequena = fonte(12 * escala, False)
+    f_header = fonte(12 * escala, True)
+    f_local = fonte(11 * escala, False)
+    f_num = fonte(10 * escala, False)
+    f_total = fonte(10 * escala, True)
 
     titulo = TITULOS.get(modulo, "Relatório de Falta de Água")
     draw.text((margem, 8), titulo, font=f_titulo, fill=AZUL_ESCURO)
@@ -1708,7 +1739,9 @@ def gerar_png_relatorio(
     draw.text((x + 22, y + 8), formatar_numero(total_geral), font=f_total, fill=BRANCO)
 
     output = io.BytesIO()
-    imagem.save(output, format="PNG", optimize=True)
+    # PNG é lossless; o parâmetro de escala acima garante alta densidade de
+    # pixels sem depender do tamanho final da tabela.
+    imagem.save(output, format="PNG", optimize=True, compress_level=6)
     output.seek(0)
     return output
 
@@ -2052,6 +2085,18 @@ for i, mes in enumerate(meses):
 meses_expandidos = st.session_state["meses_expandidos_fa"]
 colunas = montar_colunas_relatorio(dados_periodos, meses, meses_expandidos)
 matriz = gerar_matriz_relatorio(dados, locais, colunas)
+
+# Ordenação operacional: maior volume de O.S. primeiro.
+# Isso vale para cidades no API e para bairros no THE/TIM;
+# quando uma cidade é selecionada no API, vale para os bairros.
+ordem_locais = (
+    matriz["__TOTAL__"]
+    .sort_values(ascending=False, kind="stable")
+    .index
+    .tolist()
+)
+matriz = matriz.reindex(ordem_locais)
+locais = ordem_locais
 
 st.markdown(
     construir_tabela_html(
