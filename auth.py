@@ -52,7 +52,7 @@ PERMISSOES_USUARIOS = {
     # ACESSO SOMENTE AO MÓDULO 1
     # --------------------------------------------------------
     "usuario_3": {
-        "perfil": "modulo_1",
+        "perfil": "operador",
         "modulos": ["1"]
     },
 }
