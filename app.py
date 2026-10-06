@@ -8,6 +8,10 @@ from auth import (
 )
 
 
+# ============================================================
+# CONFIGURAÇÃO DA PÁGINA
+# ============================================================
+
 st.set_page_config(
     page_title="Plataforma COI - Hub Central",
     page_icon="🏢",
@@ -17,7 +21,7 @@ st.set_page_config(
 
 
 # ============================================================
-# OCULTAR NAVEGAÇÃO PADRÃO DO STREAMLIT
+# OCULTAR NAVEGAÇÃO PADRÃO
 # ============================================================
 
 st.markdown(
@@ -38,18 +42,40 @@ st.markdown(
 
 SENHA_ADMIN = st.secrets.get(
     "SENHA_ADMIN",
-    "admin2026",
 )
 
 SENHA_USUARIO = st.secrets.get(
     "SENHA_USUARIO",
-    "coi2026",
 )
 
-SENHA_MODULO_1 = st.secrets.get(
+SENHA_OPERADOR = st.secrets.get(
     "SENHA_OPERADOR",
-    "aegea2026",
 )
+
+
+# ============================================================
+# VALIDAR CONFIGURAÇÃO DAS SENHAS
+# ============================================================
+
+if not SENHA_ADMIN:
+    st.error(
+        "A senha SENHA_ADMIN não está configurada nos Secrets."
+    )
+    st.stop()
+
+
+if not SENHA_USUARIO:
+    st.error(
+        "A senha SENHA_USUARIO não está configurada nos Secrets."
+    )
+    st.stop()
+
+
+if not SENHA_OPERADOR:
+    st.error(
+        "A senha SENHA_OPERADOR não está configurada nos Secrets."
+    )
+    st.stop()
 
 
 # ============================================================
@@ -73,7 +99,10 @@ if "modulos" not in st.session_state:
 # LOGIN
 # ============================================================
 
-if not st.session_state.get("autenticado"):
+if not st.session_state.get(
+    "autenticado",
+    False,
+):
 
     st.title(
         "🔐 Acesso Restrito - Plataforma de Análises - COI"
@@ -83,7 +112,9 @@ if not st.session_state.get("autenticado"):
         "Por favor, insira a senha de acesso para continuar."
     )
 
-    with st.form("form_login"):
+    with st.form(
+        "form_login"
+    ):
 
         senha_digitada = st.text_input(
             "Senha de Acesso",
@@ -98,66 +129,78 @@ if not st.session_state.get("autenticado"):
 
         if botao_login:
 
-            # ==================================================
+            # =================================================
             # ADMIN
-            # ==================================================
+            # =================================================
 
-            if senha_digitada == SENHA_ADMIN:
+            if (
+                senha_digitada
+                == SENHA_ADMIN
+            ):
 
-                fazer_login(
+                sucesso = fazer_login(
                     usuario="admin",
                     perfil="admin",
                 )
 
-                st.success(
-                    "Login de Administrador realizado com sucesso!"
-                )
+                if sucesso:
 
-                st.rerun()
+                    st.success(
+                        "Login de Administrador realizado com sucesso!"
+                    )
+
+                    st.rerun()
 
 
-            # ==================================================
-            # OPERADOR
-            # ==================================================
+            # =================================================
+            # USUARIO
+            # =================================================
 
-            elif senha_digitada == SENHA_USUARIO:
+            elif (
+                senha_digitada
+                == SENHA_USUARIO
+            ):
 
-                fazer_login(
-                    usuario="operador",
+                sucesso = fazer_login(
+                    usuario="usuario",
                     perfil="usuario",
                 )
 
-                st.success(
-                    "Login de Usuário realizado com sucesso!"
-                )
+                if sucesso:
 
-                st.rerun()
+                    st.success(
+                        "Login de Usuário realizado com sucesso!"
+                    )
+
+                    st.rerun()
 
 
-            # ==================================================
-            # USUÁRIO SOMENTE MÓDULO 1
-            # ==================================================
+            # =================================================
+            # OPERADOR
+            # =================================================
 
             elif (
-                SENHA_MODULO_1
-                and senha_digitada == SENHA_MODULO_1
+                senha_digitada
+                == SENHA_OPERADOR
             ):
 
-                fazer_login(
-                    usuario="usuario_modulo_1",
-                    perfil="modulo_1",
+                sucesso = fazer_login(
+                    usuario="operador",
+                    perfil="operador",
                 )
 
-                st.success(
-                    "Login realizado com sucesso!"
-                )
+                if sucesso:
 
-                st.rerun()
+                    st.success(
+                        "Login de Operador realizado com sucesso!"
+                    )
+
+                    st.rerun()
 
 
-            # ==================================================
+            # =================================================
             # SENHA INCORRETA
-            # ==================================================
+            # =================================================
 
             else:
 
@@ -169,20 +212,28 @@ if not st.session_state.get("autenticado"):
 
 
 # ============================================================
-# VALIDAR SESSÃO EXISTENTE
+# VALIDAR SESSÃO
 # ============================================================
 
 if not verificar_autenticacao():
 
     st.session_state.autenticado = False
+
+    st.session_state.usuario_logado = ""
+
+    st.session_state.perfil = ""
+
+    st.session_state.modulos = []
+
     st.rerun()
 
 
 # ============================================================
-# HUB CENTRAL
+# MODO ESCURO
 # ============================================================
 
 if "modo_escuro_hub" not in st.session_state:
+
     st.session_state.modo_escuro_hub = False
 
 
@@ -193,12 +244,10 @@ modo_escuro_hub = st.toggle(
 )
 
 
-st.session_state.modo_escuro_hub = modo_escuro_hub
+st.session_state.modo_escuro_hub = (
+    modo_escuro_hub
+)
 
-
-# ============================================================
-# MODO ESCURO
-# ============================================================
 
 if modo_escuro_hub:
 
@@ -264,7 +313,8 @@ perfil_atual = st.session_state.get(
 
 
 st.write(
-    f"Bem-vindo(a)! Perfil conectado: **{perfil_atual}**"
+    f"Bem-vindo(a)! Perfil conectado: "
+    f"**{perfil_atual}**"
 )
 
 st.divider()
@@ -277,7 +327,7 @@ st.markdown("")
 
 
 # ============================================================
-# MÓDULOS DISPONÍVEIS
+# OBTENER PERMISSÕES
 # ============================================================
 
 modulo_1 = tem_acesso_modulo("1")
@@ -290,21 +340,23 @@ modulo_7 = tem_acesso_modulo("7")
 
 
 # ============================================================
-# PRIMEIRA LINHA
+# MÓDULOS
 # ============================================================
 
-colunas = st.columns(3)
+# ------------------------------------------------------------
+# PRIMEIRA LINHA
+# ------------------------------------------------------------
 
-indice = 0
+col1, col2, col3 = st.columns(3)
 
 
 # ============================================================
 # MÓDULO 1
 # ============================================================
 
-if modulo_1:
+with col1:
 
-    with colunas[indice]:
+    if modulo_1:
 
         st.markdown("#### 💧 Módulo 1")
         st.markdown("**Baixa Pressão**")
@@ -321,16 +373,14 @@ if modulo_1:
                 "pages/1_Baixa_Pressao.py"
             )
 
-    indice += 1
-
 
 # ============================================================
 # MÓDULO 2
 # ============================================================
 
-if modulo_2:
+with col2:
 
-    with colunas[indice]:
+    if modulo_2:
 
         st.markdown("#### 🗺️ Módulo 2")
         st.markdown("**Mapeamento de Pressão**")
@@ -347,20 +397,20 @@ if modulo_2:
                 "pages/2_Mapeamento_Pressao.py"
             )
 
-    indice += 1
-
 
 # ============================================================
 # MÓDULO 3
 # ============================================================
 
-if modulo_3:
+with col3:
 
-    with colunas[indice]:
+    if modulo_3:
 
         st.markdown("#### 🚰 Módulo 3")
         st.markdown("**Vazão de Poços**")
-        st.caption("Status: Em desenvolvimento")
+        st.caption(
+            "Status: Em desenvolvimento"
+        )
 
         if st.button(
             "Acessar Vazão de Poços",
@@ -372,26 +422,23 @@ if modulo_3:
                 "pages/3_Vazao_Pocos.py"
             )
 
-    indice += 1
 
-
-# ============================================================
+# ------------------------------------------------------------
 # SEGUNDA LINHA
-# ============================================================
+# ------------------------------------------------------------
 
 st.markdown("")
 
-colunas = st.columns(3)
-indice = 0
+col4, col5, col6 = st.columns(3)
 
 
 # ============================================================
 # MÓDULO 4
 # ============================================================
 
-if modulo_4:
+with col4:
 
-    with colunas[indice]:
+    if modulo_4:
 
         st.markdown("#### 🛠️ Módulo 4")
         st.markdown("**Ferramentas Operacionais**")
@@ -408,16 +455,14 @@ if modulo_4:
                 "pages/4_Ferramentas_Operacionais.py"
             )
 
-    indice += 1
-
 
 # ============================================================
 # MÓDULO 5
 # ============================================================
 
-if modulo_5:
+with col5:
 
-    with colunas[indice]:
+    if modulo_5:
 
         st.markdown("#### 📋 Módulo 5")
         st.markdown("**Cadastros e Consultas COI**")
@@ -434,16 +479,14 @@ if modulo_5:
                 "pages/5_Cadastros_Consultas_COI.py"
             )
 
-    indice += 1
-
 
 # ============================================================
 # MÓDULO 6
 # ============================================================
 
-if modulo_6:
+with col6:
 
-    with colunas[indice]:
+    if modulo_6:
 
         st.markdown("#### 🔧 Módulo 6")
         st.markdown("**Ferramentas Adicionais**")
@@ -460,21 +503,18 @@ if modulo_6:
                 "pages/6_Ferramentas_Adicionais.py"
             )
 
-    indice += 1
 
-
-# ============================================================
+# ------------------------------------------------------------
 # TERCEIRA LINHA
-# ============================================================
+# ------------------------------------------------------------
 
 if modulo_7:
 
     st.markdown("")
 
-    colunas = st.columns(3)
-    indice = 0
+    col7, col8, col9 = st.columns(3)
 
-    with colunas[0]:
+    with col7:
 
         st.markdown("#### 🗺️ Módulo 7")
         st.markdown("**Mapeamento de Melhorias**")
@@ -497,6 +537,8 @@ if modulo_7:
 # ============================================================
 
 st.markdown("")
+
+st.divider()
 
 if st.button(
     "Encerrar Sessão / Sair",
