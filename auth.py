@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -17,44 +18,43 @@ COOKIE_NAME = "coi_auth_token"
 
 
 # ============================================================
-# USUÁRIOS E PERMISSÕES
+# PERMISSÕES POR PERFIL
 # ============================================================
 #
-# IMPORTANTE:
-# Esta estrutura define APENAS as permissões.
+# ADMIN
+# Acesso total aos módulos disponíveis.
 #
-# A validação da senha pode continuar sendo feita
-# pelo sistema de login que você já possui.
+# USUARIO
+# Acesso aos módulos 1, 2, 4, 5 e 6.
 #
-# Basta ajustar os nomes dos usuários abaixo.
+# OPERADOR
+# Acesso SOMENTE ao módulo 1.
 #
+# ============================================================
 
-PERMISSOES_USUARIOS = {
+PERMISSOES_PERFIS = {
 
-    # --------------------------------------------------------
-    # ADMINISTRADOR
-    # --------------------------------------------------------
-    "usuario_admin": {
-        "perfil": "admin",
-        "modulos": ["1", "2", "3", "4", "5", "6", "7", "8"]
-    },
+    "admin": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+    ],
 
-    # --------------------------------------------------------
-    # USUÁRIO ATUAL
-    # --------------------------------------------------------
-    "usuario_2": {
-        "perfil": "usuario",
-        "modulos": ["1", "2", "3", "4", "5", "6", "7", "8"]
-    },
+    "usuario": [
+        "1",
+        "2",
+        "4",
+        "5",
+        "6",
+    ],
 
-    # --------------------------------------------------------
-    # NOVO USUÁRIO
-    # ACESSO SOMENTE AO MÓDULO 1
-    # --------------------------------------------------------
-    "usuario_3": {
-        "perfil": "operador",
-        "modulos": ["1"]
-    },
+    "operador": [
+        "1",
+    ],
 }
 
 
@@ -74,7 +74,9 @@ def get_controller():
             key="coi_auth_controller"
         )
 
-        st.session_state["cookie_controller"] = controller
+        st.session_state[
+            "cookie_controller"
+        ] = controller
 
     return controller
 
@@ -85,13 +87,15 @@ def get_controller():
 
 def obter_secret_key():
 
-    chave = st.secrets.get("COI_SECRET_KEY")
+    chave = st.secrets.get(
+        "COI_SECRET_KEY"
+    )
 
     if not chave:
 
         raise RuntimeError(
-            "A chave COI_SECRET_KEY não foi configurada "
-            "nos Secrets do Streamlit."
+            "A chave COI_SECRET_KEY não foi "
+            "configurada nos Secrets do Streamlit."
         )
 
     return str(chave)
@@ -113,106 +117,115 @@ def gerar_assinatura(conteudo):
 
 
 # ============================================================
-# PERMISSÕES
+# OBTER MÓDULOS DO PERFIL
 # ============================================================
 
-def obter_permissoes_usuario(usuario):
+def obter_modulos_perfil(perfil):
 
-    usuario = str(usuario)
+    perfil = str(
+        perfil or ""
+    ).lower().strip()
 
-    dados = PERMISSOES_USUARIOS.get(usuario)
-
-    if not dados:
-
-        return {
-            "perfil": "usuario",
-            "modulos": []
-        }
-
-    return {
-        "perfil": dados.get("perfil", "usuario"),
-        "modulos": [
-            str(modulo)
-            for modulo in dados.get("modulos", [])
-        ]
-    }
+    return [
+        str(modulo)
+        for modulo in PERMISSOES_PERFIS.get(
+            perfil,
+            [],
+        )
+    ]
 
 
-def usuario_tem_acesso(usuario, modulo):
-
-    permissoes = obter_permissoes_usuario(usuario)
-
-    return str(modulo) in permissoes["modulos"]
-
+# ============================================================
+# VERIFICAR ACESSO AO MÓDULO
+# ============================================================
 
 def tem_acesso_modulo(modulo):
 
-    usuario = st.session_state.get(
-        "usuario_logado"
+    perfil = st.session_state.get(
+        "perfil",
+        "",
     )
 
-    if not usuario:
+    if not perfil:
         return False
 
-    return usuario_tem_acesso(
-        usuario,
-        modulo
+    modulos = obter_modulos_perfil(
+        perfil
     )
 
+    return str(modulo) in modulos
+
+
+# ============================================================
+# OBTER MÓDULOS DO USUÁRIO LOGADO
+# ============================================================
 
 def obter_modulos_usuario():
 
-    usuario = st.session_state.get(
-        "usuario_logado"
+    perfil = st.session_state.get(
+        "perfil",
+        "",
     )
 
-    if not usuario:
-        return []
-
-    return obter_permissoes_usuario(
-        usuario
-    )["modulos"]
+    return obter_modulos_perfil(
+        perfil
+    )
 
 
 # ============================================================
-# CRIAÇÃO DO TOKEN
+# CRIAR TOKEN
 # ============================================================
 
-def criar_token(usuario, perfil=None):
+def criar_token(
+    usuario,
+    perfil,
+):
 
-    agora = datetime.now(timezone.utc)
+    agora = datetime.now(
+        timezone.utc
+    )
 
     expiracao = (
         agora
-        + timedelta(hours=TEMPO_SESSAO_HORAS)
+        + timedelta(
+            hours=TEMPO_SESSAO_HORAS
+        )
     )
 
-    permissoes = obter_permissoes_usuario(
+    usuario = str(
         usuario
     )
 
-    # Se perfil não foi informado,
-    # utiliza o perfil cadastrado.
-    if perfil is None:
-        perfil = permissoes["perfil"]
+    perfil = str(
+        perfil
+    ).lower().strip()
+
+    modulos = obter_modulos_perfil(
+        perfil
+    )
 
     dados = {
 
-        "usuario": str(usuario),
+        "usuario": usuario,
 
-        "perfil": str(perfil),
+        "perfil": perfil,
 
-        "modulos": permissoes["modulos"],
+        "modulos": modulos,
 
         "expira_em": expiracao.isoformat(),
 
-        "nonce": secrets.token_hex(16),
+        "nonce": secrets.token_hex(
+            16
+        ),
     }
 
     conteudo = json.dumps(
         dados,
         ensure_ascii=False,
-        separators=(",", ":"),
+        separators=(
+            ",",
+            ":",
+        ),
     )
 
     assinatura = gerar_assinatura(
@@ -229,12 +242,15 @@ def criar_token(usuario, perfil=None):
     return json.dumps(
         token,
         ensure_ascii=False,
-        separators=(",", ":"),
+        separators=(
+            ",",
+            ":",
+        ),
     )
 
 
 # ============================================================
-# VALIDAÇÃO DO TOKEN
+# VALIDAR TOKEN
 # ============================================================
 
 def validar_token(token):
@@ -244,14 +260,18 @@ def validar_token(token):
         if not token:
             return None
 
-        token_data = json.loads(token)
+        token_data = json.loads(
+            token
+        )
 
         conteudo = token_data.get(
             "dados"
         )
 
         assinatura_recebida = (
-            token_data.get("assinatura")
+            token_data.get(
+                "assinatura"
+            )
         )
 
         if (
@@ -260,12 +280,16 @@ def validar_token(token):
         ):
             return None
 
-        assinatura_correta = gerar_assinatura(
-            conteudo
+        assinatura_correta = (
+            gerar_assinatura(
+                conteudo
+            )
         )
 
         if not hmac.compare_digest(
-            str(assinatura_recebida),
+            str(
+                assinatura_recebida
+            ),
             assinatura_correta,
         ):
             return None
@@ -273,6 +297,10 @@ def validar_token(token):
         dados = json.loads(
             conteudo
         )
+
+        # ----------------------------------------------------
+        # VALIDAR EXPIRAÇÃO
+        # ----------------------------------------------------
 
         expira_em = datetime.fromisoformat(
             dados["expira_em"]
@@ -284,38 +312,62 @@ def validar_token(token):
                 tzinfo=timezone.utc
             )
 
-        if datetime.now(timezone.utc) >= expira_em:
-
-            return None
-
-        if not dados.get("usuario"):
+        if (
+            datetime.now(
+                timezone.utc
+            )
+            >= expira_em
+        ):
 
             return None
 
         # ----------------------------------------------------
-        # Recupera as permissões atuais do usuário.
-        #
-        # Isso é proposital.
-        #
-        # Assim, se você alterar a permissão do usuário
-        # no código, ela não fica presa ao token antigo.
+        # VALIDAR USUÁRIO
         # ----------------------------------------------------
 
-        usuario = str(
-            dados["usuario"]
+        usuario = dados.get(
+            "usuario"
         )
 
-        permissoes = obter_permissoes_usuario(
-            usuario
-        )
+        if not usuario:
 
-        dados["perfil"] = permissoes[
+            return None
+
+        # ----------------------------------------------------
+        # VALIDAR PERFIL
+        # ----------------------------------------------------
+
+        perfil = dados.get(
             "perfil"
-        ]
+        )
 
-        dados["modulos"] = permissoes[
-            "modulos"
-        ]
+        if not perfil:
+
+            return None
+
+        perfil = str(
+            perfil
+        ).lower().strip()
+
+        # ----------------------------------------------------
+        # IMPORTANTE:
+        #
+        # As permissões são recalculadas a partir do perfil
+        # atual, em vez de confiar somente no cookie.
+        # ----------------------------------------------------
+
+        modulos = obter_modulos_perfil(
+            perfil
+        )
+
+        # Perfil inexistente = sem acesso
+        if perfil not in PERMISSOES_PERFIS:
+
+            return None
+
+        dados["perfil"] = perfil
+
+        dados["modulos"] = modulos
 
         return dados
 
@@ -325,40 +377,58 @@ def validar_token(token):
 
 
 # ============================================================
-# LOGIN
+# FAZER LOGIN
 # ============================================================
 
-def fazer_login(usuario, perfil=None):
+def fazer_login(
+    usuario,
+    perfil,
+):
 
-    controller = get_controller()
-
-    usuario = str(usuario)
-
-    permissoes = obter_permissoes_usuario(
+    usuario = str(
         usuario
     )
 
-    if perfil is None:
+    perfil = str(
+        perfil
+    ).lower().strip()
 
-        perfil = permissoes["perfil"]
+    # --------------------------------------------------------
+    # Não permite login com perfil inexistente
+    # --------------------------------------------------------
+
+    if perfil not in PERMISSOES_PERFIS:
+
+        return False
+
+    controller = get_controller()
+
+    # --------------------------------------------------------
+    # Criar token
+    # --------------------------------------------------------
 
     token = criar_token(
         usuario,
-        perfil
+        perfil,
     )
 
+    # --------------------------------------------------------
+    # Salvar cookie
+    # --------------------------------------------------------
+
     controller.set(
-
         COOKIE_NAME,
-
         token,
-
         max_age=(
             TEMPO_SESSAO_HORAS
             * 60
             * 60
         ),
     )
+
+    # --------------------------------------------------------
+    # Salvar sessão
+    # --------------------------------------------------------
 
     st.session_state[
         "autenticado"
@@ -374,13 +444,15 @@ def fazer_login(usuario, perfil=None):
 
     st.session_state[
         "modulos"
-    ] = permissoes["modulos"]
+    ] = obter_modulos_perfil(
+        perfil
+    )
 
     return True
 
 
 # ============================================================
-# COOKIE
+# OBTER COOKIE
 # ============================================================
 
 def obter_cookie():
@@ -397,43 +469,38 @@ def obter_cookie():
 
 
 # ============================================================
-# AUTENTICAÇÃO
+# VERIFICAR AUTENTICAÇÃO
 # ============================================================
 
 def verificar_autenticacao():
 
     # --------------------------------------------------------
-    # Sessão já autenticada
+    # Se a sessão atual já está autenticada
     # --------------------------------------------------------
 
-    if st.session_state.get(
-        "autenticado"
-    ) is True:
+    if (
+        st.session_state.get(
+            "autenticado"
+        )
+        is True
+    ):
 
-        usuario = st.session_state.get(
-            "usuario_logado"
+        perfil = st.session_state.get(
+            "perfil",
+            "",
         )
 
-        if usuario:
-
-            permissoes = (
-                obter_permissoes_usuario(
-                    usuario
-                )
-            )
-
-            st.session_state[
-                "perfil"
-            ] = permissoes["perfil"]
-
-            st.session_state[
-                "modulos"
-            ] = permissoes["modulos"]
+        # Recalcular permissões
+        st.session_state[
+            "modulos"
+        ] = obter_modulos_perfil(
+            perfil
+        )
 
         return True
 
     # --------------------------------------------------------
-    # Recupera cookie
+    # Tentar recuperar cookie
     # --------------------------------------------------------
 
     token = obter_cookie()
@@ -441,6 +508,10 @@ def verificar_autenticacao():
     if not token:
 
         return False
+
+    # --------------------------------------------------------
+    # Validar cookie
+    # --------------------------------------------------------
 
     dados = validar_token(
         token
@@ -461,7 +532,7 @@ def verificar_autenticacao():
         return False
 
     # --------------------------------------------------------
-    # Restaura sessão
+    # Restaurar sessão
     # --------------------------------------------------------
 
     st.session_state[
@@ -470,17 +541,21 @@ def verificar_autenticacao():
 
     st.session_state[
         "usuario_logado"
-    ] = dados["usuario"]
+    ] = dados[
+        "usuario"
+    ]
 
     st.session_state[
         "perfil"
-    ] = dados["perfil"]
+    ] = dados[
+        "perfil"
+    ]
 
     st.session_state[
         "modulos"
     ] = dados.get(
         "modulos",
-        []
+        [],
     )
 
     return True
@@ -492,6 +567,10 @@ def verificar_autenticacao():
 
 def fazer_logout():
 
+    # --------------------------------------------------------
+    # Remover cookie
+    # --------------------------------------------------------
+
     try:
 
         get_controller().remove(
@@ -502,8 +581,15 @@ def fazer_logout():
 
         pass
 
+    # --------------------------------------------------------
+    # Limpar sessão
+    # --------------------------------------------------------
+
     for key in list(
         st.session_state.keys()
     ):
 
-        del st.session_state[key]
+        del st.session_state[
+            key
+        ]
+```
