@@ -101,9 +101,7 @@ with col1:
     use_container_width=True,
     key="btn_gerador_lotes",
 ):
-
     st.session_state.ferramenta_atual = None
-
     st.switch_page(
         "pages/4_1_Gerador_Lotes_Cancelamento.py"
     )
