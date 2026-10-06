@@ -1003,7 +1003,7 @@ def carregar_arquivo_eventos(nome_arquivo):
 # RENDERIZAÇÃO
 # ============================================================
 
-def render():
+def render_eventos():
     aplicar_modo_visual()
 
     st.title("Análise de Eventos")
