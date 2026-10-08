@@ -33,7 +33,7 @@ st.set_page_config(
 
 verificar_autenticacao()
 
-SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -1266,15 +1266,19 @@ if not df_loggers.empty:
 # ABAS
 # ============================================================
 
-aba_importacao, aba_farol, aba_eventos, aba_cadastros = st.tabs([
-    "📥 Importação",
-    "🚨 Farol O.S.",
-    "⚡ Eventos",
-    "📍 Cadastros",
-])
+with st.sidebar:
+    st.divider()
+    st.markdown("### 🧭 Navegação")
+    pagina_farol = st.radio(
+        "Seção",
+        ["🗺️ Mapa operacional", "📥 Importação", "⚡ Eventos", "📍 Cadastros"],
+        label_visibility="collapsed",
+        key="farol_pagina",
+    )
+    st.caption("O mapa é a tela inicial do Farol Operacional.")
 
 
-with aba_importacao:
+if pagina_farol == "📥 Importação":
     st.subheader("Importação das bases")
     st.info("Os dados de O.S. e eventos são acumulados no Google Sheets. O.S. repetida é atualizada; eventos idênticos não são duplicados.")
 
@@ -1318,11 +1322,16 @@ with aba_importacao:
     m4.metric("Eventos", len(df_eventos))
 
 
-with aba_farol:
-    st.subheader("Concentração geográfica de O.S.")
+if pagina_farol == "🗺️ Mapa operacional":
+    st.subheader("🗺️ Visão geográfica operacional")
 
     if df_pontos.empty:
         st.warning("A aba PONTOS ainda não possui dados.")
+        mapa = criar_mapa(
+            bairros, df_pontos, df_pocos, df_loggers,
+            pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
+        )
+        st_folium(mapa, width=None, height=650, returned_objects=[])
     else:
         # Filtros.
         f1, f2, f3, f4 = st.columns(4)
@@ -1369,9 +1378,17 @@ with aba_farol:
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
+        st.markdown("### 🗺️ Mapa operacional")
+        mapa = criar_mapa(
+            bairros, analise, df_pocos, df_loggers, concentracoes,
+            proximidades, mostrar_bairros=bool(bairros),
+        )
+        st_folium(mapa, width=None, height=650, returned_objects=[])
+
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
+            st.markdown("### Ranking e proximidades")
             esquerda, direita = st.columns([1.1, 1.9])
             with esquerda:
                 st.markdown("### Ranking das concentrações")
@@ -1392,19 +1409,10 @@ with aba_farol:
                     )
 
             with direita:
-                mapa = criar_mapa(
-                    bairros,
-                    analise,
-                    df_pocos,
-                    df_loggers,
-                    concentracoes,
-                    proximidades,
-                    mostrar_bairros=bool(bairros),
-                )
-                st_folium(mapa, width=None, height=650, returned_objects=[])
+                st.caption("O mapa completo aparece acima. Use o ranking para identificar as áreas prioritárias.")
 
 
-with aba_eventos:
+if pagina_farol == "⚡ Eventos":
     st.subheader("Eventos x O.S. por bairro")
 
     if df_eventos.empty:
@@ -1436,7 +1444,7 @@ with aba_eventos:
         st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
 
 
-with aba_cadastros:
+if pagina_farol == "📍 Cadastros":
     st.subheader("Cadastro de Poços / Ativos e Loggers")
 
     c_poco, c_logger = st.columns(2)
