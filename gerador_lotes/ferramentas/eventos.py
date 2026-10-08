@@ -1083,7 +1083,7 @@ def cruzar_eventos_com_backlog(
 
     resultado = []
     avisos = []
-    protocolos_cancelamento = set()
+    protocolos_cancelamento = {}
 
     # ========================================================
     # CRUZAMENTO EVENTO x ÁREA x O.S.
@@ -1242,12 +1242,16 @@ def cruzar_eventos_com_backlog(
 
             if quantidade_os > 0:
 
-                # Apenas protocolos de O.S. efetivamente incluídas
-                # no lote, sem duplicação entre eventos ou áreas.
+                # Associa cada protocolo à observação do evento.
+                # Um protocolo pode aparecer em mais de um evento:
+                # nesse caso, reúne as observações distintas na mesma linha.
+                observacao_evento = montar_observacao(descricao)
                 for _, protocolo in chaves_os_evento:
                     codigo = str(protocolo).strip()
                     if codigo and codigo.upper() not in {"NAN", "NONE", "NAT"}:
-                        protocolos_cancelamento.add(codigo)
+                        observacoes = protocolos_cancelamento.setdefault(codigo, [])
+                        if observacao_evento and observacao_evento not in observacoes:
+                            observacoes.append(observacao_evento)
 
                 resultado.append(
                     {
@@ -1292,7 +1296,10 @@ def cruzar_eventos_com_backlog(
         len(df),
         avisos,
         total_os,
-        sorted(protocolos_cancelamento),
+        [
+            f"{codigo}\t{' | '.join(protocolos_cancelamento[codigo])}"
+            for codigo in sorted(protocolos_cancelamento)
+        ],
     )
 
 
@@ -1774,14 +1781,14 @@ def render_eventos():
 
             with col_acao_2:
                 st.download_button(
-                    "📄 Baixar protocolos TXT",
+                    "📄 Baixar protocolos e observações TXT",
                     data=conteudo_txt.encode("utf-8"),
                     file_name=f"Protocolos Eventos {modo_resultado}.txt",
                     mime="text/plain; charset=utf-8",
                     use_container_width=True,
                     disabled=not protocolos_txt,
                     key="btn_baixar_eventos_txt",
-                    help="Um código de protocolo por linha, sem duplicatas.",
+                    help="Protocolo e observação do(s) evento(s), separados por tabulação, sem protocolos duplicados.",
                 )
 
             with col_acao_3:
