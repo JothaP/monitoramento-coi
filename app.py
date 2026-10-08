@@ -407,19 +407,19 @@ with col3:
     if modulo_3:
 
         st.markdown("#### 🚰 Módulo 3")
-        st.markdown("**Vazão de Poços**")
+        st.markdown("**Farol Operacional**")
         st.caption(
             "Status: Em desenvolvimento"
         )
 
         if st.button(
-            "Acessar Vazão de Poços",
+            "Acessar Farol Operacional",
             use_container_width=True,
-            key="acessar_vazao_pocos",
+            key="acessar_farol_operacional",
         ):
 
             st.switch_page(
-                "pages/3_Vazao_Pocos.py"
+                "pages/3_Farol_Operacional.py"
             )
 
 
