@@ -374,9 +374,13 @@ def mapear_colunas(df, destino):
 
 def preparar_pontos(df):
     out = mapear_colunas(df, CABECALHO_PONTOS)
-    out["Latitude"] = out["Latitude"].map(parse_float)
-    out["Longitude"] = out["Longitude"].map(parse_float)
-    out = out.loc[~out.apply(lambda r: all(not str(x).strip() for x in r), axis=1)].copy()
+    for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
+        out[coluna] = out[coluna].map(lambda valor: normalizar_coordenada(valor, tipo))
+    # Preserva as O.S. sem geolocalização para consulta e diagnóstico.
+    colunas_conteudo = [c for c in CABECALHO_PONTOS if c not in ("Latitude", "Longitude")]
+    out = out.loc[out[colunas_conteudo].apply(
+        lambda linha: any(str(v).strip() for v in linha), axis=1
+    )].copy()
     return out
 
 
@@ -705,8 +709,8 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
     fg_os = folium.FeatureGroup(name="O.S.", show=True)
     if not df_pontos.empty:
         for _, r in df_pontos.iterrows():
-            lat = parse_float(r.get("Latitude"))
-            lon = parse_float(r.get("Longitude"))
+            lat = normalizar_coordenada(r.get("Latitude"), "lat")
+            lon = normalizar_coordenada(r.get("Longitude"), "lon")
             if lat is None or lon is None:
                 continue
             status = normalizar_texto(r.get("Status OS", ""))
@@ -776,6 +780,25 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         ).add_to(fg_conc)
     fg_conc.add_to(mapa)
 
+    # Centraliza o mapa nos registros efetivamente desenhados, como no Módulo 1.
+    coordenadas_visiveis = []
+    for quadro, lat_col, lon_col in (
+        (df_pontos, "Latitude", "Longitude"),
+        (df_pocos, "LATITUDE", "LONGITUDE"),
+        (df_loggers, "LATITUDE", "LONGITUDE"),
+    ):
+        if quadro is not None and not quadro.empty:
+            for _, registro in quadro.iterrows():
+                lat = normalizar_coordenada(registro.get(lat_col), "lat")
+                lon = normalizar_coordenada(registro.get(lon_col), "lon")
+                if lat is not None and lon is not None:
+                    coordenadas_visiveis.append([lat, lon])
+    if coordenadas_visiveis:
+        if len(coordenadas_visiveis) == 1:
+            mapa.location = coordenadas_visiveis[0]
+            mapa.options["zoom"] = 15
+        else:
+            mapa.fit_bounds(coordenadas_visiveis, padding=(25, 25), max_zoom=15)
     folium.LayerControl(collapsed=False).add_to(mapa)
     return mapa
 
@@ -790,7 +813,7 @@ def normalizar_texto_series(serie):
 # ============================================================
 def normalizar_coordenada(valor, tipo="lat"):
     n = parse_float(valor)
-    if n is None or n == 0:
+    if n is None or not math.isfinite(n) or n == 0:
         return None
     if tipo == "lat" and not (-90 <= n <= 90):
         return None
@@ -1253,7 +1276,7 @@ with st.spinner("Carregando dados operacionais..."):
 
 # Normaliza tipos para análise.
 if not df_pontos.empty:
-    df_pontos = df_pontos.reindex(columns=CABECALHO_PONTOS).fillna("")
+    df_pontos = preparar_pontos(df_pontos)
     df_pontos["Latitude"] = df_pontos["Latitude"].map(parse_float)
     df_pontos["Longitude"] = df_pontos["Longitude"].map(parse_float)
 
@@ -1377,6 +1400,15 @@ if pagina_farol == "🗺️ Mapa operacional":
         k2.metric("O.S. com coordenada", int(analise[["Latitude", "Longitude"]].notna().all(axis=1).sum()))
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
+
+        with st.expander("🔎 Diagnóstico das coordenadas", expanded=False):
+            total_base = len(df_pontos)
+            validas_base = int(df_pontos[["Latitude", "Longitude"]].notna().all(axis=1).sum())
+            st.write(f"O.S. carregadas: **{total_base}** | Coordenadas válidas: **{validas_base}** | Sem coordenadas válidas: **{total_base - validas_base}** | Após filtros: **{len(analise)}**")
+            if validas_base == 0:
+                st.warning("Nenhuma coordenada válida foi identificada na aba PONTOS. Confira os cabeçalhos e os valores de Latitude/Longitude.")
+            if total_base:
+                st.dataframe(df_pontos[["Nº da O.S", "Latitude", "Longitude", "Cidade", "Bairro"]].head(15), hide_index=True, use_container_width=True)
 
         st.markdown("### 🗺️ Mapa operacional")
         mapa = criar_mapa(
