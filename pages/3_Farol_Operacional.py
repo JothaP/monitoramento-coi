@@ -94,3 +94,4 @@ CABECALHO_EVENTOS = [
     "Início",
     "Prev. Término",
     "Término Real",
+]
