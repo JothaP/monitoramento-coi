@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import math
@@ -32,7 +33,7 @@ st.set_page_config(
 
 verificar_autenticacao()
 
-SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+SPREADSHEET_ID = "15iN3YEGyxk3l1ZKaHJJp-BvTfVHqpd7gL1GX3RbAKUU"
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -223,8 +224,13 @@ def extrair_bairros_evento(valor):
 
 @st.cache_resource(show_spinner=False)
 def obter_cliente_google():
+    dados = st.secrets["gcp_json"]
+    if isinstance(dados, str):
+        dados = json.loads(dados)
+    else:
+        dados = dict(dados)
     credenciais = Credentials.from_service_account_info(
-        st.secrets["gcp_json"],
+        dados,
         scopes=[
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
@@ -1209,25 +1215,34 @@ with st.sidebar:
     )
 
     st.divider()
-    kmz_upload = st.file_uploader("KMZ dos bairros (opcional)", type=["kmz", "kml"])
+    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        try:
+            st.switch_page("app.py")
+        except Exception as erro:
+            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
 
-# Carrega a camada geográfica.
+if modo_escuro:
+    st.markdown("""
+    <style>
+      .stApp { background-color: #0e1117; color: #fafafa; }
+      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
+      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
+      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Camada geográfica fixa, versionada junto com o projeto no GitHub.
 bairros = []
 kmz_nome = ARQUIVO_KMZ_PADRAO
 try:
-    if kmz_upload is not None:
-        if kmz_upload.name.lower().endswith(".kmz"):
-            bairros = carregar_kmz_bytes(kmz_upload.getvalue())
-        else:
-            bairros = carregar_kml_bytes(kmz_upload.getvalue())
-        kmz_nome = kmz_upload.name
-    elif os.path.exists(ARQUIVO_KMZ_PADRAO):
-        with open(ARQUIVO_KMZ_PADRAO, "rb") as f:
-            bairros = carregar_kmz_bytes(f.read())
+    if os.path.isfile(ARQUIVO_KMZ_PADRAO):
+        with open(ARQUIVO_KMZ_PADRAO, "rb") as arquivo_kmz:
+            bairros = carregar_kmz_bytes(arquivo_kmz.read())
     else:
-        st.sidebar.warning("TERESINA.kmz não encontrado. Coloque o arquivo na mesma pasta do app ou carregue-o acima.")
-except Exception as e:
-    st.error(f"Erro ao carregar a camada de bairros: {e}")
+        st.sidebar.warning("TERESINA.kmz não encontrado na raiz do projeto.")
+except Exception as erro:
+    st.error(f"Erro ao carregar a camada de bairros: {erro}")
 
 # Inicializa as quatro abas.
 with st.spinner("Carregando dados operacionais..."):
