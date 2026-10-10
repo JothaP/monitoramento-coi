@@ -409,7 +409,7 @@ with col3:
         st.markdown("#### 🚰 Módulo 3")
         st.markdown("**Farol Operacional**")
         st.caption(
-            "Status: Em desenvolvimento"
+            "Status: Ativo"
         )
 
         if st.button(
