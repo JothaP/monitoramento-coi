@@ -1137,14 +1137,19 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             lon = normalizar_coordenada(r.get("Longitude"), "lon")
             if lat is None or lon is None:
                 continue
-            status = normalizar_texto(r.get("Status OS", ""))
-            cor = "red" if "PEND" in status else "green" if "ENCERR" in status or "VISIT" in status else "blue"
+            # Cor definida pelo serviço executado, independentemente do status da O.S.
+            servico_os = str(r.get("Serviço Executado", "") or "")
+            eh_informacao = bool(re.search(r"(?<!\d)146005(?!\d)", servico_os))
+            cor = "#F28C28" if eh_informacao else "#1677D2"
+            classificacao = ("Informação de Falta de água (146005)" if eh_informacao
+                             else "Reclamação de Falta de água")
             popup = folium.Popup(
                 f"<b>O.S.:</b> {r.get('Nº da O.S','')}<br>"
                 f"<b>Matrícula:</b> {r.get('Matrícula','')}<br>"
                 f"<b>Bairro:</b> {r.get('Bairro','')}<br>"
                 f"<b>Status:</b> {r.get('Status OS','')}<br>"
-                f"<b>Serviço:</b> {r.get('Serviço Executado','')}",
+                f"<b>Serviço:</b> {r.get('Serviço Executado','')}<br>"
+                f"<b>Classificação:</b> {classificacao}",
                 max_width=350,
             )
             folium.CircleMarker(
@@ -2126,6 +2131,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         with f4:
             apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
 
+        servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
+                              if str(x).strip()})
+        servico_sel = st.multiselect(
+            "Serviço Executado",
+            options=servicos_os,
+            placeholder="Todos os serviços",
+            help="Selecione um ou mais serviços; sem seleção, todos são exibidos.",
+            key="farol_filtro_servico_executado",
+        )
+
         analise = df_pontos.copy()
         if cidade_sel != "Todas":
             analise = analise[normalizar_texto_series(analise["Cidade"]) == normalizar_texto(cidade_sel)]
@@ -2135,6 +2150,9 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         if status_sel:
             status_norm = {normalizar_texto(x) for x in status_sel}
             analise = analise[analise["Status OS"].map(normalizar_texto).isin(status_norm)]
+        if servico_sel:
+            servicos_norm = {normalizar_texto(x) for x in servico_sel}
+            analise = analise[analise["Serviço Executado"].map(normalizar_texto).isin(servicos_norm)]
         if apenas_com_coord:
             analise = analise.dropna(subset=["Latitude", "Longitude"])
 
@@ -2170,6 +2188,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             f"{len(ativos_loggers)} logger(s) no mapa."
         )
         st.markdown("### 🗺️ Mapa operacional")
+        st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
         mapa = criar_mapa(
             bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
             proximidades, mostrar_bairros=bool(bairros),
