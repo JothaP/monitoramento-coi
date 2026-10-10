@@ -5,6 +5,7 @@ import re
 import math
 import hashlib
 import zipfile
+import sqlite3
 import threading
 from xml.sax.saxutils import escape as xml_escape
 from html import escape as html_escape
@@ -18,6 +19,9 @@ import pandas as pd
 import streamlit as st
 import folium
 import plotly.express as px
+from shapely import wkb
+from shapely.ops import transform as transformar_geometria
+from pyproj import CRS, Transformer
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -598,44 +602,135 @@ def normalizar_municipio(valor):
     return re.sub(r"[^A-Z0-9]", "", normalizar_texto(valor))
 
 
+def carregar_gpkg(caminho):
+    """Lê os polígonos do GeoPackage sem geopandas/GDAL.
+
+    Identifica bairro e município pelos atributos do QGIS; converte o SRC
+    original para WGS84 antes de entregar coordenadas ao Folium.
+    """
+    registros = []
+    with sqlite3.connect(f"file:{caminho}?mode=ro", uri=True) as conexao:
+        camadas = conexao.execute(
+            "SELECT table_name, srs_id FROM gpkg_contents WHERE data_type='features'"
+        ).fetchall()
+        for tabela, srs_id in camadas:
+            info = conexao.execute(
+                "SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",
+                (tabela,),
+            ).fetchone()
+            if not info:
+                continue
+            campo_geometria, srs_geom = info
+            nomes = [r[1] for r in conexao.execute(f'PRAGMA table_info("{tabela.replace(chr(34), chr(34)*2)}")')]
+            campos = {normalizar_cabecalho(c): c for c in nomes}
+            campo_bairro = next((campos[k] for k in ("NMBAIRRO", "BAIRRO", "NOMEBAIRRO", "NOME") if k in campos), None)
+            campo_mun = next((campos[k] for k in ("NMMUN", "MUNICIPIO", "CIDADE", "NOMEMUNICIPIO") if k in campos), None)
+            if not campo_bairro:
+                continue
+            # GeoPackage usa WKB com cabeçalho GP de 8+ bytes, definido pelos flags.
+            src_id = srs_geom or srs_id
+            linha_srs = conexao.execute(
+                "SELECT organization, organization_coordsys_id, definition FROM gpkg_spatial_ref_sys WHERE srs_id=?",
+                (src_id,),
+            ).fetchone()
+            if not linha_srs:
+                continue
+            org, cod, definicao = linha_srs
+            try:
+                origem = CRS.from_user_input(f"{org}:{cod}") if org and cod else CRS.from_wkt(definicao)
+            except Exception:
+                origem = CRS.from_wkt(definicao)
+            conversor = None if origem.equals(CRS.from_epsg(4326)) else Transformer.from_crs(origem, 4326, always_xy=True)
+            quoted = lambda x: '"' + x.replace('"', '""') + '"'
+            colunas = [campo_geometria, campo_bairro] + ([campo_mun] if campo_mun else [])
+            consulta = f'SELECT {", ".join(quoted(c) for c in colunas)} FROM {quoted(tabela)}'
+            for row in conexao.execute(consulta):
+                bruto, nome, *municipio_atributo = row
+                if not bruto or not nome:
+                    continue
+                bruto = bytes(bruto)
+                if len(bruto) < 8 or bruto[:2] != b"GP":
+                    continue
+                flags = bruto[3]
+                envelope = (flags >> 1) & 7
+                tamanhos = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}
+                if envelope not in tamanhos:
+                    continue
+                geometria = wkb.loads(bruto[8 + tamanhos[envelope]:])
+                if conversor:
+                    geometria = transformar_geometria(conversor.transform, geometria)
+                if geometria.geom_type == "Polygon":
+                    partes = [geometria]
+                elif geometria.geom_type == "MultiPolygon":
+                    partes = list(geometria.geoms)
+                else:
+                    continue
+                poligonos = []
+                for parte in partes:
+                    coords = [(float(y), float(x)) for x, y in parte.exterior.coords]
+                    if len(coords) >= 4 and all(-90 <= lat <= 90 and -180 <= lon <= 180 for lat, lon in coords):
+                        poligonos.append(coords)
+                if poligonos:
+                    municipio = (municipio_atributo[0] if municipio_atributo else "") or nome_municipio_arquivo(caminho)
+                    registros.append({
+                        "nome": str(nome).strip(),
+                        "nome_normalizado": limpar_nome_bairro(nome),
+                        "municipio": normalizar_municipio(municipio),
+                        "poligonos": poligonos,
+                    })
+    return registros
+
+
+def nome_municipio_arquivo(caminho):
+    nome = os.path.splitext(os.path.basename(caminho))[0]
+    return re.sub(r"^NM_MUN[_\s-]*", "", nome, flags=re.I)
+
+
 @st.cache_data(show_spinner=False, ttl=300)
 def carregar_geometrias_municipais(arquivos_assinados):
-    """Carrega KMZ disponíveis, isolando arquivos inválidos.
-
-    A assinatura (caminho, tamanho, mtime_ns) invalida o cache ao alterar KMZ.
-    O nome do arquivo define o município; cada Placemark define um bairro.
-    """
+    """Carrega GeoPackage, KMZ e KML por município, sem impedir uso do mapa em caso de erro."""
     todos = []
     for caminho, _tamanho, _mtime in arquivos_assinados:
-        municipio = normalizar_municipio(os.path.splitext(os.path.basename(caminho))[0])
-        if not municipio:
-            continue
+        extensao = os.path.splitext(caminho)[1].lower()
+        municipio = normalizar_municipio(nome_municipio_arquivo(caminho))
         try:
-            with open(caminho, "rb") as arquivo:
-                registros = carregar_kmz_bytes(arquivo.read())
-            for bairro in registros:
-                todos.append({**bairro, "municipio": municipio})
-        except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError):
-            # Arquivo inválido não deve interromper o painel operacional.
+            if extensao == ".gpkg":
+                registros = carregar_gpkg(caminho)
+            elif extensao in (".kmz", ".kml"):
+                with open(caminho, "rb") as arquivo:
+                    dados = arquivo.read()
+                registros = carregar_kmz_bytes(dados) if extensao == ".kmz" else carregar_kml_bytes(dados)
+                registros = [{**bairro, "municipio": municipio} for bairro in registros]
+            else:
+                continue
+            todos.extend(registros)
+        except Exception:
+            # Não exibe avisos de arquivos sem cobertura, mantendo os eventos na planilha.
             continue
     return todos
 
 
 def descobrir_kmz():
-    """Prioriza geodados/municipios; aceita TERESINA.kmz antigo como fallback."""
+    """Compatibilidade com nome antigo; descobre KMZ, KML e GPKG da pasta."""
     arquivos = []
     if os.path.isdir(DIRETORIO_KMZ):
         for nome in sorted(os.listdir(DIRETORIO_KMZ)):
-            if nome.lower().endswith(".kmz"):
+            if nome.lower().endswith((".gpkg", ".kmz", ".kml")):
                 caminho = os.path.join(DIRETORIO_KMZ, nome)
                 if os.path.isfile(caminho):
                     arquivos.append(caminho)
-    # Evita carregar duas versões de Teresina quando a nova pasta já contém o município.
-    municipios = {normalizar_municipio(os.path.splitext(os.path.basename(p))[0]) for p in arquivos}
-    if os.path.isfile(ARQUIVO_KMZ_PADRAO) and "TERESINA" not in municipios:
-        arquivos.append(ARQUIVO_KMZ_PADRAO)
-    assinaturas = []
+    # Para municípios com dois formatos, prefere o GPKG por conter NM_BAIRRO/NM_MUN.
+    prioridades = {".gpkg": 0, ".kmz": 1, ".kml": 2}
+    escolhidos = {}
     for caminho in arquivos:
+        municipio = normalizar_municipio(nome_municipio_arquivo(caminho))
+        if municipio and (municipio not in escolhidos or
+                          prioridades[os.path.splitext(caminho)[1].lower()] < prioridades[os.path.splitext(escolhidos[municipio])[1].lower()]):
+            escolhidos[municipio] = caminho
+    if os.path.isfile(ARQUIVO_KMZ_PADRAO) and "TERESINA" not in escolhidos:
+        escolhidos["TERESINA"] = ARQUIVO_KMZ_PADRAO
+    assinaturas = []
+    for caminho in escolhidos.values():
         try:
             info = os.stat(caminho)
             assinaturas.append((caminho, info.st_size, info.st_mtime_ns))
@@ -1592,21 +1687,23 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
         proximidades[proximidades["Concentração"] == codigo].copy()
         if not proximidades.empty else pd.DataFrame()
     )
-    bairros_grupo = {limpar_nome_bairro(b) for b in os_grupo["Bairro"] if str(b).strip()}
-    cidades_grupo = {normalizar_texto(c) for c in os_grupo["Cidade"] if str(c).strip()}
+    pares_grupo = {
+        (normalizar_municipio(r.get("Cidade", "")), limpar_nome_bairro(r.get("Bairro", "")))
+        for _, r in os_grupo.iterrows()
+        if str(r.get("Cidade", "")).strip() and str(r.get("Bairro", "")).strip()
+    }
     eventos_relacionados = []
     if not eventos.empty:
         for _, evento in eventos.iterrows():
+            cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
+            if not cidade_evento:
+                continue
             bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""))}
-            intersecao = bairros_grupo & bairros_evento
-            if not intersecao:
-                continue
-            cidade_evento = normalizar_texto(evento.get("Cidade", ""))
-            if cidade_evento and cidades_grupo and cidade_evento not in cidades_grupo:
-                continue
-            item = evento.to_dict()
-            item["Bairros coincidentes"] = ", ".join(sorted(intersecao))
-            eventos_relacionados.append(item)
+            intersecao = sorted({bairro for cidade, bairro in pares_grupo if cidade == cidade_evento and bairro in bairros_evento})
+            if intersecao:
+                item = evento.to_dict()
+                item["Bairros coincidentes"] = ", ".join(intersecao)
+                eventos_relacionados.append(item)
     return os_grupo, ativos, pd.DataFrame(eventos_relacionados)
 
 
@@ -1698,6 +1795,10 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     a.metric("O.S.", len(os_grupo))
     b.metric("Matrículas distintas", int(concentracao["QTD_MATRICULAS"]))
     c.metric("Equipamentos próximos", len(ativos))
+    st.markdown(
+        f"**Eventos relacionados:** {len(eventos_relacionados)} evento(s) identificado(s)"
+        if not eventos_relacionados.empty else "**Eventos relacionados:** nenhum evento identificado"
+    )
     st.caption(
         f"Centro geográfico: {float(concentracao['LATITUDE']):.6f}, "
         f"{float(concentracao['LONGITUDE']):.6f} | Raio operacional: {raio} m"
@@ -1849,7 +1950,7 @@ if modo_escuro:
     """, unsafe_allow_html=True)
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
-# A ausência de KMZ é normal e não gera avisos no mapa.
+# A ausência de arquivo geográfico é normal e não gera avisos no mapa.
 bairros = descobrir_kmz()
 
 # Reset diário persistente, executado antes de ler dados (00:01, horário de Teresina).
@@ -1909,7 +2010,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
     st.subheader("🗺️ Visão geográfica operacional")
 
     st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
-               "As áreas destacadas representam os bairros inteiros do KMZ, inclusive quando o evento informa impacto parcial.")
+               "As áreas destacadas representam os bairros inteiros dos arquivos geográficos, inclusive quando o evento informa impacto parcial.")
     modo_ativos = st.radio(
         "Visualização de poços e loggers",
         ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
@@ -2005,11 +2106,18 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 cidades_grupo = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
                 qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
                               if not proximidades.empty else 0)
+                _, _, eventos_do_grupo = dados_relatorio_concentracao(
+                    concentracao, pontos_cluster, proximidades, df_eventos
+                )
+                indicador_eventos = (
+                    f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
+                    if not eventos_do_grupo.empty else "Sem evento relacionado"
+                )
                 titulo = (
                     f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'} | "
                     f"{int(concentracao['QTD_OS'])} O.S. · "
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
-                    f"{qtd_ativos} ativo(s) próximo(s)"
+                    f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos}"
                 )
                 with st.expander(titulo, expanded=False):
                     exibir_relatorio_concentracao(
