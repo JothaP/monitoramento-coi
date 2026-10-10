@@ -6,6 +6,7 @@ import math
 import hashlib
 import zipfile
 import threading
+from xml.sax.saxutils import escape as xml_escape
 from zoneinfo import ZoneInfo
 import unicodedata
 from datetime import datetime, date, time as horario
@@ -16,6 +17,14 @@ import pandas as pd
 import streamlit as st
 import folium
 import plotly.express as px
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
@@ -455,13 +464,15 @@ def preparar_eventos(df):
 
 
 def chave_evento(row):
-    # Composição estável para impedir duplicações sem depender da posição da linha.
-    campos = [
-        "Data", "Controlador", "Código do Ativo", "Serviço", "Protocolo",
-        "Início", "Prev. Término", "Término Real", "Áreas Impactadas",
-        "Descrição do Serviço", "Data de Criação",
-    ]
-    return "EVT:" + slug_hash(*[row.get(c, "") for c in campos])
+    """Protocolo identifica o evento mesmo após alterações de status e horários.
+
+    Na ausência de protocolo, usa campos de identificação relativamente estáveis.
+    """
+    protocolo = normalizar_texto(row.get("Protocolo", ""))
+    if protocolo:
+        return "PROTOCOLO:" + protocolo
+    campos = ["Data", "Código do Ativo", "Serviço", "Início", "Cidade", "Unidade"]
+    return "SEM_PROTOCOLO:" + slug_hash(*[row.get(c, "") for c in campos])
 
 
 def upsert_pontos(df_novo):
@@ -505,10 +516,20 @@ def upsert_eventos(df_novo):
     novo = df_novo.reindex(columns=CABECALHO_EVENTOS).fillna("")
 
     mapa = {}
-    for _, r in atual.iterrows():
-        mapa[chave_evento(r)] = r.to_dict()
-    for _, r in novo.iterrows():
-        mapa[chave_evento(r)] = r.to_dict()
+    for _, registro in atual.iterrows():
+        mapa[chave_evento(registro)] = registro.to_dict()
+    for _, registro in novo.iterrows():
+        chave = chave_evento(registro)
+        dados_novos = registro.to_dict()
+        if chave in mapa:
+            # Atualizações parciais não apagam campos antigos preenchidos.
+            anterior = mapa[chave]
+            mapa[chave] = {
+                campo: dados_novos[campo] if str(dados_novos[campo]).strip() else anterior.get(campo, "")
+                for campo in CABECALHO_EVENTOS
+            }
+        else:
+            mapa[chave] = dados_novos
     final = pd.DataFrame(list(mapa.values()), columns=CABECALHO_EVENTOS)
     substituir_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS, final)
     return len(novo), len(final)
@@ -1405,6 +1426,156 @@ def modal_editar_logger():
                 st.error(f"Erro ao excluir logger: {erro}")
 
 
+# ============================================================
+# RELATÓRIOS INDIVIDUAIS DAS CONCENTRAÇÕES
+# ============================================================
+
+def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos):
+    """Associa O.S. pelo identificador real do grupo, não pelo ID reordenado."""
+    grupo = concentracao["GRUPO"]
+    os_grupo = pontos_cluster[pontos_cluster["_grupo"] == grupo].copy()
+    codigo = concentracao["ID_CONCENTRACAO"]
+    ativos = (
+        proximidades[proximidades["Concentração"] == codigo].copy()
+        if not proximidades.empty else pd.DataFrame()
+    )
+    bairros_grupo = {limpar_nome_bairro(b) for b in os_grupo["Bairro"] if str(b).strip()}
+    cidades_grupo = {normalizar_texto(c) for c in os_grupo["Cidade"] if str(c).strip()}
+    eventos_relacionados = []
+    if not eventos.empty:
+        for _, evento in eventos.iterrows():
+            bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""))}
+            intersecao = bairros_grupo & bairros_evento
+            if not intersecao:
+                continue
+            cidade_evento = normalizar_texto(evento.get("Cidade", ""))
+            if cidade_evento and cidades_grupo and cidade_evento not in cidades_grupo:
+                continue
+            item = evento.to_dict()
+            item["Bairros coincidentes"] = ", ".join(sorted(intersecao))
+            eventos_relacionados.append(item)
+    return os_grupo, ativos, pd.DataFrame(eventos_relacionados)
+
+
+def texto_relatorio(valor):
+    if valor is None or pd.isna(valor):
+        return "—"
+    return str(valor).strip() or "—"
+
+
+def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio):
+    """Gera PDF em memória, sem gravar ou alterar informações no Sheets."""
+    fonte_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    fonte_negrito = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if os.path.isfile(fonte_regular) and "FarolDejaVu" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("FarolDejaVu", fonte_regular))
+        pdfmetrics.registerFont(TTFont("FarolDejaVu-Bold", fonte_negrito))
+        pdfmetrics.registerFontFamily("FarolDejaVu", normal="FarolDejaVu", bold="FarolDejaVu-Bold")
+    fonte = "FarolDejaVu" if "FarolDejaVu" in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.4*cm,
+                            rightMargin=1.4*cm, topMargin=1.3*cm, bottomMargin=1.3*cm)
+    estilos = getSampleStyleSheet()
+    normal = ParagraphStyle("FarolNormal", parent=estilos["Normal"], fontName=fonte, fontSize=8.5, leading=12)
+    pequeno = ParagraphStyle("FarolPequeno", parent=normal, fontSize=7, leading=10)
+    titulo = ParagraphStyle("FarolTitulo", parent=normal, fontSize=17, leading=22, spaceAfter=8)
+    subtitulo = ParagraphStyle("FarolSubtitulo", parent=normal, fontSize=11, leading=16, spaceBefore=12, spaceAfter=6)
+    historia = []
+    def p(valor, estilo=pequeno):
+        return Paragraph(xml_escape(texto_relatorio(valor)), estilo)
+    def tabela(cabecalho, linhas, larguras):
+        dados = [[p(v) for v in cabecalho]] + [[p(v) for v in linha] for linha in linhas]
+        t = Table(dados, colWidths=larguras, repeatRows=1, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E9EFF7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D4DCE5")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        return t
+    historia.append(p("Farol Operacional — " + str(concentracao["ID_CONCENTRACAO"]), titulo))
+    cidades = ", ".join(sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()}))
+    resumo = (
+        f"Município(s): {cidades or 'Não informado'} | Bairros: {texto_relatorio(concentracao['BAIRROS'])} | "
+        f"O.S.: {len(os_grupo)} | Matrículas: {concentracao['QTD_MATRICULAS']} | "
+        f"Raio operacional: {raio} m"
+    )
+    historia.append(p(resumo, normal))
+    historia.append(p(f"Centro: {float(concentracao['LATITUDE']):.6f}, {float(concentracao['LONGITUDE']):.6f}", normal))
+    historia.append(p("Ordens de serviço da concentração", subtitulo))
+    colunas = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
+    linhas = [[r.get(c, "") for c in colunas] for _, r in os_grupo.iterrows()]
+    historia.append(tabela(colunas, linhas, [2.1*cm, 2.2*cm, 2.5*cm, 3.0*cm, 3.0*cm, 3.3*cm, 10.0*cm]))
+    historia.append(p("Poços / ativos e loggers próximos", subtitulo))
+    if ativos.empty:
+        historia.append(p("Nenhum equipamento encontrado no raio operacional.", normal))
+    else:
+        cols = ["Tipo", "Identificação", "Nome", "Município", "Distância"]
+        historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in ativos.iterrows()],
+                                [3.0*cm, 4.0*cm, 10.0*cm, 5.0*cm, 4.1*cm]))
+    historia.append(p("Eventos relacionados por município e bairro", subtitulo))
+    if eventos_relacionados.empty:
+        historia.append(p("Nenhum evento relacionado por correspondência de município e bairro.", normal))
+    else:
+        cols = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in eventos_relacionados.iterrows()],
+                                [3.1*cm, 2.5*cm, 3.0*cm, 5.0*cm, 4.5*cm, 8.0*cm]))
+    historia.append(Spacer(1, 0.3*cm))
+    historia.append(p("Nota: a relação de eventos é indicativa, baseada na coincidência de bairros e município; não comprova causalidade.", pequeno))
+    doc.build(historia)
+    return buffer.getvalue()
+
+
+@st.dialog("📋 Relatório da concentração", width="large")
+def modal_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio):
+    registro = concentracoes[concentracoes["ID_CONCENTRACAO"] == codigo]
+    if registro.empty:
+        st.warning("Concentração não encontrada com os filtros atuais.")
+        return
+    concentracao = registro.iloc[0]
+    os_grupo, ativos, eventos_relacionados = dados_relatorio_concentracao(
+        concentracao, pontos_cluster, proximidades, eventos
+    )
+    cidades = sorted({str(c).strip() for c in os_grupo["Cidade"] if str(c).strip()})
+    st.subheader(f"{codigo} — {', '.join(cidades) or 'Município não informado'}")
+    st.caption(f"Bairros: {concentracao['BAIRROS'] or 'Não informados'}")
+    a, b, c = st.columns(3)
+    a.metric("O.S.", len(os_grupo))
+    b.metric("Matrículas distintas", int(concentracao["QTD_MATRICULAS"]))
+    c.metric("Equipamentos próximos", len(ativos))
+    st.caption(
+        f"Centro geográfico: {float(concentracao['LATITUDE']):.6f}, "
+        f"{float(concentracao['LONGITUDE']):.6f} | Raio operacional: {raio} m"
+    )
+    st.markdown("#### Ordens de serviço")
+    colunas_os = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
+    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), use_container_width=True, hide_index=True)
+    st.markdown("#### Poços / ativos e loggers próximos")
+    if ativos.empty:
+        st.info("Nenhum equipamento dentro do raio operacional desta concentração.")
+    else:
+        st.dataframe(ativos[["Tipo", "Identificação", "Nome", "Município", "Distância"]],
+                     use_container_width=True, hide_index=True)
+    st.markdown("#### Eventos relacionados")
+    st.caption("Correspondência por município e bairro impactado; não estabelece relação causal.")
+    if eventos_relacionados.empty:
+        st.info("Nenhum evento com município e bairro correspondente.")
+    else:
+        colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
+                     use_container_width=True, hide_index=True)
+    try:
+        pdf = gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio)
+        st.download_button("📄 Baixar relatório em PDF", data=pdf,
+                           file_name=f"Farol_{codigo}_{datetime.now(FUSO_FAROL):%Y%m%d}.pdf",
+                           mime="application/pdf", key=f"baixar_pdf_{codigo}")
+    except Exception as erro:
+        st.error(f"Não foi possível gerar o PDF: {erro}")
+
+
 @st.dialog("📥 Importação de bases", width="large")
 def modal_importacao():
     st.subheader("Importação das bases")
@@ -1677,28 +1848,30 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
-            st.markdown("### Ranking e proximidades")
-            esquerda, direita = st.columns([1.1, 1.9])
-            with esquerda:
-                st.markdown("### Ranking das concentrações")
-                tabela_c = concentracoes[["ID_CONCENTRACAO", "QTD_OS", "QTD_MATRICULAS", "BAIRROS"]].rename(columns={
-                    "ID_CONCENTRACAO": "Concentração",
-                    "QTD_OS": "O.S.",
-                    "QTD_MATRICULAS": "Matrículas",
-                    "BAIRROS": "Bairros",
-                })
-                st.dataframe(tabela_c, use_container_width=True, hide_index=True)
-
-                if not proximidades.empty:
-                    st.markdown("### Poços / Ativos e Loggers próximos")
-                    st.dataframe(
-                        proximidades.sort_values("Distância (m)")[["Concentração", "Tipo", "Identificação", "Nome", "Distância"]],
-                        use_container_width=True,
-                        hide_index=True,
+            st.markdown("### 📋 Análise das Concentrações")
+            st.caption("Abra o relatório individual para consultar as O.S., os equipamentos e os eventos relacionados.")
+            for _, concentracao in concentracoes.iterrows():
+                codigo = concentracao["ID_CONCENTRACAO"]
+                os_grupo = pontos_cluster[pontos_cluster["_grupo"] == concentracao["GRUPO"]]
+                cidades = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
+                qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
+                              if not proximidades.empty else 0)
+                esquerda, direita = st.columns([5, 1.2], vertical_alignment="center")
+                with esquerda:
+                    st.markdown(f"**{codigo} — {', '.join(cidades) or 'Município não informado'}**")
+                    st.caption(
+                        f"{int(concentracao['QTD_OS'])} O.S. · "
+                        f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
+                        f"{qtd_ativos} equipamento(s) próximo(s) · "
+                        f"Bairros: {concentracao['BAIRROS'] or 'Não informados'}"
                     )
-
-            with direita:
-                st.caption("O mapa completo aparece acima. Use o ranking para identificar as áreas prioritárias.")
+                with direita:
+                    if st.button("📋 Relatório", key=f"relatorio_{codigo}", use_container_width=True):
+                        modal_relatorio_concentracao(
+                            codigo, concentracoes, pontos_cluster, proximidades,
+                            df_eventos, int(raio_operacional)
+                        )
+                st.divider()
 
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
