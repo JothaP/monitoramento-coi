@@ -249,13 +249,13 @@ def obter_aba(nome, cabecalho):
     planilha = obter_planilha()
     try:
         aba = planilha.worksheet(nome)
-    except gspread.WorksheetNotFound:
-    st.error(
-        f"ABA NÃO ENCONTRADA: {nome} | "
-        f"PLANILHA: {planilha.title} | "
-        f"ID: {planilha.id}"
-    )
-    st.stop()
+        except gspread.WorksheetNotFound:
+        st.error(
+            f"ABA NÃO ENCONTRADA: {nome} | "
+            f"PLANILHA: {planilha.title} | "
+            f"ID: {planilha.id}"
+        )
+        st.stop()
 
     valores = aba.get_all_values()
     if not valores:
