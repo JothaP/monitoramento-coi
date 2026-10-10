@@ -237,6 +237,8 @@ def obter_cliente_google():
 
 @st.cache_resource(show_spinner=False)
 def obter_planilha():
+    st.sidebar.write("Planilha conectada:", planilha.title)
+    st.sidebar.write("ID conectado:", planilha.id)
     return obter_cliente_google().open_by_key(SPREADSHEET_ID)
 
 
