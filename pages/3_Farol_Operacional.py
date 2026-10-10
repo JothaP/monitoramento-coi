@@ -219,22 +219,66 @@ def limpar_nome_bairro(valor):
     return texto
 
 
-def extrair_bairros_evento(valor):
-    if not valor:
+def indice_nomes_bairros(bairros_geograficos, municipio):
+    """Catálogo restrito ao município, sem correspondência aproximada arriscada."""
+    cidade = normalizar_municipio(municipio)
+    nomes = set()
+    for item in (bairros_geograficos or []):
+        if normalizar_municipio(item.get("municipio", "")) == cidade:
+            nome = limpar_nome_bairro(item.get("nome_normalizado") or item.get("nome"))
+            if nome:
+                nomes.add(nome)
+    return nomes
+
+
+def resolver_nome_bairro(nome, nomes_disponiveis):
+    """Equivalência conservadora: nomes exatos ou prefixo genérico 'Bairro'."""
+    chave = limpar_nome_bairro(nome)
+    if chave in nomes_disponiveis:
+        return chave
+    sem_prefixo = re.sub(r"^BAIRRO\s+", "", chave).strip()
+    if sem_prefixo and sem_prefixo in nomes_disponiveis:
+        return sem_prefixo
+    return chave
+
+
+def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
+    """Lê bairros em listas, linhas e rótulos; separa 'e' só se ambos existirem no GPKG.
+
+    Nunca usa fuzzy matching nem divide nomes compostos sem confirmação.
+    Retorna chaves normalizadas para mapa, cruzamento de O.S. e relatórios.
+    """
+    if valor is None or str(valor).strip().lower() in ("", "nan", "none"):
         return []
+    nomes = indice_nomes_bairros(bairros_geograficos, municipio)
+    texto = str(valor).replace("\r", "\n")
+    texto = re.sub(r"(?i)\bBAIRROS?\s*(?:IMPACTADOS?|AFETADOS?)?\s*:", "\n", texto)
+    texto = re.sub(r"(?i)\bAREAS?\s+IMPACTADAS?\s*:", "\n", texto)
+    partes = re.split(r"[,;\n]+", texto)
     saida = []
-    for parte in str(valor).split(","):
-        original = parte.strip()
+    vistos = set()
+    for parte in partes:
+        original = parte.strip(" \t-*•")
         if not original:
             continue
+        # Desconsidera linha isolada com o nome da cidade, quando a descrição o inclui.
+        if municipio and normalizar_municipio(original) == normalizar_municipio(municipio):
+            continue
         parcial = bool(re.search(r"\(\s*PARCIAL\s*\)", original, flags=re.I))
-        bairro = limpar_nome_bairro(original)
-        if bairro:
-            saida.append({
-                "bairro": bairro,
-                "parcial": parcial,
-                "original": original,
-            })
+        chave = resolver_nome_bairro(original, nomes)
+        candidatos = [(chave, original)]
+        if nomes and chave not in nomes:
+            # Só divide 'A e B' se os dois nomes resultantes estiverem no município.
+            pedacos = re.split(r"\s+E\s+", chave)
+            if len(pedacos) == 2:
+                esquerda = resolver_nome_bairro(pedacos[0], nomes)
+                direita = resolver_nome_bairro(pedacos[1], nomes)
+                if esquerda in nomes and direita in nomes:
+                    candidatos = [(esquerda, pedacos[0]), (direita, pedacos[1])]
+        for bairro, origem in candidatos:
+            if bairro and bairro not in vistos:
+                vistos.add(bairro)
+                saida.append({"bairro": bairro, "parcial": parcial, "original": origem})
     return saida
 
 
@@ -908,7 +952,7 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
 
     registros = []
     for _, evento in df_eventos.iterrows():
-        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
+        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros)
         for area in areas:
             bloco = pontos[
                 (pontos["_bairro_cruzamento"] == area["bairro"])
@@ -956,7 +1000,7 @@ def eventos_georreferenciados(eventos, bairros_kmz):
         indice.setdefault(chave, []).append(bairro)
     for _, evento in eventos.iterrows():
         cidade = normalizar_municipio(evento.get("Cidade", ""))
-        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
+        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_kmz)
         if not cidade or not areas:
             sem_geometria += 1
             continue
@@ -1678,7 +1722,7 @@ def modal_editar_logger():
 # RELATÓRIOS INDIVIDUAIS DAS CONCENTRAÇÕES
 # ============================================================
 
-def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos):
+def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos=None):
     """Associa O.S. pelo identificador real do grupo, não pelo ID reordenado."""
     grupo = concentracao["GRUPO"]
     os_grupo = pontos_cluster[pontos_cluster["_grupo"] == grupo].copy()
@@ -1698,7 +1742,7 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
-            bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""))}
+            bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_geograficos)}
             intersecao = sorted({bairro for cidade, bairro in pares_grupo if cidade == cidade_evento and bairro in bairros_evento})
             if intersecao:
                 item = evento.to_dict()
@@ -1779,14 +1823,14 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
     return buffer.getvalue()
 
 
-def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio):
+def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio, bairros_geograficos=None):
     registro = concentracoes[concentracoes["ID_CONCENTRACAO"] == codigo]
     if registro.empty:
         st.warning("Concentração não encontrada com os filtros atuais.")
         return
     concentracao = registro.iloc[0]
     os_grupo, ativos, eventos_relacionados = dados_relatorio_concentracao(
-        concentracao, pontos_cluster, proximidades, eventos
+        concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos
     )
     cidades = sorted({str(c).strip() for c in os_grupo["Cidade"] if str(c).strip()})
     st.subheader(f"{codigo} — {', '.join(cidades) or 'Município não informado'}")
@@ -2107,7 +2151,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
                               if not proximidades.empty else 0)
                 _, _, eventos_do_grupo = dados_relatorio_concentracao(
-                    concentracao, pontos_cluster, proximidades, df_eventos
+                    concentracao, pontos_cluster, proximidades, df_eventos, bairros
                 )
                 indicador_eventos = (
                     f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
@@ -2122,7 +2166,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 with st.expander(titulo, expanded=False):
                     exibir_relatorio_concentracao(
                         codigo, concentracoes, pontos_cluster, proximidades,
-                        df_eventos, int(raio_operacional)
+                        df_eventos, int(raio_operacional), bairros
                     )
 
 
