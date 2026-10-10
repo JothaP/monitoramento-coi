@@ -683,8 +683,17 @@ def carregar_gpkg(caminho):
             campo_geometria, srs_geom = info
             nomes = [r[1] for r in conexao.execute(f'PRAGMA table_info("{tabela.replace(chr(34), chr(34)*2)}")')]
             campos = {normalizar_cabecalho(c): c for c in nomes}
-            campo_bairro = next((campos[k] for k in ("NMBAIRRO", "BAIRRO", "NOMEBAIRRO", "NOME") if k in campos), None)
-            campo_mun = next((campos[k] for k in ("NMMUN", "MUNICIPIO", "CIDADE", "NOMEMUNICIPIO") if k in campos), None)
+            # Compatibilidade automática com as duas origens de bairros:
+            # IBGE: NM_BAIRRO + NM_RGI/NM_MUN
+            # Municípios (ArcGIS): NOME + MUNICIPIO
+            campo_bairro = next(
+                (campos[k] for k in ("NMBAIRRO", "NOMEBAIRRO", "BAIRRO", "NOME") if k in campos),
+                None,
+            )
+            campo_mun = next(
+                (campos[k] for k in ("NMMUN", "MUNICIPIO", "NOMEMUNICIPIO", "CIDADE", "NMRGI") if k in campos),
+                None,
+            )
             if not campo_bairro:
                 continue
             # GeoPackage usa WKB com cabeçalho GP de 8+ bytes, definido pelos flags.
@@ -743,7 +752,7 @@ def carregar_gpkg(caminho):
 
 def nome_municipio_arquivo(caminho):
     nome = os.path.splitext(os.path.basename(caminho))[0]
-    return re.sub(r"^NM_MUN[_\s-]*", "", nome, flags=re.I)
+    return re.sub(r"^(?:NM_MUN|NM_RGI)[_\s-]*", "", nome, flags=re.I)
 
 
 @st.cache_data(show_spinner=False, ttl=300)
