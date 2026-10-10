@@ -2223,8 +2223,9 @@ with st.sidebar:
     st.caption("O mapa é a tela inicial do Farol Operacional.")
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
+    # Reservar posição fixa do relatório, independentemente da existência de concentrações.
+    espaco_relatorio_operacional = st.empty()
     # Botão administrativo sempre acessível, mesmo com PONTOS vazia.
-    # O relatório em PDF aparece nesta mesma barra quando há análises.
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
                      use_container_width=True, key="abrir_limpeza_farol"):
@@ -2400,18 +2401,33 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         codigo, concentracoes, pontos_cluster, proximidades,
                         df_eventos, int(raio_operacional), bairros
                     )
-            try:
-                pdf_operacional = gerar_pdf_operacional(resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
-                                                       bairros, int(raio_operacional), observacoes_df)
-                st.sidebar.download_button("📄 Gerar relatório operacional (PDF)", data=pdf_operacional,
-                    file_name="Farol_Relatorio_Operacional.pdf", mime="application/pdf",
-                    use_container_width=True, key="download_pdf_operacional")
-            except Exception as erro:
-                st.sidebar.warning(f"Não foi possível gerar relatório: {erro}")
+        # Disponível também quando não há concentrações no filtro atual.
+        if concentracoes.empty:
+            resumo_pdf = concentracoes.copy()
+            observacoes_df = pd.DataFrame()
+        try:
+            pdf_operacional = gerar_pdf_operacional(
+                resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
+                bairros, int(raio_operacional), observacoes_df
+            )
+            espaco_relatorio_operacional.download_button(
+                "📄 Gerar relatório operacional (PDF)", data=pdf_operacional,
+                file_name="Farol_Relatorio_Operacional.pdf", mime="application/pdf",
+                use_container_width=True, key="download_pdf_operacional"
+            )
+        except Exception as erro:
+            espaco_relatorio_operacional.error(f"Não foi possível gerar o relatório: {erro}")
+    # Sem dados de O.S.: manter a opção visível, porém desabilitada.
+    if df_pontos.empty:
+        espaco_relatorio_operacional.button(
+            "📄 Gerar relatório operacional (PDF)", disabled=True,
+            use_container_width=True, key="relatorio_sem_pontos"
+        )
 
 
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
+    espaco_relatorio_operacional.caption("📄 Relatório disponível na tela Mapa operacional.")
     st.subheader("Cadastro de Poços / Ativos e Loggers")
 
     c_poco, c_logger = st.columns(2)
