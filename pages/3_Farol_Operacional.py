@@ -359,7 +359,11 @@ def substituir_aba(nome, cabecalho, df):
     linhas = [cabecalho] + [[limpar_valor(v) for v in row] for row in df.itertuples(index=False, name=None)]
     aba.clear()
     aba.resize(rows=max(1000, len(linhas) + 20), cols=max(len(cabecalho) + 5, 20))
-    aba.update("A1", linhas, value_input_option="USER_ENTERED")
+    # PONTOS: RAW preserva o ponto decimal como texto literal.
+    # USER_ENTERED interpreta o ponto como separador de milhar em planilhas pt-BR,
+    # convertendo -5.038017 em -5.038.017 e invalidando a coordenada.
+    modo_escrita = "RAW" if nome == NOME_ABA_PONTOS else "USER_ENTERED"
+    aba.update("A1", linhas, value_input_option=modo_escrita)
     invalidar_cache()
 
 
@@ -476,6 +480,16 @@ def upsert_pontos(df_novo):
         for _, r in novo.iterrows():
             mapa[chave_ponto(r)] = r.to_dict()
         final = pd.DataFrame(list(mapa.values()), columns=colunas)
+
+    # Padroniza as coordenadas de O.S. para texto decimal com ponto antes
+    # de enviar ao Sheets em modo RAW, sem depender da região da planilha.
+    # Valores inválidos permanecem vazios; a O.S. continua armazenada.
+    for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
+        final[coluna] = final[coluna].map(
+            lambda valor: (
+                format(n, ".6f") if (n := normalizar_coordenada(valor, tipo)) is not None else ""
+            )
+        )
 
     # Mantém ordem cronológica aproximada, sem exigir datas válidas.
     if not final.empty:
