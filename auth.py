@@ -24,10 +24,10 @@ COOKIE_NAME = "coi_auth_token"
 # Acesso total aos módulos disponíveis.
 #
 # USUARIO
-# Acesso aos módulos 1, 2, 4, 5 e 6.
+# Acesso aos módulos 1, 2, 3, 4, 5 e 6.
 #
 # OPERADOR
-# Acesso SOMENTE ao módulo 1.
+# Acesso aos módulos 1 e 3 (Farol somente leitura).
 #
 # ============================================================
 
@@ -46,6 +46,7 @@ PERMISSOES_PERFIS = {
     "usuario": [
         "1",
         "2",
+        "3",
         "4",
         "5",
         "6",
@@ -53,6 +54,7 @@ PERMISSOES_PERFIS = {
 
     "operador": [
         "1",
+        "3",
     ],
 }
 
