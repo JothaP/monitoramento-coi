@@ -1138,7 +1138,7 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             if lat is None or lon is None:
                 continue
             # Cor definida pelo serviço executado, independentemente do status da O.S.
-            servico_os = str(r.get("Serviço Executado", "") or "")
+            servico_os = str(r.get("Tipo da O.S", "") or "")
             eh_informacao = bool(re.search(r"(?<!\d)146005(?!\d)", servico_os))
             cor = "#F28C28" if eh_informacao else "#1677D2"
             classificacao = ("Informação de Falta de água (146005)" if eh_informacao
