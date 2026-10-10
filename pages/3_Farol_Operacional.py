@@ -278,7 +278,10 @@ def obter_aba(nome, cabecalho):
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_aba(nome, cabecalho):
     aba = obter_aba(nome, cabecalho)
-    registros = aba.get_all_records()
+    # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
+    # A conversão automática do gspread interpreta a vírgula como milhar
+    # e transforma -5,18817 em -518817, invalidando os marcadores.
+    registros = aba.get_all_records(numericise_ignore=["all"])
     if not registros:
         return pd.DataFrame(columns=cabecalho)
     return pd.DataFrame(registros)
