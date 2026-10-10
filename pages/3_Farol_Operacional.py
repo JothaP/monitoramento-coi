@@ -56,7 +56,9 @@ FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
 
-ARQUIVO_KMZ_PADRAO = os.path.join(os.path.dirname(os.path.dirname(__file__)), "TERESINA.kmz")
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DIRETORIO_KMZ = os.path.join(RAIZ_PROJETO, "geodados", "municipios")
+ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
 RAIO_OPERACIONAL_PADRAO = 500
 RAIO_CONCENTRACAO_PADRAO = 500
 
@@ -590,6 +592,58 @@ def carregar_kml_bytes(kml_bytes):
     return bairros
 
 
+
+def normalizar_municipio(valor):
+    """Usa a mesma chave para Cidade da planilha e nome do arquivo KMZ."""
+    return re.sub(r"[^A-Z0-9]", "", normalizar_texto(valor))
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def carregar_geometrias_municipais(arquivos_assinados):
+    """Carrega KMZ disponíveis, isolando arquivos inválidos.
+
+    A assinatura (caminho, tamanho, mtime_ns) invalida o cache ao alterar KMZ.
+    O nome do arquivo define o município; cada Placemark define um bairro.
+    """
+    todos = []
+    for caminho, _tamanho, _mtime in arquivos_assinados:
+        municipio = normalizar_municipio(os.path.splitext(os.path.basename(caminho))[0])
+        if not municipio:
+            continue
+        try:
+            with open(caminho, "rb") as arquivo:
+                registros = carregar_kmz_bytes(arquivo.read())
+            for bairro in registros:
+                todos.append({**bairro, "municipio": municipio})
+        except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError):
+            # Arquivo inválido não deve interromper o painel operacional.
+            continue
+    return todos
+
+
+def descobrir_kmz():
+    """Prioriza geodados/municipios; aceita TERESINA.kmz antigo como fallback."""
+    arquivos = []
+    if os.path.isdir(DIRETORIO_KMZ):
+        for nome in sorted(os.listdir(DIRETORIO_KMZ)):
+            if nome.lower().endswith(".kmz"):
+                caminho = os.path.join(DIRETORIO_KMZ, nome)
+                if os.path.isfile(caminho):
+                    arquivos.append(caminho)
+    # Evita carregar duas versões de Teresina quando a nova pasta já contém o município.
+    municipios = {normalizar_municipio(os.path.splitext(os.path.basename(p))[0]) for p in arquivos}
+    if os.path.isfile(ARQUIVO_KMZ_PADRAO) and "TERESINA" not in municipios:
+        arquivos.append(ARQUIVO_KMZ_PADRAO)
+    assinaturas = []
+    for caminho in arquivos:
+        try:
+            info = os.stat(caminho)
+            assinaturas.append((caminho, info.st_size, info.st_mtime_ns))
+        except OSError:
+            continue
+    return carregar_geometrias_municipais(tuple(assinaturas))
+
+
 def ponto_em_poligono(lat, lon, poligono):
     # Ray casting. poligono: [(lat, lon), ...]
     dentro = False
@@ -761,7 +815,10 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
     for _, evento in df_eventos.iterrows():
         areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
         for area in areas:
-            bloco = pontos[pontos["_bairro_cruzamento"] == area["bairro"]].copy()
+            bloco = pontos[
+                (pontos["_bairro_cruzamento"] == area["bairro"])
+                & (pontos["Cidade"].map(normalizar_municipio) == normalizar_municipio(evento.get("Cidade", "")))
+            ].copy()
             if bloco.empty:
                 continue
             registros.append({
@@ -793,37 +850,32 @@ def classificar_status_evento(valor):
 
 
 def eventos_georreferenciados(eventos, bairros_kmz):
-    """Associa cada evento somente a polígonos conhecidos do KMZ de Teresina.
-
-    Não inventa geometria de municípios/bairros ausentes. O campo (PARCIAL)
-    indica abrangência informada, mas não fornece o contorno exato da parte afetada.
-    """
+    """Relaciona polígonos por município + bairro, sem misturar cidades."""
     saida = []
     sem_geometria = 0
     if eventos is None or eventos.empty:
         return saida, 0
     indice = {}
     for bairro in bairros_kmz:
-        indice.setdefault(bairro["nome_normalizado"], []).append(bairro)
+        chave = (bairro.get("municipio", "TERESINA"), bairro["nome_normalizado"])
+        indice.setdefault(chave, []).append(bairro)
     for _, evento in eventos.iterrows():
-        cidade = normalizar_texto(evento.get("Cidade", ""))
+        cidade = normalizar_municipio(evento.get("Cidade", ""))
         areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
-        if not areas:
-            sem_geometria += 1
-            continue
-        # A geometria versionada é exclusivamente de Teresina.
-        if cidade != "TERESINA":
+        if not cidade or not areas:
             sem_geometria += 1
             continue
         identificados = set()
         encontrou = False
+        faltou = False
         for area in areas:
             nome = area["bairro"]
             if nome in identificados:
                 continue
             identificados.add(nome)
-            correspondencias = indice.get(nome, [])
+            correspondencias = indice.get((cidade, nome), [])
             if not correspondencias:
+                faltou = True
                 continue
             encontrou = True
             categoria, cor = classificar_status_evento(evento.get("Status", ""))
@@ -835,7 +887,7 @@ def eventos_georreferenciados(eventos, bairros_kmz):
                     "categoria": categoria,
                     "cor": cor,
                 })
-        if not encontrou or len(identificados) > sum(bool(indice.get(n)) for n in identificados):
+        if not encontrou or faltou:
             sem_geometria += 1
     return saida, sem_geometria
 
@@ -1796,17 +1848,9 @@ if modo_escuro:
     </style>
     """, unsafe_allow_html=True)
 
-# Camada geográfica fixa, versionada junto com o projeto no GitHub.
-bairros = []
-kmz_nome = ARQUIVO_KMZ_PADRAO
-try:
-    if os.path.isfile(ARQUIVO_KMZ_PADRAO):
-        with open(ARQUIVO_KMZ_PADRAO, "rb") as arquivo_kmz:
-            bairros = carregar_kmz_bytes(arquivo_kmz.read())
-    else:
-        st.sidebar.warning("TERESINA.kmz não encontrado na raiz do projeto.")
-except Exception as erro:
-    st.error(f"Erro ao carregar a camada de bairros: {erro}")
+# Carregamento automático de polígonos de todos os municípios disponíveis.
+# A ausência de KMZ é normal e não gera avisos no mapa.
+bairros = descobrir_kmz()
 
 # Reset diário persistente, executado antes de ler dados (00:01, horário de Teresina).
 # Streamlit não é um agendador: se ninguém acessar o app nesse horário,
@@ -1866,11 +1910,6 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
     st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
                "As áreas destacadas representam os bairros inteiros do KMZ, inclusive quando o evento informa impacto parcial.")
-    if eventos_sem_geometria:
-        st.info(f"{eventos_sem_geometria} evento(s) sem representação completa no mapa: "
-                "a geometria disponível é apenas a dos bairros de Teresina, "
-                "ou há bairros não encontrados no KMZ. Os registros continuam disponíveis em Eventos e nos relatórios.")
-
     modo_ativos = st.radio(
         "Visualização de poços e loggers",
         ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
