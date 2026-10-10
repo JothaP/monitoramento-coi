@@ -414,6 +414,7 @@ with col3:
 
         if st.button(
             "Acessar Farol Operacional",
+            type="primary",
             use_container_width=True,
             key="acessar_farol_operacional",
         ):
