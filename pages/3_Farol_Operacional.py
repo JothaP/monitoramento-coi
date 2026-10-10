@@ -1296,6 +1296,179 @@ def modal_editar_poco():
 
 
 
+@st.dialog("➕ Cadastrar novo logger")
+def modal_novo_logger():
+    with st.form("form_novo_logger_modal", clear_on_submit=True):
+        identificacao = st.text_input("Identificação do logger *")
+        endereco = st.text_input("Endereço")
+        municipio = st.text_input("Município *", value="Teresina")
+        c1, c2 = st.columns(2)
+        latitude = c1.text_input("Latitude *", placeholder="-5,089200")
+        longitude = c2.text_input("Longitude *", placeholder="-42,801900")
+        salvar = st.form_submit_button("Cadastrar logger", type="primary", use_container_width=True)
+
+    if salvar:
+        lat = normalizar_coordenada(latitude, "lat")
+        lon = normalizar_coordenada(longitude, "lon")
+        if not identificacao.strip() or not municipio.strip() or lat is None or lon is None:
+            st.error("Informe identificação, município e coordenadas válidas.")
+        else:
+            try:
+                novo = pd.DataFrame([{
+                    "ID_LOGGER": novo_id("LOGGER"),
+                    "IDENTIFICACAO_ATIVO": identificacao.strip(),
+                    "ENDERECO": endereco.strip(),
+                    "MUNICIPIO": municipio.strip(),
+                    "LATITUDE": lat,
+                    "LONGITUDE": lon,
+                }], columns=CABECALHO_LOGGERS)
+                append_dataframe(NOME_ABA_LOGGERS, CABECALHO_LOGGERS, novo)
+                st.success("Logger cadastrado com sucesso.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Erro ao cadastrar logger: {erro}")
+
+
+@st.dialog("✏️ Editar ou excluir logger")
+def modal_editar_logger():
+    dados = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
+    if dados.empty:
+        st.info("Nenhum logger cadastrado.")
+        return
+
+    # Índices originais preservados para identificar a linha real no Google Sheets.
+    opcoes = {
+        f"{str(r.get('IDENTIFICACAO_ATIVO', ''))} — {str(r.get('ID_LOGGER', ''))} (linha {i + 2})": i
+        for i, r in dados.iterrows()
+    }
+    selecionado = st.selectbox("Selecione o logger", list(opcoes), key="modal_logger_selecionado")
+    indice = opcoes[selecionado]
+    registro = dados.loc[indice]
+    linha_planilha = int(indice) + 2
+
+    with st.form("form_edicao_logger_modal"):
+        identificacao = st.text_input("Identificação do logger *", value=str(registro.get("IDENTIFICACAO_ATIVO", "")))
+        endereco = st.text_input("Endereço", value=str(registro.get("ENDERECO", "")))
+        municipio = st.text_input("Município *", value=str(registro.get("MUNICIPIO", "")))
+        c1, c2 = st.columns(2)
+        latitude = c1.text_input("Latitude *", value=str(registro.get("LATITUDE", "")))
+        longitude = c2.text_input("Longitude *", value=str(registro.get("LONGITUDE", "")))
+        salvar = st.form_submit_button("💾 Salvar alterações", type="primary", use_container_width=True)
+
+    if salvar:
+        lat = normalizar_coordenada(latitude, "lat")
+        lon = normalizar_coordenada(longitude, "lon")
+        if not identificacao.strip() or not municipio.strip() or lat is None or lon is None:
+            st.error("Informe identificação, município e coordenadas válidas.")
+        else:
+            try:
+                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).update(
+                    range_name=f"A{linha_planilha}:F{linha_planilha}",
+                    values=[[
+                        str(registro.get("ID_LOGGER", "")), identificacao.strip(), endereco.strip(),
+                        municipio.strip(), lat, lon,
+                    ]],
+                    value_input_option="USER_ENTERED",
+                )
+                invalidar_cache()
+                st.success("Logger atualizado com sucesso.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Erro ao atualizar logger: {erro}")
+
+    st.divider()
+    confirmar = st.checkbox("Confirmo que desejo excluir este logger.", key="confirmar_exclusao_logger_modal")
+    if st.button("🗑️ Excluir logger", key="btn_excluir_logger_modal"):
+        if not confirmar:
+            st.warning("Marque a confirmação antes de excluir.")
+        else:
+            try:
+                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).delete_rows(linha_planilha)
+                invalidar_cache()
+                st.success("Logger excluído.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Erro ao excluir logger: {erro}")
+
+
+@st.dialog("📥 Importação de bases", width="large")
+def modal_importacao():
+    st.subheader("Importação das bases")
+    st.info("Os dados de O.S. e eventos são usados apenas no dia operacional. Às 00h01 (Teresina), PONTOS e EVENTOS são limpos na primeira execução do aplicativo após esse horário. Poços e loggers são preservados.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        arq_os = st.file_uploader("Base diária de O.S.", type=["xlsx", "xls", "csv"], key="upload_os")
+        if arq_os is not None:
+            try:
+                previa = ler_planilha_upload(arq_os)
+                st.write(f"**{len(previa):,}** linhas encontradas")
+                st.dataframe(previa.head(10), use_container_width=True, hide_index=True)
+                if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
+                    preparados = preparar_pontos(previa)
+                    inseridas, total = upsert_pontos(preparados)
+                    st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro na base de O.S.: {e}")
+
+    with c2:
+        arq_eventos = st.file_uploader("Base de eventos", type=["xlsx", "xls", "csv"], key="upload_eventos")
+        if arq_eventos is not None:
+            try:
+                previa_e = ler_planilha_upload(arq_eventos)
+                st.write(f"**{len(previa_e):,}** linhas encontradas")
+                st.dataframe(previa_e.head(10), use_container_width=True, hide_index=True)
+                if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
+                    preparados_e = preparar_eventos(previa_e)
+                    processados, total = upsert_eventos(preparados_e)
+                    st.success(f"Importação concluída: {processados:,} linhas processadas. EVENTOS agora possui {total:,} registros.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro na base de eventos: {e}")
+
+    st.divider()
+    st.subheader("Resumo do armazenamento")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Poços / Ativos", len(df_pocos))
+    m2.metric("Loggers", len(df_loggers))
+    m3.metric("O.S. em PONTOS", len(df_pontos))
+    m4.metric("Eventos", len(df_eventos))
+
+
+@st.dialog("⚡ Eventos x O.S.", width="large")
+def modal_eventos():
+    st.subheader("Eventos x O.S. por bairro")
+
+    if df_eventos.empty:
+        st.info("A aba EVENTOS ainda não possui dados.")
+    elif df_pontos.empty:
+        st.warning("Há eventos cadastrados, mas ainda não existem O.S. em PONTOS para o cruzamento.")
+    else:
+        rel = relacionar_eventos_pontos(df_eventos, df_pontos, bairros)
+
+        if rel.empty:
+            st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
+        else:
+            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), use_container_width=True, hide_index=True)
+
+            fig = px.bar(
+                rel.sort_values("O.S. encontradas", ascending=False),
+                x="Bairro",
+                y="O.S. encontradas",
+                color="Status",
+                hover_data=["Protocolo", "Matrículas", "Parcial"],
+                title="O.S. encontradas nos bairros impactados pelos eventos",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.divider()
+        st.markdown("### Eventos armazenados")
+        mostrar_eventos = df_eventos.copy()
+        colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
+        st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
+
+
 # ============================================================
 # INTERFACE
 # ============================================================
@@ -1387,60 +1560,22 @@ if not df_loggers.empty:
 with st.sidebar:
     st.divider()
     st.markdown("### 🧭 Navegação")
-    pagina_farol = st.radio(
-        "Seção",
-        ["🗺️ Mapa operacional", "📥 Importação", "⚡ Eventos", "📍 Cadastros"],
-        label_visibility="collapsed",
-        key="farol_pagina",
-    )
+    if "farol_tela" not in st.session_state:
+        st.session_state["farol_tela"] = "mapa"
+    if st.button("🗺️ Mapa operacional", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
+        st.session_state["farol_tela"] = "mapa"
+        st.rerun()
+    if st.button("📥 Importação", use_container_width=True):
+        modal_importacao()
+    if st.button("⚡ Eventos", use_container_width=True):
+        modal_eventos()
+    if st.button("📍 Cadastros", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
+        st.session_state["farol_tela"] = "cadastros"
+        st.rerun()
     st.caption("O mapa é a tela inicial do Farol Operacional.")
 
 
-if pagina_farol == "📥 Importação":
-    st.subheader("Importação das bases")
-    st.info("Os dados de O.S. e eventos são usados apenas no dia operacional. Às 00h01 (Teresina), PONTOS e EVENTOS são limpos na primeira execução do aplicativo após esse horário. Poços e loggers são preservados.")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        arq_os = st.file_uploader("Base diária de O.S.", type=["xlsx", "xls", "csv"], key="upload_os")
-        if arq_os is not None:
-            try:
-                previa = ler_planilha_upload(arq_os)
-                st.write(f"**{len(previa):,}** linhas encontradas")
-                st.dataframe(previa.head(10), use_container_width=True, hide_index=True)
-                if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
-                    preparados = preparar_pontos(previa)
-                    inseridas, total = upsert_pontos(preparados)
-                    st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Erro na base de O.S.: {e}")
-
-    with c2:
-        arq_eventos = st.file_uploader("Base de eventos", type=["xlsx", "xls", "csv"], key="upload_eventos")
-        if arq_eventos is not None:
-            try:
-                previa_e = ler_planilha_upload(arq_eventos)
-                st.write(f"**{len(previa_e):,}** linhas encontradas")
-                st.dataframe(previa_e.head(10), use_container_width=True, hide_index=True)
-                if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
-                    preparados_e = preparar_eventos(previa_e)
-                    processados, total = upsert_eventos(preparados_e)
-                    st.success(f"Importação concluída: {processados:,} linhas processadas. EVENTOS agora possui {total:,} registros.")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Erro na base de eventos: {e}")
-
-    st.divider()
-    st.subheader("Resumo do armazenamento")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Poços / Ativos", len(df_pocos))
-    m2.metric("Loggers", len(df_loggers))
-    m3.metric("O.S. em PONTOS", len(df_pontos))
-    m4.metric("Eventos", len(df_eventos))
-
-
-if pagina_farol == "🗺️ Mapa operacional":
+if st.session_state.get("farol_tela", "mapa") == "mapa":
     st.subheader("🗺️ Visão geográfica operacional")
 
     modo_ativos = st.radio(
@@ -1552,46 +1687,13 @@ if pagina_farol == "🗺️ Mapa operacional":
                 st.caption("O mapa completo aparece acima. Use o ranking para identificar as áreas prioritárias.")
 
 
-if pagina_farol == "⚡ Eventos":
-    st.subheader("Eventos x O.S. por bairro")
-
-    if df_eventos.empty:
-        st.info("A aba EVENTOS ainda não possui dados.")
-    elif df_pontos.empty:
-        st.warning("Há eventos cadastrados, mas ainda não existem O.S. em PONTOS para o cruzamento.")
-    else:
-        rel = relacionar_eventos_pontos(df_eventos, df_pontos, bairros)
-
-        if rel.empty:
-            st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
-        else:
-            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), use_container_width=True, hide_index=True)
-
-            fig = px.bar(
-                rel.sort_values("O.S. encontradas", ascending=False),
-                x="Bairro",
-                y="O.S. encontradas",
-                color="Status",
-                hover_data=["Protocolo", "Matrículas", "Parcial"],
-                title="O.S. encontradas nos bairros impactados pelos eventos",
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.divider()
-        st.markdown("### Eventos armazenados")
-        mostrar_eventos = df_eventos.copy()
-        colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
-        st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
-
-
-if pagina_farol == "📍 Cadastros":
+if st.session_state.get("farol_tela", "mapa") == "cadastros":
     st.subheader("Cadastro de Poços / Ativos e Loggers")
 
     c_poco, c_logger = st.columns(2)
 
     with c_poco:
         st.markdown("### Poços / Ativos")
-        st.caption("Cadastro original preservado, com edição e exclusão em janelas modais.")
         if st.button("➕ Cadastrar novo poço", key="poco_novo_modal"):
             modal_novo_poco()
         if st.button("✏️ Editar ou excluir poço", key="poco_editar_modal"):
@@ -1599,64 +1701,9 @@ if pagina_farol == "📍 Cadastros":
         st.dataframe(df_pocos, use_container_width=True, hide_index=True)
 
     with c_logger:
-        st.markdown("### Logger")
-        with st.form("form_novo_logger"):
-            identificacao = st.text_input("Identificação do logger", key="novo_logger_id")
-            endereco = st.text_input("Endereço", key="novo_logger_endereco")
-            municipio_l = st.text_input("Município", value="Teresina", key="novo_municipio_logger")
-            col1, col2 = st.columns(2)
-            lat_l = col1.text_input("Latitude", key="novo_lat_logger")
-            lon_l = col2.text_input("Longitude", key="novo_lon_logger")
-            salvar_logger = st.form_submit_button("Cadastrar logger", type="primary")
-
-        if salvar_logger:
-            if not identificacao.strip() or parse_float(lat_l) is None or parse_float(lon_l) is None:
-                st.error("Informe identificação, latitude e longitude válidas.")
-            else:
-                novo = pd.DataFrame([{
-                    "ID_LOGGER": novo_id("LOGGER"),
-                    "IDENTIFICACAO_ATIVO": identificacao.strip(),
-                    "ENDERECO": endereco.strip(),
-                    "MUNICIPIO": municipio_l.strip(),
-                    "LATITUDE": parse_float(lat_l),
-                    "LONGITUDE": parse_float(lon_l),
-                }], columns=CABECALHO_LOGGERS)
-                append_dataframe(NOME_ABA_LOGGERS, CABECALHO_LOGGERS, novo)
-                st.success("Logger cadastrado.")
-                st.rerun()
-
+        st.markdown("### Loggers")
+        if st.button("➕ Cadastrar novo logger", key="logger_novo_modal"):
+            modal_novo_logger()
+        if st.button("✏️ Editar ou excluir logger", key="logger_editar_modal"):
+            modal_editar_logger()
         st.dataframe(df_loggers, use_container_width=True, hide_index=True)
-
-
-    st.divider()
-    st.markdown("### Gerenciar loggers cadastrados")
-    if not df_loggers.empty:
-        opcoes = {f"{r['IDENTIFICACAO_ATIVO']} — {r['ID_LOGGER']}": i for i, r in df_loggers.iterrows()}
-        escolha = st.selectbox("Selecionar logger para editar ou excluir", list(opcoes), key="logger_edicao")
-        i = opcoes[escolha]
-        registro = df_loggers.loc[i]
-        with st.form("editar_logger"):
-            ativo_edit = st.text_input("Identificação", value=str(registro['IDENTIFICACAO_ATIVO']))
-            endereco_edit = st.text_input("Endereço", value=str(registro['ENDERECO']))
-            municipio_edit = st.text_input("Município", value=str(registro['MUNICIPIO']))
-            a, b = st.columns(2)
-            lat_edit = a.text_input("Latitude", value=str(registro['LATITUDE']))
-            lon_edit = b.text_input("Longitude", value=str(registro['LONGITUDE']))
-            salvar = st.form_submit_button("💾 Salvar alterações")
-        if salvar:
-            lat_ok = normalizar_coordenada(lat_edit, 'lat')
-            lon_ok = normalizar_coordenada(lon_edit, 'lon')
-            if not ativo_edit.strip() or lat_ok is None or lon_ok is None:
-                st.error("Informe identificação e coordenadas válidas.")
-            else:
-                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).update(
-                    range_name=f"A{i+2}:F{i+2}",
-                    values=[[str(registro['ID_LOGGER']), ativo_edit, endereco_edit, municipio_edit, lat_ok, lon_ok]],
-                    value_input_option="USER_ENTERED")
-                invalidar_cache()
-                st.rerun()
-        if st.checkbox("Confirmo a exclusão deste logger", key="confirmar_excluir_logger"):
-            if st.button("🗑️ Excluir logger", key="excluir_logger"):
-                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).delete_rows(int(i)+2)
-                invalidar_cache()
-                st.rerun()
