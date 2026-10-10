@@ -34,6 +34,7 @@ st.set_page_config(
 verificar_autenticacao()
 
 SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+st.sidebar.write("ID configurado:", SPREADSHEET_ID)
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
