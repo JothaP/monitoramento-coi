@@ -15,3 +15,5 @@ numpy
 pyxlsb
 xlrd
 reportlab
+shapely
+pyproj
