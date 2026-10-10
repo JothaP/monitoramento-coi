@@ -41,8 +41,8 @@ NOME_ABA_PONTOS = "PONTOS"
 NOME_ABA_EVENTOS = "EVENTOS"
 
 ARQUIVO_KMZ_PADRAO = os.path.join(os.path.dirname(os.path.dirname(__file__)), "TERESINA.kmz")
-RAIO_OPERACIONAL_PADRAO = 1000
-RAIO_CONCENTRACAO_PADRAO = 1000
+RAIO_OPERACIONAL_PADRAO = 500
+RAIO_CONCENTRACAO_PADRAO = 500
 
 CABECALHO_POCOS = [
     "ID_POCO",
@@ -63,10 +63,15 @@ CABECALHO_LOGGERS = [
 ]
 
 CABECALHO_PONTOS = [
+    "Empresa",
+    "Dt. Emissão",
     "Nº da O.S",
     "Matrícula",
     "Cidade",
     "Bairro",
+    "Serviço Executado",
+    "Status OS",
+    "Atendente",
     "Latitude",
     "Longitude",
 ]
