@@ -1048,7 +1048,7 @@ def eventos_georreferenciados(eventos, bairros_kmz):
 
 
 def adicionar_camada_eventos(mapa, eventos_mapeados):
-    fg = folium.FeatureGroup(name="Eventos de abastecimento", show=True)
+    fg = folium.FeatureGroup(name="Eventos de desabastecimento", show=True)
     for item in eventos_mapeados:
         evento = item["evento"]
         bairro = item["bairro"]
@@ -1113,7 +1113,8 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
 
 
 def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
-    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles="OpenStreetMap")
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None)
+    folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
     if mostrar_bairros:
         fg_bairros = folium.FeatureGroup(name="Bairros", show=True)
@@ -1138,7 +1139,7 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             if lat is None or lon is None:
                 continue
             # Cor definida pelo serviço executado, independentemente do status da O.S.
-            servico_os = str(r.get("Tipo da O.S", "") or "")
+            servico_os = str(r.get("Serviço Executado", "") or "")
             eh_informacao = bool(re.search(r"(?<!\d)146005(?!\d)", servico_os))
             cor = "#F28C28" if eh_informacao else "#1677D2"
             classificacao = ("Informação de Falta de água (146005)" if eh_informacao
@@ -2134,9 +2135,9 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
                               if str(x).strip()})
         servico_sel = st.multiselect(
-            "Serviço Executado",
+            "Tipo da O.S",
             options=servicos_os,
-            placeholder="Todos os serviços",
+            placeholder="Todos os tipos",
             help="Selecione um ou mais serviços; sem seleção, todos são exibidos.",
             key="farol_filtro_servico_executado",
         )
