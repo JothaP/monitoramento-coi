@@ -250,9 +250,12 @@ def obter_aba(nome, cabecalho):
     try:
         aba = planilha.worksheet(nome)
     except gspread.WorksheetNotFound:
-        aba = planilha.add_worksheet(title=nome, rows=1000, cols=max(20, len(cabecalho) + 5))
-        aba.update("A1", [cabecalho])
-        return aba
+    st.error(
+        f"ABA NÃO ENCONTRADA: {nome} | "
+        f"PLANILHA: {planilha.title} | "
+        f"ID: {planilha.id}"
+    )
+    st.stop()
 
     valores = aba.get_all_values()
     if not valores:
