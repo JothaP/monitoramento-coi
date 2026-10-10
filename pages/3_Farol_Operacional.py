@@ -63,15 +63,10 @@ CABECALHO_LOGGERS = [
 ]
 
 CABECALHO_PONTOS = [
-    "Empresa",
-    "Dt. Emissão",
     "Nº da O.S",
     "Matrícula",
     "Cidade",
     "Bairro",
-    "Serviço Executado",
-    "Status OS",
-    "Atendente",
     "Latitude",
     "Longitude",
 ]
