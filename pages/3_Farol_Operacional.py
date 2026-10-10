@@ -34,7 +34,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
 
-from auth import verificar_autenticacao
+from auth import verificar_autenticacao, tem_acesso_modulo
 
 
 # ============================================================
@@ -47,7 +47,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-verificar_autenticacao()
+if not verificar_autenticacao() or not tem_acesso_modulo("3"):
+    st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
+    st.stop()
+
+PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
+PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
+
+def exigir_edicao_farol():
+    """Bloqueia mutações mesmo quando funções são chamadas sem seus botões."""
+    if not PODE_EDITAR_FAROL:
+        raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
 SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
 
@@ -329,12 +339,13 @@ def obter_aba(nome, cabecalho):
 
     valores = aba.get_all_values()
     if not valores:
-        aba.update("A1", [cabecalho])
+        if PODE_EDITAR_FAROL:
+            aba.update("A1", [cabecalho])
     elif [normalizar_cabecalho(x) for x in valores[0]] != [normalizar_cabecalho(x) for x in cabecalho]:
         # Não apaga dados existentes. Apenas garante que as colunas mínimas estejam presentes.
         cab_atual = valores[0]
         faltantes = [c for c in cabecalho if normalizar_cabecalho(c) not in {normalizar_cabecalho(x) for x in cab_atual}]
-        if faltantes:
+        if faltantes and PODE_EDITAR_FAROL:
             nova_linha = cab_atual + faltantes
             aba.resize(cols=max(aba.col_count, len(nova_linha)))
             aba.update("A1", [nova_linha])
@@ -397,11 +408,13 @@ def garantir_cabecalho_exato(nome, cabecalho):
     aba = obter_aba(nome, cabecalho)
     valores = aba.get_all_values()
     if not valores:
-        aba.update("A1", [cabecalho])
+        if PODE_EDITAR_FAROL:
+            aba.update("A1", [cabecalho])
     return aba
 
 
 def append_dataframe(nome, cabecalho, df):
+    exigir_edicao_farol()
     if df is None or df.empty:
         return 0
     aba = garantir_cabecalho_exato(nome, cabecalho)
@@ -414,6 +427,7 @@ def append_dataframe(nome, cabecalho, df):
 
 
 def substituir_aba(nome, cabecalho, df):
+    exigir_edicao_farol()
     aba = garantir_cabecalho_exato(nome, cabecalho)
     df = df.reindex(columns=cabecalho).fillna("")
     linhas = [cabecalho] + [[limpar_valor(v) for v in row] for row in df.itertuples(index=False, name=None)]
@@ -527,6 +541,7 @@ def chave_evento(row):
 
 
 def upsert_pontos(df_novo):
+    exigir_edicao_farol()
     atual = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
     # Preserva colunas extras já existentes na aba PONTOS.
     colunas = list(dict.fromkeys(list(atual.columns) + list(CABECALHO_PONTOS)))
@@ -562,6 +577,7 @@ def upsert_pontos(df_novo):
 
 
 def upsert_eventos(df_novo):
+    exigir_edicao_farol()
     atual = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
     atual = atual.reindex(columns=CABECALHO_EVENTOS).fillna("")
     novo = df_novo.reindex(columns=CABECALHO_EVENTOS).fillna("")
@@ -1255,6 +1271,7 @@ def invalidar_cache_dados():
 
 
 def adicionar_poco(identificacao, nome, municipio, latitude, longitude):
+    exigir_edicao_farol()
     atual = carregar_pocos()
     ids = atual["ID_POCO"].astype(str).tolist() if not atual.empty else []
     nums = [int(x[4:]) for x in ids if re.fullmatch(r"POCO\d+", x)]
@@ -1265,18 +1282,23 @@ def adicionar_poco(identificacao, nome, municipio, latitude, longitude):
 
 
 def atualizar_poco(linha_planilha, id_poco, identificacao, nome, municipio, latitude, longitude):
+    exigir_edicao_farol()
     aba = obter_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
     aba.update(range_name=f"A{linha_planilha}:F{linha_planilha}", values=[[id_poco, identificacao, nome, municipio, latitude, longitude]], value_input_option="USER_ENTERED")
     invalidar_cache_dados()
 
 
 def excluir_poco(linha_planilha):
+    exigir_edicao_farol()
     obter_aba(NOME_ABA_POCOS, CABECALHO_POCOS).delete_rows(linha_planilha)
     invalidar_cache_dados()
 
 
 @st.dialog("➕ Cadastrar novo poço")
 def modal_novo_poco():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
 
     with st.form(
         "form_novo_poco_modal",
@@ -1383,6 +1405,9 @@ def modal_novo_poco():
 
 @st.dialog("✏️ Editar ou excluir poço")
 def modal_editar_poco():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
 
     df_atual = preparar_pocos(
         carregar_pocos()
@@ -1625,6 +1650,9 @@ def modal_editar_poco():
 
 @st.dialog("➕ Cadastrar novo logger")
 def modal_novo_logger():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
     with st.form("form_novo_logger_modal", clear_on_submit=True):
         identificacao = st.text_input("Identificação do logger *")
         endereco = st.text_input("Endereço")
@@ -1658,6 +1686,9 @@ def modal_novo_logger():
 
 @st.dialog("✏️ Editar ou excluir logger")
 def modal_editar_logger():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
     dados = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
     if dados.empty:
         st.info("Nenhum logger cadastrado.")
@@ -1875,6 +1906,9 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
 
 @st.dialog("📥 Importação de bases", width="large")
 def modal_importacao():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
     st.subheader("Importação das bases")
     st.info("Os dados de O.S. e eventos são usados apenas no dia operacional. Às 00h01 (Teresina), PONTOS e EVENTOS são limpos na primeira execução do aplicativo após esse horário. Poços e loggers são preservados.")
 
@@ -2001,7 +2035,8 @@ bairros = descobrir_kmz()
 # Streamlit não é um agendador: se ninguém acessar o app nesse horário,
 # a limpeza ocorre na primeira execução posterior.
 try:
-    reset_diario_se_necessario()
+    if PODE_EDITAR_FAROL:
+        reset_diario_se_necessario()
 except Exception as erro:
     st.error(f"Não foi possível verificar/executar o reset diário: {erro}")
     st.stop()  # Evita operar sobre dados de um dia anterior sem reset.
@@ -2039,13 +2074,16 @@ with st.sidebar:
     if st.button("🗺️ Mapa operacional", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
         st.session_state["farol_tela"] = "mapa"
         st.rerun()
-    if st.button("📥 Importação", use_container_width=True):
-        modal_importacao()
+    if PODE_EDITAR_FAROL:
+        if st.button("📥 Importação", use_container_width=True):
+            modal_importacao()
     if st.button("⚡ Eventos", use_container_width=True):
         modal_eventos()
     if st.button("📍 Cadastros", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
         st.session_state["farol_tela"] = "cadastros"
         st.rerun()
+    if not PODE_EDITAR_FAROL:
+        st.caption("🔒 Perfil Operador: somente visualização e downloads.")
     st.caption("O mapa é a tela inicial do Farol Operacional.")
 
 
@@ -2177,16 +2215,18 @@ if st.session_state.get("farol_tela", "mapa") == "cadastros":
 
     with c_poco:
         st.markdown("### Poços / Ativos")
-        if st.button("➕ Cadastrar novo poço", key="poco_novo_modal"):
-            modal_novo_poco()
-        if st.button("✏️ Editar ou excluir poço", key="poco_editar_modal"):
-            modal_editar_poco()
+        if PODE_EDITAR_FAROL:
+            if st.button("➕ Cadastrar novo poço", key="poco_novo_modal"):
+                modal_novo_poco()
+            if st.button("✏️ Editar ou excluir poço", key="poco_editar_modal"):
+                modal_editar_poco()
         st.dataframe(df_pocos, use_container_width=True, hide_index=True)
 
     with c_logger:
         st.markdown("### Loggers")
-        if st.button("➕ Cadastrar novo logger", key="logger_novo_modal"):
-            modal_novo_logger()
-        if st.button("✏️ Editar ou excluir logger", key="logger_editar_modal"):
-            modal_editar_logger()
+        if PODE_EDITAR_FAROL:
+            if st.button("➕ Cadastrar novo logger", key="logger_novo_modal"):
+                modal_novo_logger()
+            if st.button("✏️ Editar ou excluir logger", key="logger_editar_modal"):
+                modal_editar_logger()
         st.dataframe(df_loggers, use_container_width=True, hide_index=True)
