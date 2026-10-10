@@ -7,6 +7,7 @@ import hashlib
 import zipfile
 import threading
 from xml.sax.saxutils import escape as xml_escape
+from html import escape as html_escape
 from zoneinfo import ZoneInfo
 import unicodedata
 from datetime import datetime, date, time as horario
@@ -55,7 +56,9 @@ FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
 
-ARQUIVO_KMZ_PADRAO = os.path.join(os.path.dirname(os.path.dirname(__file__)), "TERESINA.kmz")
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DIRETORIO_KMZ = os.path.join(RAIZ_PROJETO, "geodados", "municipios")
+ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
 RAIO_OPERACIONAL_PADRAO = 500
 RAIO_CONCENTRACAO_PADRAO = 500
 
@@ -589,6 +592,58 @@ def carregar_kml_bytes(kml_bytes):
     return bairros
 
 
+
+def normalizar_municipio(valor):
+    """Usa a mesma chave para Cidade da planilha e nome do arquivo KMZ."""
+    return re.sub(r"[^A-Z0-9]", "", normalizar_texto(valor))
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def carregar_geometrias_municipais(arquivos_assinados):
+    """Carrega KMZ disponíveis, isolando arquivos inválidos.
+
+    A assinatura (caminho, tamanho, mtime_ns) invalida o cache ao alterar KMZ.
+    O nome do arquivo define o município; cada Placemark define um bairro.
+    """
+    todos = []
+    for caminho, _tamanho, _mtime in arquivos_assinados:
+        municipio = normalizar_municipio(os.path.splitext(os.path.basename(caminho))[0])
+        if not municipio:
+            continue
+        try:
+            with open(caminho, "rb") as arquivo:
+                registros = carregar_kmz_bytes(arquivo.read())
+            for bairro in registros:
+                todos.append({**bairro, "municipio": municipio})
+        except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError):
+            # Arquivo inválido não deve interromper o painel operacional.
+            continue
+    return todos
+
+
+def descobrir_kmz():
+    """Prioriza geodados/municipios; aceita TERESINA.kmz antigo como fallback."""
+    arquivos = []
+    if os.path.isdir(DIRETORIO_KMZ):
+        for nome in sorted(os.listdir(DIRETORIO_KMZ)):
+            if nome.lower().endswith(".kmz"):
+                caminho = os.path.join(DIRETORIO_KMZ, nome)
+                if os.path.isfile(caminho):
+                    arquivos.append(caminho)
+    # Evita carregar duas versões de Teresina quando a nova pasta já contém o município.
+    municipios = {normalizar_municipio(os.path.splitext(os.path.basename(p))[0]) for p in arquivos}
+    if os.path.isfile(ARQUIVO_KMZ_PADRAO) and "TERESINA" not in municipios:
+        arquivos.append(ARQUIVO_KMZ_PADRAO)
+    assinaturas = []
+    for caminho in arquivos:
+        try:
+            info = os.stat(caminho)
+            assinaturas.append((caminho, info.st_size, info.st_mtime_ns))
+        except OSError:
+            continue
+    return carregar_geometrias_municipais(tuple(assinaturas))
+
+
 def ponto_em_poligono(lat, lon, poligono):
     # Ray casting. poligono: [(lat, lon), ...]
     dentro = False
@@ -760,7 +815,10 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
     for _, evento in df_eventos.iterrows():
         areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
         for area in areas:
-            bloco = pontos[pontos["_bairro_cruzamento"] == area["bairro"]].copy()
+            bloco = pontos[
+                (pontos["_bairro_cruzamento"] == area["bairro"])
+                & (pontos["Cidade"].map(normalizar_municipio) == normalizar_municipio(evento.get("Cidade", "")))
+            ].copy()
             if bloco.empty:
                 continue
             registros.append({
@@ -774,6 +832,99 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
                 "Data": evento.get("Data", ""),
             })
     return pd.DataFrame(registros)
+
+
+# ============================================================
+# EVENTOS GEORREFERENCIADOS — SOMENTE ONDE HÁ POLÍGONOS
+# ============================================================
+
+def classificar_status_evento(valor):
+    status = normalizar_texto(valor)
+    if any(p in status for p in ("FINALIZ", "ENCERR", "CONCLUI", "CONCLUID", "NORMALIZ", "RESOLVID", "CANCELAD")):
+        return "Finalizado", "#2eaa59"
+    if any(p in status for p in ("PROGRAM", "AGEND", "PREVIST", "PLANEJ")):
+        return "Programado", "#f2b233"
+    if any(p in status for p in ("ANDAMENTO", "EXECU", "INICIAD", "ATIVO", "ABERTO", "OCORRENCIA", "EM CURSO")):
+        return "Em andamento", "#e04747"
+    return "Status não classificado", "#8b95a7"
+
+
+def eventos_georreferenciados(eventos, bairros_kmz):
+    """Relaciona polígonos por município + bairro, sem misturar cidades."""
+    saida = []
+    sem_geometria = 0
+    if eventos is None or eventos.empty:
+        return saida, 0
+    indice = {}
+    for bairro in bairros_kmz:
+        chave = (bairro.get("municipio", "TERESINA"), bairro["nome_normalizado"])
+        indice.setdefault(chave, []).append(bairro)
+    for _, evento in eventos.iterrows():
+        cidade = normalizar_municipio(evento.get("Cidade", ""))
+        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""))
+        if not cidade or not areas:
+            sem_geometria += 1
+            continue
+        identificados = set()
+        encontrou = False
+        faltou = False
+        for area in areas:
+            nome = area["bairro"]
+            if nome in identificados:
+                continue
+            identificados.add(nome)
+            correspondencias = indice.get((cidade, nome), [])
+            if not correspondencias:
+                faltou = True
+                continue
+            encontrou = True
+            categoria, cor = classificar_status_evento(evento.get("Status", ""))
+            for bairro in correspondencias:
+                saida.append({
+                    "bairro": bairro,
+                    "evento": evento.to_dict(),
+                    "parcial": area["parcial"],
+                    "categoria": categoria,
+                    "cor": cor,
+                })
+        if not encontrou or faltou:
+            sem_geometria += 1
+    return saida, sem_geometria
+
+
+def adicionar_camada_eventos(mapa, eventos_mapeados):
+    fg = folium.FeatureGroup(name="Eventos de abastecimento", show=True)
+    for item in eventos_mapeados:
+        evento = item["evento"]
+        bairro = item["bairro"]
+        categoria = item["categoria"]
+        parcial = item["parcial"]
+        def esc(campo):
+            return html_escape(str(evento.get(campo, "") or "—"))
+        abrangencia = "Parcial (polígono do bairro inteiro como referência)" if parcial else "Bairro informado como impactado"
+        html = (
+            f"<div style='min-width:250px;max-width:400px'>"
+            f"<b>Evento — {html_escape(bairro['nome'])}</b><br>"
+            f"<b>Situação no mapa:</b> {html_escape(categoria)}<br>"
+            f"<b>Status original:</b> {esc('Status')}<br>"
+            f"<b>Protocolo:</b> {esc('Protocolo')}<br>"
+            f"<b>Serviço:</b> {esc('Serviço')}<br>"
+            f"<b>Início:</b> {esc('Início')}<br>"
+            f"<b>Previsão de término:</b> {esc('Prev. Término')}<br>"
+            f"<b>Término real:</b> {esc('Término Real')}<br>"
+            f"<b>Descrição:</b> {esc('Descrição do Serviço')}<br>"
+            f"<b>Abrangência:</b> {html_escape(abrangencia)}"
+            f"</div>"
+        )
+        for poligono in bairro["poligonos"]:
+            folium.Polygon(
+                locations=poligono,
+                color=item["cor"], weight=2.5, opacity=0.9,
+                fill=True, fill_color=item["cor"], fill_opacity=0.23,
+                tooltip=f"Evento: {bairro['nome']} — {categoria}",
+                popup=folium.Popup(html, max_width=430),
+            ).add_to(fg)
+    fg.add_to(mapa)
 
 
 # ============================================================
@@ -806,7 +957,7 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
     return filtrar(df_pocos), filtrar(df_loggers)
 
 
-def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True):
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles="OpenStreetMap")
 
     if mostrar_bairros:
@@ -821,6 +972,8 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
                     tooltip=bairro["nome"],
                 ).add_to(fg_bairros)
         fg_bairros.add_to(mapa)
+
+    adicionar_camada_eventos(mapa, eventos_mapeados or [])
 
     fg_os = folium.FeatureGroup(name="O.S.", show=True)
     if not df_pontos.empty:
@@ -1529,8 +1682,7 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
     return buffer.getvalue()
 
 
-@st.dialog("📋 Relatório da concentração", width="large")
-def modal_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio):
+def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio):
     registro = concentracoes[concentracoes["ID_CONCENTRACAO"] == codigo]
     if registro.empty:
         st.warning("Concentração não encontrada com os filtros atuais.")
@@ -1696,17 +1848,9 @@ if modo_escuro:
     </style>
     """, unsafe_allow_html=True)
 
-# Camada geográfica fixa, versionada junto com o projeto no GitHub.
-bairros = []
-kmz_nome = ARQUIVO_KMZ_PADRAO
-try:
-    if os.path.isfile(ARQUIVO_KMZ_PADRAO):
-        with open(ARQUIVO_KMZ_PADRAO, "rb") as arquivo_kmz:
-            bairros = carregar_kmz_bytes(arquivo_kmz.read())
-    else:
-        st.sidebar.warning("TERESINA.kmz não encontrado na raiz do projeto.")
-except Exception as erro:
-    st.error(f"Erro ao carregar a camada de bairros: {erro}")
+# Carregamento automático de polígonos de todos os municípios disponíveis.
+# A ausência de KMZ é normal e não gera avisos no mapa.
+bairros = descobrir_kmz()
 
 # Reset diário persistente, executado antes de ler dados (00:01, horário de Teresina).
 # Streamlit não é um agendador: se ninguém acessar o app nesse horário,
@@ -1761,8 +1905,11 @@ with st.sidebar:
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
+    eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
     st.subheader("🗺️ Visão geográfica operacional")
 
+    st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
+               "As áreas destacadas representam os bairros inteiros do KMZ, inclusive quando o evento informa impacto parcial.")
     modo_ativos = st.radio(
         "Visualização de poços e loggers",
         ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
@@ -1777,6 +1924,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         mapa = criar_mapa(
             bairros, df_pontos, ativos_pocos, ativos_loggers,
             pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
+            eventos_mapeados=eventos_mapeados,
         )
         st_folium(mapa, width=None, height=650, returned_objects=[])
     else:
@@ -1842,6 +1990,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         mapa = criar_mapa(
             bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
             proximidades, mostrar_bairros=bool(bairros),
+            eventos_mapeados=eventos_mapeados,
         )
         st_folium(mapa, width=None, height=650, returned_objects=[])
 
@@ -1849,29 +1998,24 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
             st.markdown("### 📋 Análise das Concentrações")
-            st.caption("Abra o relatório individual para consultar as O.S., os equipamentos e os eventos relacionados.")
+            st.caption("Expanda uma concentração para consultar O.S., equipamentos, eventos relacionados e baixar o PDF.")
             for _, concentracao in concentracoes.iterrows():
                 codigo = concentracao["ID_CONCENTRACAO"]
                 os_grupo = pontos_cluster[pontos_cluster["_grupo"] == concentracao["GRUPO"]]
-                cidades = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
+                cidades_grupo = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
                 qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
                               if not proximidades.empty else 0)
-                esquerda, direita = st.columns([5, 1.2], vertical_alignment="center")
-                with esquerda:
-                    st.markdown(f"**{codigo} — {', '.join(cidades) or 'Município não informado'}**")
-                    st.caption(
-                        f"{int(concentracao['QTD_OS'])} O.S. · "
-                        f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
-                        f"{qtd_ativos} equipamento(s) próximo(s) · "
-                        f"Bairros: {concentracao['BAIRROS'] or 'Não informados'}"
+                titulo = (
+                    f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'} | "
+                    f"{int(concentracao['QTD_OS'])} O.S. · "
+                    f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
+                    f"{qtd_ativos} ativo(s) próximo(s)"
+                )
+                with st.expander(titulo, expanded=False):
+                    exibir_relatorio_concentracao(
+                        codigo, concentracoes, pontos_cluster, proximidades,
+                        df_eventos, int(raio_operacional)
                     )
-                with direita:
-                    if st.button("📋 Relatório", key=f"relatorio_{codigo}", use_container_width=True):
-                        modal_relatorio_concentracao(
-                            codigo, concentracoes, pontos_cluster, proximidades,
-                            df_eventos, int(raio_operacional)
-                        )
-                st.divider()
 
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
