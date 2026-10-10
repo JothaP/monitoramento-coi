@@ -739,30 +739,30 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
     fg_pocos = folium.FeatureGroup(name="Poços / Ativos", show=True)
         st.write("### Diagnóstico dos marcadores")
 
-    for nome, df in [
-        ("Poços", df_pocos),
-        ("Loggers", df_loggers),
-    ]:
-        validos = 0
+for nome, df in [
+    ("Poços", df_pocos),
+    ("Loggers", df_loggers),
+]:
+    validos = 0
 
-        for _, r in df.iterrows():
-            lat = parse_float(r.get("LATITUDE"))
-            lon = parse_float(r.get("LONGITUDE"))
+    for _, r in df.iterrows():
+        lat = parse_float(r.get("LATITUDE"))
+        lon = parse_float(r.get("LONGITUDE"))
 
-            if (
-                lat is not None
-                and lon is not None
-                and math.isfinite(lat)
-                and math.isfinite(lon)
-                and -90 <= lat <= 90
-                and -180 <= lon <= 180
-            ):
-                validos += 1
+        if (
+            lat is not None
+            and lon is not None
+            and math.isfinite(lat)
+            and math.isfinite(lon)
+            and -90 <= lat <= 90
+            and -180 <= lon <= 180
+        ):
+            validos += 1
 
-        st.write(
-            f"{nome}: {len(df)} cadastrados | "
-            f"{validos} com coordenadas válidas"
-        )
+    st.write(
+        f"{nome}: {len(df)} cadastrados | "
+        f"{validos} com coordenadas válidas"
+    )
     for _, r in df_pocos.iterrows():
         lat, lon = parse_float(r.get("LATITUDE")), parse_float(r.get("LONGITUDE"))
         if lat is None or lon is None:
