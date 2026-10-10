@@ -34,7 +34,6 @@ st.set_page_config(
 verificar_autenticacao()
 
 SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
-st.sidebar.write("ID configurado:", SPREADSHEET_ID)
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -70,6 +69,9 @@ CABECALHO_PONTOS = [
     "Bairro",
     "Latitude",
     "Longitude",
+    "Status OS",
+    "Dt. Emissão",
+    "Serviço Executado",
 ]
 
 CABECALHO_EVENTOS = [
@@ -239,14 +241,14 @@ def obter_cliente_google():
 def obter_planilha():
     planilha = obter_cliente_google().open_by_key(SPREADSHEET_ID)
 
-    st.sidebar.write("Planilha conectada:", planilha.title)
-    st.sidebar.write("ID conectado:", planilha.id)
-
     return planilha
 
 
 def obter_aba(nome, cabecalho):
     planilha = obter_planilha()
+    if planilha.id != SPREADSHEET_ID:
+        st.error("Conexão bloqueada: planilha diferente da configurada para o Farol.")
+        st.stop()
 
     try:
         aba = planilha.worksheet(nome)
@@ -258,8 +260,6 @@ def obter_aba(nome, cabecalho):
             f"ID: {planilha.id}"
         )
         st.stop()
-
-    valores = aba.get_all_values()
 
     valores = aba.get_all_values()
     if not valores:
@@ -417,8 +417,10 @@ def chave_evento(row):
 
 def upsert_pontos(df_novo):
     atual = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
-    atual = atual.reindex(columns=CABECALHO_PONTOS).fillna("")
-    novo = df_novo.reindex(columns=CABECALHO_PONTOS).fillna("")
+    # Preserva colunas extras já existentes na aba PONTOS.
+    colunas = list(dict.fromkeys(list(atual.columns) + list(CABECALHO_PONTOS)))
+    atual = atual.reindex(columns=colunas).fillna("")
+    novo = df_novo.reindex(columns=colunas).fillna("")
 
     if atual.empty:
         final = novo.copy()
@@ -428,13 +430,13 @@ def upsert_pontos(df_novo):
             mapa[chave_ponto(r)] = r.to_dict()
         for _, r in novo.iterrows():
             mapa[chave_ponto(r)] = r.to_dict()
-        final = pd.DataFrame(list(mapa.values()), columns=CABECALHO_PONTOS)
+        final = pd.DataFrame(list(mapa.values()), columns=colunas)
 
     # Mantém ordem cronológica aproximada, sem exigir datas válidas.
     if not final.empty:
         final["_ord"] = pd.to_datetime(final["Dt. Emissão"], dayfirst=True, errors="coerce")
         final = final.sort_values("_ord", na_position="last").drop(columns="_ord")
-    substituir_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS, final)
+    substituir_aba(NOME_ABA_PONTOS, colunas, final)
     return len(novo), len(final)
 
 
@@ -737,34 +739,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
     fg_os.add_to(mapa)
 
     fg_pocos = folium.FeatureGroup(name="Poços / Ativos", show=True)
-        st.write("### Diagnóstico dos marcadores")
-
-for nome, df in [
-    ("Poços", df_pocos),
-    ("Loggers", df_loggers),
-]:
-    validos = 0
-
-    for _, r in df.iterrows():
-        lat = parse_float(r.get("LATITUDE"))
-        lon = parse_float(r.get("LONGITUDE"))
-
-        if (
-            lat is not None
-            and lon is not None
-            and math.isfinite(lat)
-            and math.isfinite(lon)
-            and -90 <= lat <= 90
-            and -180 <= lon <= 180
-        ):
-            validos += 1
-
-    st.write(
-        f"{nome}: {len(df)} cadastrados | "
-        f"{validos} com coordenadas válidas"
-    )
     for _, r in df_pocos.iterrows():
-        lat, lon = parse_float(r.get("LATITUDE")), parse_float(r.get("LONGITUDE"))
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
         folium.Marker(
@@ -781,7 +758,8 @@ for nome, df in [
 
     fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
     for _, r in df_loggers.iterrows():
-        lat, lon = parse_float(r.get("LATITUDE")), parse_float(r.get("LONGITUDE"))
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
         folium.Marker(
@@ -1310,9 +1288,12 @@ with st.spinner("Carregando dados operacionais..."):
 
 # Normaliza tipos para análise.
 if not df_pontos.empty:
-    df_pontos = preparar_pontos(df_pontos)
-    df_pontos["Latitude"] = df_pontos["Latitude"].map(parse_float)
-    df_pontos["Longitude"] = df_pontos["Longitude"].map(parse_float)
+    df_pontos = df_pontos.copy()
+    for coluna in CABECALHO_PONTOS:
+        if coluna not in df_pontos.columns:
+            df_pontos[coluna] = ""
+    df_pontos["Latitude"] = df_pontos["Latitude"].map(lambda v: normalizar_coordenada(v, "lat"))
+    df_pontos["Longitude"] = df_pontos["Longitude"].map(lambda v: normalizar_coordenada(v, "lon"))
 
 if not df_pocos.empty:
     df_pocos = df_pocos.reindex(columns=CABECALHO_POCOS).fillna("")
@@ -1434,15 +1415,6 @@ if pagina_farol == "🗺️ Mapa operacional":
         k2.metric("O.S. com coordenada", int(analise[["Latitude", "Longitude"]].notna().all(axis=1).sum()))
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
-
-        with st.expander("🔎 Diagnóstico das coordenadas", expanded=False):
-            total_base = len(df_pontos)
-            validas_base = int(df_pontos[["Latitude", "Longitude"]].notna().all(axis=1).sum())
-            st.write(f"O.S. carregadas: **{total_base}** | Coordenadas válidas: **{validas_base}** | Sem coordenadas válidas: **{total_base - validas_base}** | Após filtros: **{len(analise)}**")
-            if validas_base == 0:
-                st.warning("Nenhuma coordenada válida foi identificada na aba PONTOS. Confira os cabeçalhos e os valores de Latitude/Longitude.")
-            if total_base:
-                st.dataframe(df_pontos[["Nº da O.S", "Latitude", "Longitude", "Cidade", "Bairro"]].head(15), hide_index=True, use_container_width=True)
 
         st.markdown("### 🗺️ Mapa operacional")
         mapa = criar_mapa(
