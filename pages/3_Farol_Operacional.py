@@ -5,8 +5,10 @@ import re
 import math
 import hashlib
 import zipfile
+import threading
+from zoneinfo import ZoneInfo
 import unicodedata
-from datetime import datetime, date
+from datetime import datetime, date, time as horario
 import xml.etree.ElementTree as ET
 
 import gspread
@@ -39,6 +41,10 @@ NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
 NOME_ABA_PONTOS = "PONTOS"
 NOME_ABA_EVENTOS = "EVENTOS"
+NOME_ABA_CONTROLE = "CONTROLE_FAROL"
+FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
+RESET_HORARIO = horario(0, 1)
+_RESET_LOCK = threading.Lock()
 
 ARQUIVO_KMZ_PADRAO = os.path.join(os.path.dirname(os.path.dirname(__file__)), "TERESINA.kmz")
 RAIO_OPERACIONAL_PADRAO = 500
@@ -289,6 +295,42 @@ def carregar_aba(nome, cabecalho):
 
 def invalidar_cache():
     carregar_aba.clear()
+
+
+def reset_diario_se_necessario():
+    """Limpa apenas PONTOS e EVENTOS uma vez por dia operacional.
+
+    Executa na primeira abertura/atualização do app após 00:01 de Teresina.
+    A aba de controle guarda a data do último reset para evitar repetição.
+    """
+    agora = datetime.now(FUSO_FAROL)
+    dia_operacional = agora.date() if agora.time() >= RESET_HORARIO else (agora.date() - pd.Timedelta(days=1)).date()
+    chave_dia = dia_operacional.isoformat()
+
+    with _RESET_LOCK:
+        planilha = obter_planilha()
+        if planilha.id != SPREADSHEET_ID:
+            raise RuntimeError("ID da planilha diferente da planilha exclusiva do Farol.")
+        try:
+            controle = planilha.worksheet(NOME_ABA_CONTROLE)
+        except gspread.WorksheetNotFound:
+            # A única aba criada automaticamente é o controle de reset, na planilha Farol validada.
+            controle = planilha.add_worksheet(title=NOME_ABA_CONTROLE, rows=10, cols=2)
+            controle.update("A1:B1", [["ULTIMO_RESET", "HORARIO_LOCAL"]])
+
+        ultimo_reset = str(controle.acell("A2").value or "").strip()
+        if ultimo_reset == chave_dia:
+            return
+
+        # A limpeza é feita antes de registrar a data. Em caso de erro,
+        # a próxima execução tentará novamente, sem perder os cabeçalhos.
+        for nome in (NOME_ABA_PONTOS, NOME_ABA_EVENTOS):
+            aba = planilha.worksheet(nome)
+            if aba.row_count > 1:
+                ultima_coluna = gspread.utils.rowcol_to_a1(1, aba.col_count)[:-1]
+                aba.batch_clear([f"A2:{ultima_coluna}{aba.row_count}"])
+        controle.update("A2:B2", [[chave_dia, agora.strftime("%d/%m/%Y %H:%M:%S")]])
+        invalidar_cache()
 
 
 def garantir_cabecalho_exato(nome, cabecalho):
@@ -702,6 +744,32 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
 # ============================================================
 # MAPA
 # ============================================================
+
+def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
+    """Retorna ativos dentro do raio de qualquer centro de concentração, sem duplicar."""
+    if concentracoes.empty:
+        return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
+    centros = [
+        (normalizar_coordenada(r.get("LATITUDE"), "lat"), normalizar_coordenada(r.get("LONGITUDE"), "lon"))
+        for _, r in concentracoes.iterrows()
+    ]
+    centros = [(lat, lon) for lat, lon in centros if lat is not None and lon is not None]
+    if not centros:
+        return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
+
+    def filtrar(df):
+        selecionados = []
+        for _, r in df.iterrows():
+            lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+            lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+            if lat is None or lon is None:
+                continue
+            if any(distancia_metros(lat, lon, clat, clon) <= raio_m for clat, clon in centros):
+                selecionados.append(r.name)
+        return df.loc[selecionados].copy()
+
+    return filtrar(df_pocos), filtrar(df_loggers)
+
 
 def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles="OpenStreetMap")
@@ -1282,6 +1350,15 @@ try:
 except Exception as erro:
     st.error(f"Erro ao carregar a camada de bairros: {erro}")
 
+# Reset diário persistente, executado antes de ler dados (00:01, horário de Teresina).
+# Streamlit não é um agendador: se ninguém acessar o app nesse horário,
+# a limpeza ocorre na primeira execução posterior.
+try:
+    reset_diario_se_necessario()
+except Exception as erro:
+    st.error(f"Não foi possível verificar/executar o reset diário: {erro}")
+    st.stop()  # Evita operar sobre dados de um dia anterior sem reset.
+
 # Inicializa as quatro abas.
 with st.spinner("Carregando dados operacionais..."):
     df_pocos = carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
@@ -1321,7 +1398,7 @@ with st.sidebar:
 
 if pagina_farol == "📥 Importação":
     st.subheader("Importação das bases")
-    st.info("Os dados de O.S. e eventos são acumulados no Google Sheets. O.S. repetida é atualizada; eventos idênticos não são duplicados.")
+    st.info("Os dados de O.S. e eventos são usados apenas no dia operacional. Às 00h01 (Teresina), PONTOS e EVENTOS são limpos na primeira execução do aplicativo após esse horário. Poços e loggers são preservados.")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -1366,10 +1443,19 @@ if pagina_farol == "📥 Importação":
 if pagina_farol == "🗺️ Mapa operacional":
     st.subheader("🗺️ Visão geográfica operacional")
 
+    modo_ativos = st.radio(
+        "Visualização de poços e loggers",
+        ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
+        horizontal=True,
+        key="farol_modo_ativos",
+    )
+
     if df_pontos.empty:
         st.warning("A aba PONTOS ainda não possui dados.")
+        ativos_pocos = df_pocos if modo_ativos == "Todos os cadastrados" else df_pocos.iloc[0:0]
+        ativos_loggers = df_loggers if modo_ativos == "Todos os cadastrados" else df_loggers.iloc[0:0]
         mapa = criar_mapa(
-            bairros, df_pontos, df_pocos, df_loggers,
+            bairros, df_pontos, ativos_pocos, ativos_loggers,
             pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
         )
         st_folium(mapa, width=None, height=650, returned_objects=[])
@@ -1419,9 +1505,22 @@ if pagina_farol == "🗺️ Mapa operacional":
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
+        if modo_ativos == "Todos os cadastrados":
+            ativos_pocos, ativos_loggers = df_pocos, df_loggers
+        elif modo_ativos == "Ocultar poços e loggers":
+            ativos_pocos, ativos_loggers = df_pocos.iloc[0:0], df_loggers.iloc[0:0]
+        else:
+            ativos_pocos, ativos_loggers = filtrar_ativos_proximos(
+                concentracoes, df_pocos, df_loggers, float(raio_operacional)
+            )
+
+        st.caption(
+            f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
+            f"{len(ativos_loggers)} logger(s) no mapa."
+        )
         st.markdown("### 🗺️ Mapa operacional")
         mapa = criar_mapa(
-            bairros, analise, df_pocos, df_loggers, concentracoes,
+            bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
             proximidades, mostrar_bairros=bool(bairros),
         )
         st_folium(mapa, width=None, height=650, returned_objects=[])
