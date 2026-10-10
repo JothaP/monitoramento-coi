@@ -27,8 +27,9 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Image, PageBreak
 from reportlab.pdfbase import pdfmetrics
+from reportlab.graphics.shapes import Drawing, Circle, String, Rect, PolyLine
 from reportlab.pdfbase.ttfonts import TTFont
 
 from google.oauth2.service_account import Credentials
@@ -66,6 +67,7 @@ NOME_ABA_LOGGERS = "LOGGERS"
 NOME_ABA_PONTOS = "PONTOS"
 NOME_ABA_EVENTOS = "EVENTOS"
 NOME_ABA_CONTROLE = "CONTROLE_FAROL"
+NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
 FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
@@ -368,40 +370,101 @@ def invalidar_cache():
     carregar_aba.clear()
 
 
-def reset_diario_se_necessario():
-    """Limpa apenas PONTOS e EVENTOS uma vez por dia operacional.
+# O reset automático de PONTOS e EVENTOS foi desativado.
+# As duas abas permanecem preservadas até que um usuário autorizado
+# faça uma operação explícita de importação/atualização.
 
-    Executa na primeira abertura/atualização do app após 00:01 de Teresina.
-    A aba de controle guarda a data do último reset para evitar repetição.
-    """
-    agora = datetime.now(FUSO_FAROL)
-    dia_operacional = agora.date() if agora.time() >= RESET_HORARIO else (agora.date() - pd.Timedelta(days=1)).date()
-    chave_dia = dia_operacional.isoformat()
+@st.cache_data(ttl=30, show_spinner=False)
+def carregar_observacoes_concentracoes():
+    """Lê anotações persistentes; operador não cria nem altera planilhas."""
+    try:
+        aba = obter_planilha().worksheet(NOME_ABA_OBSERVACOES)
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
+    registros = aba.get_all_records(numericise_ignore=["all"])
+    return pd.DataFrame(registros) if registros else pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
 
-    with _RESET_LOCK:
-        planilha = obter_planilha()
-        if planilha.id != SPREADSHEET_ID:
-            raise RuntimeError("ID da planilha diferente da planilha exclusiva do Farol.")
-        try:
-            controle = planilha.worksheet(NOME_ABA_CONTROLE)
-        except gspread.WorksheetNotFound:
-            # A única aba criada automaticamente é o controle de reset, na planilha Farol validada.
-            controle = planilha.add_worksheet(title=NOME_ABA_CONTROLE, rows=10, cols=2)
-            controle.update("A1:B1", [["ULTIMO_RESET", "HORARIO_LOCAL"]])
 
-        ultimo_reset = str(controle.acell("A2").value or "").strip()
-        if ultimo_reset == chave_dia:
+def identificar_observacao(concentracao, os_grupo, observacoes, raio_m):
+    """Associa observações por município e centro próximo, mesmo que o ID C001 mude."""
+    cidades = sorted({normalizar_municipio(v) for v in os_grupo.get("Cidade", []) if str(v).strip()})
+    municipio = cidades[0] if cidades else ""
+    lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+    melhor = None
+    menor_distancia = float("inf")
+    for _, r in observacoes.iterrows():
+        if normalizar_municipio(r.get("MUNICIPIO", "")) != municipio:
+            continue
+        olat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        olon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if olat is None or olon is None:
+            continue
+        distancia = distancia_metros(lat, lon, olat, olon)
+        if distancia is not None and distancia < menor_distancia and distancia <= min(float(raio_m), 300):
+            menor_distancia, melhor = distancia, r
+    return municipio, (str(melhor.get("CHAVE", "")) if melhor is not None else ""), (str(melhor.get("OBSERVACAO", "")) if melhor is not None else "")
+
+
+def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
+    exigir_edicao_farol()
+    planilha = obter_planilha()
+    cab = ["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"]
+    try:
+        aba = planilha.worksheet(NOME_ABA_OBSERVACOES)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_OBSERVACOES, rows=1000, cols=len(cab))
+        aba.update(range_name="A1:G1", values=[cab], value_input_option="RAW")
+    if not chave:
+        chave = hashlib.sha256(f"{municipio}|{lat:.5f}|{lon:.5f}|{datetime.now(FUSO_FAROL).isoformat()}".encode()).hexdigest()[:20]
+    valores = [chave, municipio, str(lat), str(lon), observacao.strip(), datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M"), st.session_state.get("usuario_logado", "")]
+    linhas = aba.get_all_values()
+    for i, linha in enumerate(linhas[1:], start=2):
+        if linha and linha[0] == chave:
+            aba.update(range_name=f"A{i}:G{i}", values=[valores], value_input_option="RAW")
+            carregar_observacoes_concentracoes.clear()
             return
+    aba.append_row(valores, value_input_option="RAW")
+    carregar_observacoes_concentracoes.clear()
 
-        # A limpeza é feita antes de registrar a data. Em caso de erro,
-        # a próxima execução tentará novamente, sem perder os cabeçalhos.
-        for nome in (NOME_ABA_PONTOS, NOME_ABA_EVENTOS):
-            aba = planilha.worksheet(nome)
-            if aba.row_count > 1:
-                ultima_coluna = gspread.utils.rowcol_to_a1(1, aba.col_count)[:-1]
-                aba.batch_clear([f"A2:{ultima_coluna}{aba.row_count}"])
-        controle.update("A2:B2", [[chave_dia, agora.strftime("%d/%m/%Y %H:%M:%S")]])
-        invalidar_cache()
+
+def limpar_dados_operacionais_admin():
+    """Remove apenas registros de PONTOS e EVENTOS; preserva os cabeçalhos e outras abas."""
+    if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
+        raise PermissionError("Somente administradores podem limpar os dados operacionais.")
+    planilha = obter_planilha()
+    resultados = []
+    for nome, cabecalho in ((NOME_ABA_PONTOS, CABECALHO_PONTOS), (NOME_ABA_EVENTOS, CABECALHO_EVENTOS)):
+        aba = planilha.worksheet(nome)
+        # clear() não exclui a aba; repõe cabeçalhos para manter a importação funcional.
+        aba.clear()
+        aba.update(range_name="A1", values=[cabecalho], value_input_option="RAW")
+        resultados.append(nome)
+    invalidar_cache()
+    return resultados
+
+
+@st.dialog("🗑️ Limpar dados operacionais")
+def modal_limpar_dados_operacionais():
+    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao() or not tem_acesso_modulo("3"):
+        st.error("Operação exclusiva do administrador.")
+        st.stop()
+    st.warning("Esta ação excluirá todas as O.S. da aba PONTOS e todos os eventos da aba EVENTOS. Não é possível desfazer pela ferramenta.")
+    st.caption("Poços, loggers, observações das concentrações e demais abas serão preservados.")
+    confirmado = st.checkbox("Confirmo que desejo apagar os registros de PONTOS e EVENTOS.", key="confirmar_limpeza_farol")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancelar", use_container_width=True, key="cancelar_limpeza_farol"):
+            st.rerun()
+    with c2:
+        if st.button("🗑️ Limpar agora", type="primary", disabled=not confirmado,
+                     use_container_width=True, key="executar_limpeza_farol"):
+            try:
+                abas = limpar_dados_operacionais_admin()
+                st.session_state["farol_mensagem_limpeza"] = "Dados removidos das abas: " + ", ".join(abas) + "."
+                st.rerun()
+            except Exception as erro:
+                invalidar_cache()
+                st.error(f"Falha durante a limpeza: {erro}. Confira o conteúdo das abas antes de repetir.")
 
 
 def garantir_cabecalho_exato(nome, cabecalho):
@@ -1925,7 +1988,7 @@ def modal_importacao():
         st.error("Acesso somente para visualização.")
         return
     st.subheader("Importação das bases")
-    st.info("Os dados de O.S. e eventos são usados apenas no dia operacional. Às 00h01 (Teresina), PONTOS e EVENTOS são limpos na primeira execução do aplicativo após esse horário. Poços e loggers são preservados.")
+    st.info("PONTOS e EVENTOS não são apagados automaticamente. A limpeza manual está disponível somente ao administrador, na barra lateral do mapa.")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2000,6 +2063,72 @@ def modal_eventos():
         st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
 
 
+def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos, bairros, raio, observacoes):
+    """PDF com representação cartográfica vetorial dos pontos e análises.
+
+    A imagem é uma representação estática das coordenadas, não captura da camada OSM.
+    """
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.2*cm,
+                            rightMargin=1.2*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
+    estilos = getSampleStyleSheet()
+    historia = [Paragraph("Farol Operacional — Relatório de concentrações", estilos["Title"]),
+                Paragraph("Gerado em " + datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M") +
+                          " · Mapa esquemático georreferenciado (sem imagem de fundo OpenStreetMap)", estilos["Normal"]),
+                Spacer(1, 12)]
+    coords = []
+    for _, r in pontos.iterrows():
+        lat = normalizar_coordenada(r.get("Latitude"), "lat")
+        lon = normalizar_coordenada(r.get("Longitude"), "lon")
+        if lat is not None and lon is not None:
+            coords.append((lat, lon, r))
+    if coords:
+        # Evita desenhar mapas nacionais minúsculos: mostra dispersão com escala automática.
+        lats = [x[0] for x in coords]
+        lons = [x[1] for x in coords]
+        minlat, maxlat = min(lats), max(lats)
+        minlon, maxlon = min(lons), max(lons)
+        minlat -= max((maxlat-minlat)*.08, .003)
+        maxlat += max((maxlat-minlat)*.08, .003)
+        minlon -= max((maxlon-minlon)*.08, .003)
+        maxlon += max((maxlon-minlon)*.08, .003)
+        W,H=730,335
+        desenho=Drawing(W,H)
+        desenho.add(Rect(0,0,W,H,fillColor=colors.HexColor("#F2F5F8"),strokeColor=colors.HexColor("#AAB7C4")))
+        def xy(lat,lon):
+            return (15+(lon-minlon)/(maxlon-minlon)*(W-30), 15+(lat-minlat)/(maxlat-minlat)*(H-30))
+        for lat,lon,r in coords:
+            servico=str(r.get("Serviço Executado", "") or "")
+            cor=colors.HexColor("#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2")
+            x,y=xy(lat,lon)
+            desenho.add(Circle(x,y,2.5,fillColor=cor,strokeColor=None))
+        for _,c in concentracoes.iterrows():
+            x,y=xy(float(c["LATITUDE"]),float(c["LONGITUDE"]))
+            desenho.add(Circle(x,y,7,strokeColor=colors.purple,fillColor=None,strokeWidth=1.5))
+            desenho.add(String(x+9,y+4,str(c["ID_CONCENTRACAO"]),fontSize=8,fillColor=colors.black))
+        historia.append(desenho)
+    else:
+        historia.append(Paragraph("Nenhuma O.S. georreferenciada no filtro atual.", estilos["Normal"]))
+    historia.append(Spacer(1,12))
+    historia.append(Paragraph(f"O.S. analisadas: {len(pontos)} · Concentrações: {len(concentracoes)}", estilos["Heading2"]))
+    for _, c in concentracoes.iterrows():
+        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]] if "_grupo" in pontos_cluster.columns else pd.DataFrame()
+        codigo = str(c["ID_CONCENTRACAO"])
+        nota = str(c.get("OBSERVACAO_ANALISTA", "") or "")
+        historia.append(Paragraph(xml_escape(f"{codigo} — {int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas"), estilos["Heading3"]))
+        historia.append(Paragraph(xml_escape("Bairros: " + str(c["BAIRROS"])), estilos["Normal"]))
+        historia.append(Paragraph(xml_escape("Acompanhamento: " + (nota or "Sem observação registrada")), estilos["Normal"]))
+        if "EVENTOS_RELACIONADOS" in c:
+            historia.append(Paragraph(xml_escape("Eventos relacionados: " + str(c["EVENTOS_RELACIONADOS"])), estilos["Normal"]))
+        if not grupo.empty:
+            for _, os_reg in grupo.iterrows():
+                linha_os = f"O.S. {os_reg.get('Nº da O.S', '')} · Matrícula {os_reg.get('Matrícula', '')} · {os_reg.get('Bairro', '')} · {os_reg.get('Status OS', '')}"
+                historia.append(Paragraph(xml_escape(linha_os), estilos["Normal"]))
+        historia.append(Spacer(1,7))
+    doc.build(historia)
+    return buffer.getvalue()
+
+
 # ============================================================
 # INTERFACE
 # ============================================================
@@ -2046,15 +2175,7 @@ if modo_escuro:
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
 bairros = descobrir_kmz()
 
-# Reset diário persistente, executado antes de ler dados (00:01, horário de Teresina).
-# Streamlit não é um agendador: se ninguém acessar o app nesse horário,
-# a limpeza ocorre na primeira execução posterior.
-try:
-    if PODE_EDITAR_FAROL:
-        reset_diario_se_necessario()
-except Exception as erro:
-    st.error(f"Não foi possível verificar/executar o reset diário: {erro}")
-    st.stop()  # Evita operar sobre dados de um dia anterior sem reset.
+# PONTOS e EVENTOS são mantidos sem limpeza automática.
 
 # Inicializa as quatro abas.
 with st.spinner("Carregando dados operacionais..."):
@@ -2100,6 +2221,15 @@ with st.sidebar:
     if not PODE_EDITAR_FAROL:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
     st.caption("O mapa é a tela inicial do Farol Operacional.")
+    if st.session_state.pop("farol_mensagem_limpeza", None):
+        st.success("Dados operacionais limpos com sucesso.")
+    # Botão administrativo sempre acessível, mesmo com PONTOS vazia.
+    # O relatório em PDF aparece nesta mesma barra quando há análises.
+    if PERFIL_FAROL == "admin":
+        if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
+                     use_container_width=True, key="abrir_limpeza_farol"):
+            modal_limpar_dados_operacionais()
+
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
@@ -2124,7 +2254,12 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
             eventos_mapeados=eventos_mapeados,
         )
-        st_folium(mapa, width=None, height=650, returned_objects=[])
+        if st.session_state.get("farol_foco_concentracao"):
+            lat_foco, lon_foco = st.session_state["farol_foco_concentracao"]
+            mapa.location = [lat_foco, lon_foco]
+            mapa.options["zoom"] = 15
+            mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
+        st_folium(mapa, width=None, height=650, returned_objects=[], key="farol_mapa_principal")
     else:
         # Filtros.
         f1, f2, f3, f4 = st.columns(4)
@@ -2204,13 +2339,20 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             proximidades, mostrar_bairros=bool(bairros),
             eventos_mapeados=eventos_mapeados,
         )
-        st_folium(mapa, width=None, height=650, returned_objects=[])
+        if st.session_state.get("farol_foco_concentracao"):
+            lat_foco, lon_foco = st.session_state["farol_foco_concentracao"]
+            mapa.location = [lat_foco, lon_foco]
+            mapa.options["zoom"] = 15
+            mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
+        st_folium(mapa, width=None, height=650, returned_objects=[], key="farol_mapa_principal")
 
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
             st.markdown("### 📋 Análise das Concentrações")
             st.caption("Expanda uma concentração para consultar O.S., equipamentos, eventos relacionados e baixar o PDF.")
+            observacoes_df = carregar_observacoes_concentracoes()
+            resumo_pdf = concentracoes.copy()
             for _, concentracao in concentracoes.iterrows():
                 codigo = concentracao["ID_CONCENTRACAO"]
                 os_grupo = pontos_cluster[pontos_cluster["_grupo"] == concentracao["GRUPO"]]
@@ -2224,17 +2366,49 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                     f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
                     if not eventos_do_grupo.empty else "Sem evento relacionado"
                 )
+                municipio_nota, chave_nota, texto_nota = identificar_observacao(
+                    concentracao, os_grupo, observacoes_df, raio_concentracao
+                )
+                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
+                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
+                indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
                 titulo = (
                     f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'} | "
                     f"{int(concentracao['QTD_OS'])} O.S. · "
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
-                    f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos}"
+                    f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
                 )
                 with st.expander(titulo, expanded=False):
+                    if st.button("🎯 Focar esta concentração no mapa", key=f"foco_{codigo}"):
+                        st.session_state["farol_foco_concentracao"] = (float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]))
+                        st.rerun()
+                    if PODE_EDITAR_FAROL:
+                        nota_editada = st.text_area("Observação do analista", value=texto_nota,
+                                                    key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                    placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
+                        if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                            try:
+                                salvar_observacao_concentracao(chave_nota, municipio_nota,
+                                    float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
+                                st.success("Acompanhamento salvo.")
+                                st.rerun()
+                            except Exception as erro:
+                                st.error(f"Não foi possível salvar: {erro}")
+                    else:
+                        st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
                     exibir_relatorio_concentracao(
                         codigo, concentracoes, pontos_cluster, proximidades,
                         df_eventos, int(raio_operacional), bairros
                     )
+            try:
+                pdf_operacional = gerar_pdf_operacional(resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
+                                                       bairros, int(raio_operacional), observacoes_df)
+                st.sidebar.download_button("📄 Gerar relatório operacional (PDF)", data=pdf_operacional,
+                    file_name="Farol_Relatorio_Operacional.pdf", mime="application/pdf",
+                    use_container_width=True, key="download_pdf_operacional")
+            except Exception as erro:
+                st.sidebar.warning(f"Não foi possível gerar relatório: {erro}")
+
 
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
