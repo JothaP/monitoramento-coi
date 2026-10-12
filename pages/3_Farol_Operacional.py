@@ -73,6 +73,7 @@ NOME_ABA_EVENTOS = "EVENTOS"
 NOME_ABA_CONTROLE = "CONTROLE_FAROL"
 NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
 NOME_ABA_AREAS_PROTEGIDAS = "FAROL_AREAS_EDITADAS"
+NOME_ABA_ATUALIZACOES = "FAROL_ATUALIZACOES"
 FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
@@ -486,6 +487,56 @@ def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
     carregar_observacoes_concentracoes.clear()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def carregar_datas_atualizacao():
+    """Consulta apenas duas linhas de metadados; nunca lê as bases para obter datas."""
+    try:
+        aba = obter_planilha().worksheet(NOME_ABA_ATUALIZACOES)
+        linhas = aba.get_all_values()
+    except gspread.WorksheetNotFound:
+        return {}
+    except Exception:
+        return {}
+    return {linha[0].strip().upper(): linha[1].strip()
+            for linha in linhas[1:] if len(linha) >= 2 and linha[0].strip()}
+
+
+def registrar_atualizacao_base(tipo):
+    """Persiste data/hora real de importação, inclusive entre sessões e reinícios."""
+    exigir_edicao_farol()
+    if tipo not in {"PONTOS", "EVENTOS"}:
+        raise ValueError("Tipo de base desconhecido.")
+    planilha = obter_planilha()
+    try:
+        aba = planilha.worksheet(NOME_ABA_ATUALIZACOES)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_ATUALIZACOES, rows=10, cols=2)
+        aba.update(range_name="A1:B1", values=[["BASE", "ATUALIZADO_EM"]], value_input_option="RAW")
+    linhas = aba.get_all_values()
+    momento = datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M:%S")
+    for numero_linha, linha in enumerate(linhas[1:], start=2):
+        if linha and linha[0].strip().upper() == tipo:
+            aba.update(range_name=f"A{numero_linha}:B{numero_linha}",
+                       values=[[tipo, momento]], value_input_option="RAW")
+            carregar_datas_atualizacao.clear()
+            return
+    aba.append_row([tipo, momento], value_input_option="RAW")
+    carregar_datas_atualizacao.clear()
+
+
+def exibir_atualizacoes_abaixo_mapa():
+    datas = carregar_datas_atualizacao()
+    os_em = datas.get("PONTOS", "Sem importação registrada")
+    eventos_em = datas.get("EVENTOS", "Sem importação registrada")
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:8px 26px;margin:4px 0 14px;'
+        'font-size:13px;font-weight:600;color:#1558b0;">'
+        f'<span>O.S. — Atualizado em {os_em}</span>'
+        f'<span>Eventos — Atualizado em {eventos_em}</span>'
+        '</div>', unsafe_allow_html=True,
+    )
+
+
 def limpar_dados_operacionais_admin():
     """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
     if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
@@ -496,13 +547,14 @@ def limpar_dados_operacionais_admin():
         (NOME_ABA_PONTOS, CABECALHO_PONTOS),
         (NOME_ABA_EVENTOS, CABECALHO_EVENTOS),
         (NOME_ABA_AREAS_PROTEGIDAS, ["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]),
+        (NOME_ABA_ATUALIZACOES, ["BASE", "ATUALIZADO_EM"]),
     )
     for nome, cabecalho in abas:
         try:
             aba = planilha.worksheet(nome)
         except gspread.WorksheetNotFound:
             # A aba auxiliar só existe após a primeira edição manual.
-            if nome == NOME_ABA_AREAS_PROTEGIDAS:
+            if nome in {NOME_ABA_AREAS_PROTEGIDAS, NOME_ABA_ATUALIZACOES}:
                 continue
             raise
         # Apaga registros, não a aba, e mantém os cabeçalhos para futuras importações.
@@ -510,6 +562,7 @@ def limpar_dados_operacionais_admin():
         aba.update(range_name="A1", values=[cabecalho], value_input_option="RAW")
         resultados.append(nome)
     invalidar_cache()
+    carregar_datas_atualizacao.clear()
     return resultados
 
 
@@ -520,7 +573,8 @@ def modal_limpar_dados_operacionais():
         st.stop()
     st.warning(
         "Esta ação excluirá todas as O.S. de PONTOS, os eventos de EVENTOS e "
-        "as correções manuais de FAROL_AREAS_EDITADAS. Não é possível desfazer pela ferramenta."
+        "as correções manuais de FAROL_AREAS_EDITADAS e os registros de atualização. "
+        "Não é possível desfazer pela ferramenta."
     )
     st.caption("Poços, loggers, observações das concentrações e demais abas serão preservados.")
     confirmado = st.checkbox(
@@ -1724,6 +1778,7 @@ def modal_importacao():
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
                     inseridas, total = upsert_pontos(preparados)
+                    registrar_atualizacao_base("PONTOS")
                     st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
                     st.rerun()
             except Exception as e:
@@ -1739,6 +1794,7 @@ def modal_importacao():
                 if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
                     preparados_e = preparar_eventos(previa_e)
                     processados, total = upsert_eventos(preparados_e)
+                    registrar_atualizacao_base("EVENTOS")
                     st.success(f"Importação concluída: {processados:,} linhas processadas. EVENTOS agora possui {total:,} registros.")
                     st.rerun()
             except Exception as e:
@@ -2112,6 +2168,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
             key="farol_mapa_principal",
         )
+        exibir_atualizacoes_abaixo_mapa()
         if sincronizar_mapa_pdf and estado_mapa:
             if estado_mapa.get("center") is not None:
                 st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
@@ -2237,6 +2294,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             returned_objects=["center", "zoom", "last_object_clicked"] if sincronizar_mapa_pdf else ["last_object_clicked"],
             key="farol_mapa_principal",
         )
+        exibir_atualizacoes_abaixo_mapa()
         if sincronizar_mapa_pdf and estado_mapa:
             if estado_mapa.get("center") is not None:
                 st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
