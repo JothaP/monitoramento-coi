@@ -2170,41 +2170,6 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
 st.title("Farol Operacional")
 st.caption("O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
-with st.sidebar:
-    st.header("Configuração")
-    raio_operacional = st.number_input(
-        "Raio operacional (m)", min_value=50, max_value=5000,
-        value=RAIO_OPERACIONAL_PADRAO, step=50,
-        help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
-    )
-    raio_concentracao = st.number_input(
-        "Raio da concentração (m)", min_value=50, max_value=5000,
-        value=RAIO_CONCENTRACAO_PADRAO, step=50,
-        help="Distância usada para agrupar O.S. espacialmente.",
-    )
-    minimo_os = st.number_input(
-        "Mínimo de O.S. por concentração", min_value=2, max_value=100,
-        value=2, step=1,
-    )
-
-    st.divider()
-    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
-        try:
-            st.switch_page("app.py")
-        except Exception as erro:
-            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
-
-if modo_escuro:
-    st.markdown("""
-    <style>
-      .stApp { background-color: #0e1117; color: #fafafa; }
-      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
-      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
-      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
-    </style>
-    """, unsafe_allow_html=True)
-
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
 _inicio_geometria = tempo_execucao.perf_counter()
@@ -2241,7 +2206,6 @@ if not df_loggers.empty:
 # ============================================================
 
 with st.sidebar:
-    st.divider()
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -2258,17 +2222,82 @@ with st.sidebar:
         st.rerun()
     if not PODE_EDITAR_FAROL:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
-    st.caption("O mapa é a tela inicial do Farol Operacional.")
+
+    st.divider()
+    st.markdown("### 🔎 Filtros")
+    # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
+    cidades_filtro = set()
+    for dados, campo in ((df_pontos, "Cidade"), (df_pocos, "MUNICIPIO"), (df_loggers, "MUNICIPIO")):
+        if campo in dados.columns and not dados.empty:
+            cidades_filtro.update(str(v).strip() for v in dados[campo].dropna() if str(v).strip())
+    cidades_filtro = sorted(cidades_filtro, key=normalizar_texto)
+    cidade_sel = st.selectbox("Cidade dos poços e loggers", ["Todas"] + cidades_filtro, key="farol_filtro_cidade_sidebar")
+    cidade_especifica = cidade_sel != "Todas"
+    mostrar_pocos_cidade = st.checkbox(
+        "Mostrar poços / ativos da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_pocos_cidade",
+    )
+    mostrar_loggers_cidade = st.checkbox(
+        "Mostrar loggers da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
+    )
+    if not cidade_especifica:
+        st.caption("Selecione uma cidade para habilitar a exibição de ativos e loggers.")
+
+    st.divider()
+    st.markdown("### ⚙️ Configuração")
+    raio_operacional = st.number_input(
+        "Raio operacional (m)", min_value=50, max_value=5000,
+        value=RAIO_OPERACIONAL_PADRAO, step=50,
+        help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
+    )
+    raio_concentracao = st.number_input(
+        "Raio da concentração (m)", min_value=50, max_value=5000,
+        value=RAIO_CONCENTRACAO_PADRAO, step=50,
+        help="Distância usada para agrupar O.S. espacialmente.",
+    )
+    minimo_os = st.number_input(
+        "Mínimo de O.S. por concentração", min_value=2, max_value=100,
+        value=2, step=1,
+    )
+
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
-    # Reservar posição fixa do relatório, independentemente da existência de concentrações.
     espaco_relatorio_operacional = st.empty()
-    # Botão administrativo sempre acessível, mesmo com PONTOS vazia.
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
                      use_container_width=True, key="abrir_limpeza_farol"):
             modal_limpar_dados_operacionais()
+    if PERFIL_FAROL == "admin":
+        espaco_diagnostico_farol = st.empty()
+    st.divider()
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        try:
+            st.switch_page("app.py")
+        except Exception as erro:
+            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
+    # O seletor de tema permanece no fim da barra lateral.
+    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
 
+if modo_escuro:
+    st.markdown("""
+    <style>
+      .stApp { background-color: #0e1117; color: #fafafa; }
+      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
+      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
+      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def ativos_da_cidade(df, campo, cidade, habilitado):
+    """Evita enviar ao Folium milhares de equipamentos de outros municípios."""
+    if not habilitado or cidade == "Todas" or df.empty or campo not in df.columns:
+        return df.iloc[0:0].copy()
+    return df.loc[normalizar_texto_series(df[campo]) == normalizar_texto(cidade)].copy()
+
+ativos_pocos_cidade = ativos_da_cidade(df_pocos, "MUNICIPIO", cidade_sel, mostrar_pocos_cidade)
+ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mostrar_loggers_cidade)
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
@@ -2277,17 +2306,11 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
     st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
                "As áreas destacadas representam os bairros inteiros dos arquivos geográficos, inclusive quando o evento informa impacto parcial.")
-    modo_ativos = st.radio(
-        "Visualização de poços e loggers",
-        ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
-        horizontal=True,
-        key="farol_modo_ativos",
-    )
 
     if df_pontos.empty:
         st.warning("A aba PONTOS ainda não possui dados.")
-        ativos_pocos = df_pocos if modo_ativos == "Todos os cadastrados" else df_pocos.iloc[0:0]
-        ativos_loggers = df_loggers if modo_ativos == "Todos os cadastrados" else df_loggers.iloc[0:0]
+        ativos_pocos = ativos_pocos_cidade
+        ativos_loggers = ativos_loggers_cidade
         mapa = criar_mapa(
             bairros, df_pontos, ativos_pocos, ativos_loggers,
             pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
@@ -2305,18 +2328,15 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
     else:
         # Filtros.
-        f1, f2, f3, f4 = st.columns(4)
-        cidades = sorted([x for x in df_pontos["Cidade"].dropna().astype(str).unique() if x.strip()])
+        f1, f2, f3 = st.columns(3)
         bairros_os = sorted([x for x in df_pontos["Bairro"].dropna().astype(str).unique() if x.strip()])
         status_os = sorted([x for x in df_pontos["Status OS"].dropna().astype(str).unique() if x.strip()])
 
         with f1:
-            cidade_sel = st.selectbox("Cidade", ["Todas"] + cidades)
-        with f2:
             bairro_sel = st.multiselect("Bairro", bairros_os)
-        with f3:
+        with f2:
             status_sel = st.multiselect("Status", status_os)
-        with f4:
+        with f3:
             apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
 
         servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
@@ -2330,8 +2350,6 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         )
 
         analise = df_pontos.copy()
-        if cidade_sel != "Todas":
-            analise = analise[normalizar_texto_series(analise["Cidade"]) == normalizar_texto(cidade_sel)]
         if bairro_sel:
             bairros_norm = {limpar_nome_bairro(x) for x in bairro_sel}
             analise = analise[analise["Bairro"].map(limpar_nome_bairro).isin(bairros_norm)]
@@ -2365,14 +2383,9 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
-        if modo_ativos == "Todos os cadastrados":
-            ativos_pocos, ativos_loggers = df_pocos, df_loggers
-        elif modo_ativos == "Ocultar poços e loggers":
-            ativos_pocos, ativos_loggers = df_pocos.iloc[0:0], df_loggers.iloc[0:0]
-        else:
-            ativos_pocos, ativos_loggers = filtrar_ativos_proximos(
-                concentracoes, df_pocos, df_loggers, float(raio_operacional)
-            )
+        # Apenas equipamentos da cidade selecionada entram na camada cartográfica.
+        # A análise de proximidade acima permanece completa para os indicadores.
+        ativos_pocos, ativos_loggers = ativos_pocos_cidade, ativos_loggers_cidade
 
         st.caption(
             f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
@@ -2399,12 +2412,13 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
         _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
         if PERFIL_FAROL == "admin":
-            with st.sidebar.expander("⏱️ Diagnóstico de desempenho", expanded=False):
-                st.caption("Tempo desta interação; valores baixos podem indicar uso do cache.")
-                st.write(f"Geometrias: {_tempo_geometria:.2f} s")
-                st.write(f"Google Sheets: {_tempo_planilhas:.2f} s")
-                st.write(f"Análise espacial: {_tempo_analise:.2f} s")
-                st.write(f"Montagem e exibição do mapa: {_tempo_mapa:.2f} s")
+            with espaco_diagnostico_farol.container():
+                with st.expander("⏱️ Diagnóstico de desempenho", expanded=False):
+                    st.caption("Tempo desta interação; valores baixos podem indicar uso do cache.")
+                    st.write(f"Geometrias: {_tempo_geometria:.2f} s")
+                    st.write(f"Google Sheets: {_tempo_planilhas:.2f} s")
+                    st.write(f"Análise espacial: {_tempo_analise:.2f} s")
+                    st.write(f"Montagem e exibição do mapa: {_tempo_mapa:.2f} s")
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
