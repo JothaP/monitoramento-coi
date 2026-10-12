@@ -8,6 +8,7 @@ import zipfile
 import sqlite3
 import threading
 import tempfile
+import time as tempo_execucao
 import shutil
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
@@ -357,9 +358,18 @@ def obter_aba(nome, cabecalho):
     return aba
 
 
+@st.cache_resource(ttl=600, show_spinner=False)
+def obter_aba_para_leitura(nome):
+    """Reutiliza o objeto Worksheet; não lê toda a planilha para conferir cabeçalhos."""
+    planilha = obter_planilha()
+    if planilha.id != SPREADSHEET_ID:
+        raise PermissionError("A planilha conectada não é a planilha autorizada do Farol.")
+    return planilha.worksheet(nome)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_aba(nome, cabecalho):
-    aba = obter_aba(nome, cabecalho)
+    aba = obter_aba_para_leitura(nome)
     # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
     # A conversão automática do gspread interpreta a vírgula como milhar
     # e transforma -5,18817 em -518817, invalidando os marcadores.
@@ -371,6 +381,10 @@ def carregar_aba(nome, cabecalho):
 
 def invalidar_cache():
     carregar_aba.clear()
+    criar_concentracoes.clear()
+    pontos_proximos_concentracoes.clear()
+    eventos_georreferenciados.clear()
+    filtrar_ativos_proximos.clear()
 
 
 # O reset automático de PONTOS e EVENTOS foi desativado.
@@ -845,6 +859,7 @@ def carregar_geometrias_municipais(arquivos_assinados):
     return todos
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def descobrir_kmz():
     """Compatibilidade com nome antigo; descobre KMZ, KML e GPKG da pasta."""
     arquivos = []
@@ -911,6 +926,7 @@ def identificar_bairro_por_ponto(lat, lon, bairros):
 # CONCENTRAÇÕES / ANÁLISE ESPACIAL
 # ============================================================
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     df = df_pontos.copy()
     df["_lat"] = df["Latitude"].map(parse_float)
@@ -985,6 +1001,7 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     return cdf, df
 
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=500):
     registros = []
 
@@ -1079,6 +1096,7 @@ def classificar_status_evento(valor):
     return "Status não classificado", "#8b95a7"
 
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def eventos_georreferenciados(eventos, bairros_kmz):
     """Relaciona polígonos por município + bairro, sem misturar cidades."""
     saida = []
@@ -1161,6 +1179,7 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
 # MAPA
 # ============================================================
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
     """Retorna ativos dentro do raio de qualquer centro de concentração, sem duplicar."""
     if concentracoes.empty:
@@ -2188,16 +2207,20 @@ if modo_escuro:
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
+_inicio_geometria = tempo_execucao.perf_counter()
 bairros = descobrir_kmz()
+_tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
 # PONTOS e EVENTOS são mantidos sem limpeza automática.
 
 # Inicializa as quatro abas.
+_inicio_planilhas = tempo_execucao.perf_counter()
 with st.spinner("Carregando dados operacionais..."):
     df_pocos = carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
     df_loggers = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
     df_pontos = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
     df_eventos = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
+_tempo_planilhas = tempo_execucao.perf_counter() - _inicio_planilhas
 
 # Normaliza tipos para análise.
 if not df_pontos.empty:
@@ -2321,6 +2344,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         if apenas_com_coord:
             analise = analise.dropna(subset=["Latitude", "Longitude"])
 
+        _inicio_analise = tempo_execucao.perf_counter()
         concentracoes, pontos_cluster = criar_concentracoes(
             analise,
             raio_m=raio_concentracao,
@@ -2332,6 +2356,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             df_loggers,
             raio=int(raio_operacional),
         )
+
+        _tempo_analise = tempo_execucao.perf_counter() - _inicio_analise
 
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("O.S. analisadas", len(analise))
@@ -2354,6 +2380,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         )
         st.markdown("### 🗺️ Mapa operacional")
         st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
+        _inicio_renderizacao = tempo_execucao.perf_counter()
         mapa = criar_mapa(
             bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
             proximidades, mostrar_bairros=bool(bairros),
@@ -2370,6 +2397,14 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             st.session_state["farol_ultimo_centro_mapa"] = estado_mapa.get("center")
             st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
 
+        _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
+        if PERFIL_FAROL == "admin":
+            with st.sidebar.expander("⏱️ Diagnóstico de desempenho", expanded=False):
+                st.caption("Tempo desta interação; valores baixos podem indicar uso do cache.")
+                st.write(f"Geometrias: {_tempo_geometria:.2f} s")
+                st.write(f"Google Sheets: {_tempo_planilhas:.2f} s")
+                st.write(f"Análise espacial: {_tempo_analise:.2f} s")
+                st.write(f"Montagem e exibição do mapa: {_tempo_mapa:.2f} s")
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
