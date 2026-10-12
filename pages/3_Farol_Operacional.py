@@ -78,6 +78,9 @@ _RESET_LOCK = threading.Lock()
 
 RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIRETORIO_KMZ = os.path.join(RAIZ_PROJETO, "geodados", "municipios")
+DIRETORIO_DADOS = os.path.join(RAIZ_PROJETO, "dados")
+ARQUIVO_POCOS_CSV = os.path.join(DIRETORIO_DADOS, "pocos.csv")
+ARQUIVO_LOGGERS_CSV = os.path.join(DIRETORIO_DADOS, "loggers.csv")
 ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
 RAIO_OPERACIONAL_PADRAO = 500
 RAIO_CONCENTRACAO_PADRAO = 500
@@ -377,6 +380,30 @@ def carregar_aba(nome, cabecalho):
     if not registros:
         return pd.DataFrame(columns=cabecalho)
     return pd.DataFrame(registros)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def carregar_cadastro_local(caminho, assinatura, cabecalho):
+    """Lê o CSV versionado no GitHub; a assinatura atualiza o cache após um deploy."""
+    del assinatura
+    try:
+        dados = pd.read_csv(caminho, sep=",", encoding="utf-8-sig", dtype=str, keep_default_na=False)
+    except UnicodeDecodeError as erro:
+        raise ValueError(f"Arquivo CSV precisa estar em UTF-8: {os.path.basename(caminho)}") from erro
+    faltantes = [col for col in cabecalho if col not in dados.columns]
+    if faltantes:
+        raise ValueError(f"{os.path.basename(caminho)}: colunas ausentes: {', '.join(faltantes)}")
+    return dados.reindex(columns=cabecalho).fillna("")
+
+
+def carregar_cadastro_github(caminho, cabecalho):
+    if not os.path.isfile(caminho):
+        raise FileNotFoundError(
+            f"Arquivo não encontrado: dados/{os.path.basename(caminho)}. "
+            "Envie os dois CSV à pasta dados/ na raiz do repositório."
+        )
+    info = os.stat(caminho)
+    return carregar_cadastro_local(caminho, (info.st_size, info.st_mtime_ns), tuple(cabecalho))
 
 
 def invalidar_cache():
@@ -1355,7 +1382,7 @@ def identificacao_exibicao(row):
 
 
 def carregar_pocos():
-    return carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
+    return carregar_cadastro_github(ARQUIVO_POCOS_CSV, CABECALHO_POCOS)
 
 
 def preparar_pocos(df):
@@ -1370,483 +1397,8 @@ def invalidar_cache_dados():
     invalidar_cache()
 
 
-def adicionar_poco(identificacao, nome, municipio, latitude, longitude):
-    exigir_edicao_farol()
-    atual = carregar_pocos()
-    ids = atual["ID_POCO"].astype(str).tolist() if not atual.empty else []
-    nums = [int(x[4:]) for x in ids if re.fullmatch(r"POCO\d+", x)]
-    id_poco = f"POCO{max(nums, default=0)+1:05d}"
-    linha = pd.DataFrame([[id_poco, identificacao, nome, municipio, latitude, longitude]], columns=CABECALHO_POCOS)
-    append_dataframe(NOME_ABA_POCOS, CABECALHO_POCOS, linha)
-    return id_poco
-
-
-def atualizar_poco(linha_planilha, id_poco, identificacao, nome, municipio, latitude, longitude):
-    exigir_edicao_farol()
-    aba = obter_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
-    aba.update(range_name=f"A{linha_planilha}:F{linha_planilha}", values=[[id_poco, identificacao, nome, municipio, latitude, longitude]], value_input_option="USER_ENTERED")
-    invalidar_cache_dados()
-
-
-def excluir_poco(linha_planilha):
-    exigir_edicao_farol()
-    obter_aba(NOME_ABA_POCOS, CABECALHO_POCOS).delete_rows(linha_planilha)
-    invalidar_cache_dados()
-
-
-@st.dialog("➕ Cadastrar novo poço")
-def modal_novo_poco():
-    if not PODE_EDITAR_FAROL:
-        st.error("Acesso somente para visualização.")
-        return
-
-    with st.form(
-        "form_novo_poco_modal",
-        clear_on_submit=True,
-    ):
-
-        identificacao = st.text_input(
-            "Identificação do ativo *",
-            placeholder="Ex.: PL-API-PCO0001",
-        )
-
-        nome = st.text_input(
-            "Nome do poço",
-            placeholder="Opcional",
-        )
-
-        municipio = st.text_input(
-            "Município *",
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            latitude = st.text_input(
-                "Latitude *",
-                placeholder="-5.089200",
-            )
-
-        with c2:
-
-            longitude = st.text_input(
-                "Longitude *",
-                placeholder="-42.801900",
-            )
-
-        salvar_poco = st.form_submit_button(
-            "Cadastrar poço",
-            type="primary",
-            width="stretch",
-        )
-
-        if salvar_poco:
-
-            lat_n = normalizar_coordenada(
-                latitude,
-                "lat",
-            )
-
-            lon_n = normalizar_coordenada(
-                longitude,
-                "lon",
-            )
-
-            if not identificacao.strip():
-
-                st.error(
-                    "A identificação do ativo é obrigatória."
-                )
-
-            elif not municipio.strip():
-
-                st.error(
-                    "O município é obrigatório."
-                )
-
-            elif lat_n is None:
-
-                st.error(
-                    "Latitude inválida. Informe um valor entre -90 e 90."
-                )
-
-            elif lon_n is None:
-
-                st.error(
-                    "Longitude inválida. Informe um valor entre -180 e 180."
-                )
-
-            else:
-
-                try:
-
-                    id_criado = adicionar_poco(
-                        identificacao=identificacao.strip(),
-                        nome=nome.strip(),
-                        municipio=municipio.strip(),
-                        latitude=lat_n,
-                        longitude=lon_n,
-                    )
-
-                    st.success(
-                        f"Poço cadastrado com ID {id_criado}."
-                    )
-
-                    st.rerun()
-
-                except Exception as erro:
-
-                    st.error(
-                        f"Erro ao cadastrar poço: {erro}"
-                    )
-
-
-
-@st.dialog("✏️ Editar ou excluir poço")
-def modal_editar_poco():
-    if not PODE_EDITAR_FAROL:
-        st.error("Acesso somente para visualização.")
-        return
-
-    df_atual = preparar_pocos(
-        carregar_pocos()
-    )
-
-    if df_atual.empty:
-
-        st.info(
-            "Nenhum poço cadastrado."
-        )
-
-        return
-
-    opcoes_edicao = {
-        identificacao_exibicao(row): row
-        for _, row in df_atual.iterrows()
-    }
-
-    selecionado = st.selectbox(
-        "Selecione o poço",
-        list(opcoes_edicao.keys()),
-        key="modal_poco_edicao",
-    )
-
-    poco_atual = opcoes_edicao[
-        selecionado
-    ]
-
-    linha_df = df_atual.index[
-        df_atual[
-            "ID_POCO"
-        ].astype(str)
-        == str(
-            poco_atual[
-                "ID_POCO"
-            ]
-        )
-    ]
-
-    if len(linha_df) > 0:
-
-        indice_df = linha_df[0]
-
-        linha_planilha = indice_df + 2
-
-    else:
-
-        linha_planilha = None
-
-    with st.form(
-        "form_edicao_poco_modal"
-    ):
-
-        identificacao_edit = st.text_input(
-            "Identificação do ativo *",
-            value=str(
-                poco_atual[
-                    "IDENTIFICACAO_ATIVO"
-                ]
-            ),
-        )
-
-        nome_edit = st.text_input(
-            "Nome do poço",
-            value=str(
-                poco_atual[
-                    "NOME_POCO"
-                ]
-            ),
-        )
-
-        municipio_edit = st.text_input(
-            "Município *",
-            value=str(
-                poco_atual[
-                    "MUNICIPIO"
-                ]
-            ),
-        )
-
-        latitude_atual = normalizar_coordenada(
-            poco_atual["LATITUDE"],
-            "lat",
-        )
-
-        longitude_atual = normalizar_coordenada(
-            poco_atual["LONGITUDE"],
-            "lon",
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            latitude_edit = st.text_input(
-                "Latitude *",
-                value=(
-                    str(latitude_atual)
-                    if latitude_atual is not None
-                    else ""
-                ),
-            )
-
-        with c2:
-
-            longitude_edit = st.text_input(
-                "Longitude *",
-                value=(
-                    str(longitude_atual)
-                    if longitude_atual is not None
-                    else ""
-                ),
-            )
-
-        salvar_edicao = st.form_submit_button(
-            "💾 Salvar alterações",
-            type="primary",
-            width="stretch",
-        )
-
-        if salvar_edicao:
-
-            lat_n = normalizar_coordenada(
-                latitude_edit,
-                "lat",
-            )
-
-            lon_n = normalizar_coordenada(
-                longitude_edit,
-                "lon",
-            )
-
-            if not identificacao_edit.strip():
-
-                st.error(
-                    "A identificação do ativo é obrigatória."
-                )
-
-            elif not municipio_edit.strip():
-
-                st.error(
-                    "O município é obrigatório."
-                )
-
-            elif lat_n is None:
-
-                st.error(
-                    "Latitude inválida. Informe um valor entre -90 e 90."
-                )
-
-            elif lon_n is None:
-
-                st.error(
-                    "Longitude inválida. Informe um valor entre -180 e 180."
-                )
-
-            elif linha_planilha is None:
-
-                st.error(
-                    "Não foi possível localizar a linha do poço."
-                )
-
-            else:
-
-                try:
-
-                    atualizar_poco(
-                        linha_planilha=linha_planilha,
-                        id_poco=str(
-                            poco_atual[
-                                "ID_POCO"
-                            ]
-                        ),
-                        identificacao=identificacao_edit.strip(),
-                        nome=nome_edit.strip(),
-                        municipio=municipio_edit.strip(),
-                        latitude=lat_n,
-                        longitude=lon_n,
-                    )
-
-                    st.success(
-                        "Poço atualizado com sucesso."
-                    )
-
-                    st.rerun()
-
-                except Exception as erro:
-
-                    st.error(
-                        f"Erro ao atualizar poço: {erro}"
-                    )
-
-    st.divider()
-
-    confirmar_exclusao = st.checkbox(
-        "Confirmo que desejo excluir este poço.",
-        key="confirmar_exclusao_poco_modal",
-    )
-
-    if st.button(
-        "🗑️ Excluir poço",
-        type="secondary",
-        width="stretch",
-        key="btn_excluir_poco_modal",
-    ):
-
-        if not confirmar_exclusao:
-
-            st.warning(
-                "Marque a confirmação antes de excluir."
-            )
-
-        elif linha_planilha is None:
-
-            st.error(
-                "Não foi possível localizar a linha do poço."
-            )
-
-        else:
-
-            try:
-
-                excluir_poco(
-                    linha_planilha
-                )
-
-                st.success(
-                    "Poço excluído."
-                )
-
-                st.rerun()
-
-            except Exception as erro:
-
-                st.error(
-                    f"Erro ao excluir poço: {erro}"
-                )
-
-
-
-@st.dialog("➕ Cadastrar novo logger")
-def modal_novo_logger():
-    if not PODE_EDITAR_FAROL:
-        st.error("Acesso somente para visualização.")
-        return
-    with st.form("form_novo_logger_modal", clear_on_submit=True):
-        identificacao = st.text_input("Identificação do logger *")
-        endereco = st.text_input("Endereço")
-        municipio = st.text_input("Município *", value="Teresina")
-        c1, c2 = st.columns(2)
-        latitude = c1.text_input("Latitude *", placeholder="-5,089200")
-        longitude = c2.text_input("Longitude *", placeholder="-42,801900")
-        salvar = st.form_submit_button("Cadastrar logger", type="primary", use_container_width=True)
-
-    if salvar:
-        lat = normalizar_coordenada(latitude, "lat")
-        lon = normalizar_coordenada(longitude, "lon")
-        if not identificacao.strip() or not municipio.strip() or lat is None or lon is None:
-            st.error("Informe identificação, município e coordenadas válidas.")
-        else:
-            try:
-                novo = pd.DataFrame([{
-                    "ID_LOGGER": novo_id("LOGGER"),
-                    "IDENTIFICACAO_ATIVO": identificacao.strip(),
-                    "ENDERECO": endereco.strip(),
-                    "MUNICIPIO": municipio.strip(),
-                    "LATITUDE": lat,
-                    "LONGITUDE": lon,
-                }], columns=CABECALHO_LOGGERS)
-                append_dataframe(NOME_ABA_LOGGERS, CABECALHO_LOGGERS, novo)
-                st.success("Logger cadastrado com sucesso.")
-                st.rerun()
-            except Exception as erro:
-                st.error(f"Erro ao cadastrar logger: {erro}")
-
-
-@st.dialog("✏️ Editar ou excluir logger")
-def modal_editar_logger():
-    if not PODE_EDITAR_FAROL:
-        st.error("Acesso somente para visualização.")
-        return
-    dados = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
-    if dados.empty:
-        st.info("Nenhum logger cadastrado.")
-        return
-
-    # Índices originais preservados para identificar a linha real no Google Sheets.
-    opcoes = {
-        f"{str(r.get('IDENTIFICACAO_ATIVO', ''))} — {str(r.get('ID_LOGGER', ''))} (linha {i + 2})": i
-        for i, r in dados.iterrows()
-    }
-    selecionado = st.selectbox("Selecione o logger", list(opcoes), key="modal_logger_selecionado")
-    indice = opcoes[selecionado]
-    registro = dados.loc[indice]
-    linha_planilha = int(indice) + 2
-
-    with st.form("form_edicao_logger_modal"):
-        identificacao = st.text_input("Identificação do logger *", value=str(registro.get("IDENTIFICACAO_ATIVO", "")))
-        endereco = st.text_input("Endereço", value=str(registro.get("ENDERECO", "")))
-        municipio = st.text_input("Município *", value=str(registro.get("MUNICIPIO", "")))
-        c1, c2 = st.columns(2)
-        latitude = c1.text_input("Latitude *", value=str(registro.get("LATITUDE", "")))
-        longitude = c2.text_input("Longitude *", value=str(registro.get("LONGITUDE", "")))
-        salvar = st.form_submit_button("💾 Salvar alterações", type="primary", use_container_width=True)
-
-    if salvar:
-        lat = normalizar_coordenada(latitude, "lat")
-        lon = normalizar_coordenada(longitude, "lon")
-        if not identificacao.strip() or not municipio.strip() or lat is None or lon is None:
-            st.error("Informe identificação, município e coordenadas válidas.")
-        else:
-            try:
-                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).update(
-                    range_name=f"A{linha_planilha}:F{linha_planilha}",
-                    values=[[
-                        str(registro.get("ID_LOGGER", "")), identificacao.strip(), endereco.strip(),
-                        municipio.strip(), lat, lon,
-                    ]],
-                    value_input_option="USER_ENTERED",
-                )
-                invalidar_cache()
-                st.success("Logger atualizado com sucesso.")
-                st.rerun()
-            except Exception as erro:
-                st.error(f"Erro ao atualizar logger: {erro}")
-
-    st.divider()
-    confirmar = st.checkbox("Confirmo que desejo excluir este logger.", key="confirmar_exclusao_logger_modal")
-    if st.button("🗑️ Excluir logger", key="btn_excluir_logger_modal"):
-        if not confirmar:
-            st.warning("Marque a confirmação antes de excluir.")
-        else:
-            try:
-                obter_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS).delete_rows(linha_planilha)
-                invalidar_cache()
-                st.success("Logger excluído.")
-                st.rerun()
-            except Exception as erro:
-                st.error(f"Erro ao excluir logger: {erro}")
+# Os cadastros de poços e loggers são arquivos fixos no GitHub.
+# Não há rotinas de cadastro, edição ou exclusão pelo Farol.
 
 
 # ============================================================
@@ -2178,11 +1730,16 @@ _tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
 # PONTOS e EVENTOS são mantidos sem limpeza automática.
 
-# Inicializa as quatro abas.
+# Os cadastros são lidos localmente; apenas PONTOS e EVENTOS usam Google Sheets.
 _inicio_planilhas = tempo_execucao.perf_counter()
 with st.spinner("Carregando dados operacionais..."):
-    df_pocos = carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
-    df_loggers = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
+    try:
+        df_pocos = carregar_pocos()
+        df_loggers = carregar_cadastro_github(ARQUIVO_LOGGERS_CSV, CABECALHO_LOGGERS)
+    except (FileNotFoundError, ValueError, pd.errors.ParserError, OSError) as erro:
+        st.error(f"Não foi possível carregar os cadastros locais: {erro}")
+        st.info("Confira dados/pocos.csv e dados/loggers.csv no GitHub. As abas originais do Google Sheets permanecem como backup.")
+        st.stop()
     df_pontos = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
     df_eventos = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
 _tempo_planilhas = tempo_execucao.perf_counter() - _inicio_planilhas
@@ -2264,35 +1821,6 @@ with st.sidebar:
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
     espaco_relatorio_operacional = st.empty()
-    # Exportação temporária dos cadastros fixos para a migração ao GitHub.
-    # Apenas administradores podem obter os arquivos completos.
-    if PERFIL_FAROL == "admin":
-        with st.expander("📦 Exportar cadastros para GitHub", expanded=False):
-            st.caption("Baixe os cadastros atuais antes de ativar a versão com leitura local.")
-            try:
-                pacote_cadastros = io.BytesIO()
-                with zipfile.ZipFile(pacote_cadastros, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_saida:
-                    for nome_csv, dataframe, cabecalho in (
-                        ("pocos.csv", df_pocos, CABECALHO_POCOS),
-                        ("loggers.csv", df_loggers, CABECALHO_LOGGERS),
-                    ):
-                        # CSV com vírgula como separador, compatível com a leitura da versão GitHub.
-                        # dtype texto e BOM UTF-8 preservam identificadores e vírgulas decimais.
-                        dados_csv = dataframe.reindex(columns=cabecalho).fillna("").astype(str).to_csv(index=False, sep=",")
-                        zip_saida.writestr(nome_csv, dados_csv.encode("utf-8-sig"))
-                st.write(f"Poços / ativos: **{len(df_pocos)}** registros")
-                st.write(f"Loggers: **{len(df_loggers)}** registros")
-                st.download_button(
-                    "⬇️ Baixar ZIP (pocos.csv + loggers.csv)",
-                    data=pacote_cadastros.getvalue(),
-                    file_name="cadastros_farol_github.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    key="exportar_cadastros_github_admin",
-                )
-            except Exception as erro_exportacao:
-                st.error(f"Não foi possível gerar o ZIP dos cadastros: {erro_exportacao}")
-
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
                      use_container_width=True, key="abrir_limpeza_farol"):
@@ -2577,24 +2105,14 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
     espaco_relatorio_operacional.caption("📄 Relatório disponível na tela Mapa operacional.")
-    st.subheader("Cadastro de Poços / Ativos e Loggers")
-
+    st.subheader("Consulta de Poços / Ativos e Loggers")
+    st.caption("Cadastros fixos carregados dos arquivos dados/pocos.csv e dados/loggers.csv do GitHub. Para atualizar, substitua os arquivos no repositório.")
     c_poco, c_logger = st.columns(2)
-
     with c_poco:
         st.markdown("### Poços / Ativos")
-        if PODE_EDITAR_FAROL:
-            if st.button("➕ Cadastrar novo poço", key="poco_novo_modal"):
-                modal_novo_poco()
-            if st.button("✏️ Editar ou excluir poço", key="poco_editar_modal"):
-                modal_editar_poco()
+        st.metric("Registros", len(df_pocos))
         st.dataframe(df_pocos, use_container_width=True, hide_index=True)
-
     with c_logger:
         st.markdown("### Loggers")
-        if PODE_EDITAR_FAROL:
-            if st.button("➕ Cadastrar novo logger", key="logger_novo_modal"):
-                modal_novo_logger()
-            if st.button("✏️ Editar ou excluir logger", key="logger_editar_modal"):
-                modal_editar_logger()
+        st.metric("Registros", len(df_loggers))
         st.dataframe(df_loggers, use_container_width=True, hide_index=True)
