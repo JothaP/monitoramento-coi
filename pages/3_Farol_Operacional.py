@@ -261,6 +261,17 @@ def resolver_nome_bairro(nome, nomes_disponiveis):
     return chave
 
 
+def evento_abrange_municipio(valor):
+    """Identifica abrangência municipal explícita, sem inferir por bairro vazio."""
+    texto = normalizar_texto(valor)
+    return bool(re.search(
+        r"\b(?:TODO\s+O\s+MUNICIPIO|MUNICIPIO\s+INTEIRO|"
+        r"TODA\s+A\s+CIDADE|CIDADE\s+INTEIRA|"
+        r"TODO\s+O\s+TERRITORIO\s+MUNICIPAL|"
+        r"TODOS\s+OS\s+BAIRROS)\b", texto
+    ))
+
+
 def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
     """Lê bairros em listas, linhas e rótulos; separa 'e' só se ambos existirem no GPKG.
 
@@ -270,6 +281,9 @@ def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
     if valor is None or str(valor).strip().lower() in ("", "nan", "none"):
         return []
     nomes = indice_nomes_bairros(bairros_geograficos, municipio)
+    if evento_abrange_municipio(valor):
+        return [{"bairro": nome, "parcial": False, "original": "Todo o município"}
+                for nome in sorted(nomes)]
     texto = str(valor).replace("\r", "\n")
     texto = re.sub(r"(?i)\bBAIRROS?\s*(?:IMPACTADOS?|AFETADOS?)?\s*:", "\n", texto)
     texto = re.sub(r"(?i)\bAREAS?\s+IMPACTADAS?\s*:", "\n", texto)
@@ -1116,6 +1130,21 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
 
     registros = []
     for _, evento in df_eventos.iterrows():
+        municipal = evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
+        if municipal:
+            cidade = normalizar_municipio(evento.get("Cidade", ""))
+            bloco = pontos[pontos["Cidade"].map(normalizar_municipio) == cidade]
+            if not bloco.empty:
+                registros.append({
+                    "Evento": evento.get("Descrição do Serviço", "") or evento.get("Serviço", ""),
+                    "Protocolo": evento.get("Protocolo", ""),
+                    "Status": evento.get("Status", ""),
+                    "Bairro": "Todo o município", "Parcial": "Não",
+                    "O.S. encontradas": len(bloco),
+                    "Matrículas": bloco["Matrícula"].replace("", pd.NA).dropna().nunique(),
+                    "Data": evento.get("Data", ""),
+                })
+            continue
         areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros)
         for area in areas:
             bloco = pontos[
@@ -1205,7 +1234,9 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
         parcial = item["parcial"]
         def esc(campo):
             return html_escape(str(evento.get(campo, "") or "—"))
-        abrangencia = "Parcial (polígono do bairro inteiro como referência)" if parcial else "Bairro informado como impactado"
+        abrangencia = ("Parcial (polígono do bairro inteiro como referência)" if parcial
+                       else "Todo o município" if evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
+                       else "Bairro informado como impactado")
         html = (
             f"<div style='min-width:250px;max-width:400px'>"
             f"<b>Evento — {html_escape(bairro['nome'])}</b><br>"
@@ -1451,8 +1482,15 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
+            municipal = evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
             bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_geograficos)}
-            intersecao = sorted({bairro for cidade, bairro in pares_grupo if cidade == cidade_evento and bairro in bairros_evento})
+            intersecao = sorted({bairro for cidade, bairro in pares_grupo
+                                  if cidade == cidade_evento and (municipal or bairro in bairros_evento)})
+            # Uma concentração pode não ter bairro preenchido, mas ainda pertence ao município.
+            if municipal and not intersecao and any(
+                normalizar_municipio(c) == cidade_evento for c in os_grupo.get("Cidade", [])
+            ):
+                intersecao = ["Todo o município"]
             if intersecao:
                 item = evento.to_dict()
                 item["Bairros coincidentes"] = ", ".join(intersecao)
@@ -1630,6 +1668,33 @@ def modal_importacao():
     m4.metric("Eventos", len(df_eventos))
 
 
+def atualizar_evento_cadastrado(indice, original, alteracoes):
+    """Atualiza somente as células editadas, com proteção contra edição concorrente."""
+    exigir_edicao_farol()
+    aba = obter_aba_para_leitura(NOME_ABA_EVENTOS)
+    valores = aba.get_all_values()
+    if not valores or indice + 1 >= len(valores):
+        raise ValueError("Evento não encontrado. Reabra a janela e tente novamente.")
+    cabecalho = valores[0]
+    linha_atual = valores[indice + 1]
+    mapa_atual = dict(zip(cabecalho, linha_atual))
+    # Garante que outra pessoa não alterou o evento desde sua abertura.
+    for campo in CABECALHO_EVENTOS:
+        if str(mapa_atual.get(campo, "")) != str(original.get(campo, "")):
+            raise ValueError("Este evento foi alterado na planilha. Atualize a página antes de salvar.")
+    for campo, novo_valor in alteracoes.items():
+        if campo not in cabecalho:
+            raise ValueError(f"Coluna não encontrada na planilha: {campo}")
+        pos = cabecalho.index(campo)
+        antigo = str(original.get(campo, ""))
+        if novo_valor != antigo:
+            from gspread.utils import rowcol_to_a1
+            aba.update(range_name=rowcol_to_a1(indice + 2, pos + 1),
+                       values=[[novo_valor]], value_input_option="RAW")
+    invalidar_cache()
+    eventos_georreferenciados.clear()
+
+
 @st.dialog("⚡ Eventos x O.S.", width="large")
 def modal_eventos():
     st.subheader("Eventos x O.S. por bairro")
@@ -1661,6 +1726,39 @@ def modal_eventos():
         mostrar_eventos = df_eventos.copy()
         colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
         st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
+
+    # A edição permanece disponível mesmo sem O.S. cadastradas.
+    if PODE_EDITAR_FAROL and not df_eventos.empty:
+        st.divider()
+        st.markdown("### ✏️ Corrigir evento cadastrado")
+        st.caption("Selecione o evento e corrija os campos. A alteração será salva na aba EVENTOS do Google Sheets.")
+        opcoes = list(range(len(df_eventos)))
+        indice_evento = st.selectbox(
+            "Evento para editar", opcoes,
+            format_func=lambda i: (
+                f"{df_eventos.iloc[i].get('Protocolo', '') or 'Sem protocolo'} · "
+                f"{df_eventos.iloc[i].get('Cidade', '')} · "
+                f"{df_eventos.iloc[i].get('Serviço', '')} · "
+                f"{df_eventos.iloc[i].get('Data', '')} · linha {i + 2}"
+            ), key="farol_evento_editar_indice",
+        )
+        registro = df_eventos.iloc[indice_evento].to_dict()
+        with st.form(f"farol_edicao_evento_{indice_evento}"):
+            campos = {}
+            for campo in CABECALHO_EVENTOS:
+                atual = str(registro.get(campo, "") or "")
+                if campo in {"Áreas Impactadas", "Descrição do Serviço"}:
+                    campos[campo] = st.text_area(campo, value=atual, height=95)
+                else:
+                    campos[campo] = st.text_input(campo, value=atual)
+            salvar = st.form_submit_button("💾 Salvar correções", use_container_width=True)
+        if salvar:
+            try:
+                atualizar_evento_cadastrado(indice_evento, registro, campos)
+                st.success("Evento atualizado. O mapa e as associações serão recalculados.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Não foi possível salvar o evento: {erro}")
 
 
 def capturar_mapa_folium(mapa):
