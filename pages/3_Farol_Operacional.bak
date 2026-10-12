@@ -7,6 +7,10 @@ import hashlib
 import zipfile
 import sqlite3
 import threading
+import tempfile
+import time as tempo_execucao
+import shutil
+from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 from html import escape as html_escape
 from zoneinfo import ZoneInfo
@@ -354,9 +358,18 @@ def obter_aba(nome, cabecalho):
     return aba
 
 
+@st.cache_resource(ttl=600, show_spinner=False)
+def obter_aba_para_leitura(nome):
+    """Reutiliza o objeto Worksheet; não lê toda a planilha para conferir cabeçalhos."""
+    planilha = obter_planilha()
+    if planilha.id != SPREADSHEET_ID:
+        raise PermissionError("A planilha conectada não é a planilha autorizada do Farol.")
+    return planilha.worksheet(nome)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def carregar_aba(nome, cabecalho):
-    aba = obter_aba(nome, cabecalho)
+    aba = obter_aba_para_leitura(nome)
     # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
     # A conversão automática do gspread interpreta a vírgula como milhar
     # e transforma -5,18817 em -518817, invalidando os marcadores.
@@ -368,6 +381,10 @@ def carregar_aba(nome, cabecalho):
 
 def invalidar_cache():
     carregar_aba.clear()
+    criar_concentracoes.clear()
+    pontos_proximos_concentracoes.clear()
+    eventos_georreferenciados.clear()
+    filtrar_ativos_proximos.clear()
 
 
 # O reset automático de PONTOS e EVENTOS foi desativado.
@@ -842,6 +859,7 @@ def carregar_geometrias_municipais(arquivos_assinados):
     return todos
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def descobrir_kmz():
     """Compatibilidade com nome antigo; descobre KMZ, KML e GPKG da pasta."""
     arquivos = []
@@ -908,6 +926,7 @@ def identificar_bairro_por_ponto(lat, lon, bairros):
 # CONCENTRAÇÕES / ANÁLISE ESPACIAL
 # ============================================================
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     df = df_pontos.copy()
     df["_lat"] = df["Latitude"].map(parse_float)
@@ -982,6 +1001,7 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     return cdf, df
 
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=500):
     registros = []
 
@@ -1076,6 +1096,7 @@ def classificar_status_evento(valor):
     return "Status não classificado", "#8b95a7"
 
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def eventos_georreferenciados(eventos, bairros_kmz):
     """Relaciona polígonos por município + bairro, sem misturar cidades."""
     saida = []
@@ -1158,6 +1179,7 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
 # MAPA
 # ============================================================
 
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
     """Retorna ativos dentro do raio de qualquer centro de concentração, sem duplicar."""
     if concentracoes.empty:
@@ -1185,7 +1207,7 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
 
 
 def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
-    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None)
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
     if mostrar_bairros:
@@ -2063,52 +2085,64 @@ def modal_eventos():
         st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
 
 
-def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos, bairros, raio, observacoes):
-    """PDF com representação cartográfica vetorial dos pontos e análises.
+def capturar_mapa_folium(mapa):
+    """Renderiza o Folium em Chromium e captura o mapa com as camadas visíveis.
 
-    A imagem é uma representação estática das coordenadas, não captura da camada OSM.
+    Requer `playwright` no requirements.txt e Chromium no sistema (packages.txt).
     """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as erro:
+        raise RuntimeError("Instale playwright no requirements.txt para gerar o relatório cartográfico.") from erro
+
+    html = mapa.get_root().render()
+    # A captura deve ter uma proporção próxima da visualização operacional.
+    html = html.replace('</head>', """<style>
+        html, body {margin:0 !important; padding:0 !important; width:1100px !important; height:600px !important; overflow:hidden !important;}
+        .folium-map {width:1100px !important; height:600px !important;}
+        </style></head>""", 1)
+    with tempfile.TemporaryDirectory(prefix="farol_mapa_") as pasta:
+        arquivo = os.path.join(pasta, "mapa.html")
+        with open(arquivo, "w", encoding="utf-8") as f:
+            f.write(html)
+        with sync_playwright() as playwright:
+            executavel = (os.environ.get("CHROMIUM_PATH") or shutil.which("chromium")
+                          or shutil.which("chromium-browser") or shutil.which("google-chrome"))
+            kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if executavel:
+                kwargs["executable_path"] = executavel
+            try:
+                browser = playwright.chromium.launch(**kwargs)
+            except Exception as erro:
+                raise RuntimeError("Chromium indisponível. Configure packages.txt com 'chromium' e requirements.txt com 'playwright'.") from erro
+            try:
+                pagina = browser.new_page(viewport={"width": 1100, "height": 600}, device_scale_factor=1.5)
+                pagina.goto(Path(arquivo).as_uri(), wait_until="load", timeout=45000)
+                pagina.wait_for_function("typeof L !== 'undefined' && document.querySelector('.leaflet-map-pane') !== null", timeout=30000)
+                pagina.wait_for_timeout(2400)
+                # A imagem não é utilizável se o mapa de fundo não carregou.
+                tiles = pagina.locator(".leaflet-tile-loaded")
+                if tiles.count() == 0:
+                    raise RuntimeError("As imagens de fundo do OpenStreetMap não carregaram no navegador de captura. Verifique a conectividade do servidor.")
+                return pagina.locator(".folium-map").first.screenshot(type="png")
+            finally:
+                browser.close()
+
+
+def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos, bairros, raio, observacoes, mapa_relatorio):
+    """PDF com captura real do mapa Folium e análises das concentrações."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.2*cm,
                             rightMargin=1.2*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
     estilos = getSampleStyleSheet()
     historia = [Paragraph("Farol Operacional — Relatório de concentrações", estilos["Title"]),
                 Paragraph("Gerado em " + datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M") +
-                          " · Mapa esquemático georreferenciado (sem imagem de fundo OpenStreetMap)", estilos["Normal"]),
+                          " · Captura cartográfica do mapa operacional", estilos["Normal"]),
                 Spacer(1, 12)]
-    coords = []
-    for _, r in pontos.iterrows():
-        lat = normalizar_coordenada(r.get("Latitude"), "lat")
-        lon = normalizar_coordenada(r.get("Longitude"), "lon")
-        if lat is not None and lon is not None:
-            coords.append((lat, lon, r))
-    if coords:
-        # Evita desenhar mapas nacionais minúsculos: mostra dispersão com escala automática.
-        lats = [x[0] for x in coords]
-        lons = [x[1] for x in coords]
-        minlat, maxlat = min(lats), max(lats)
-        minlon, maxlon = min(lons), max(lons)
-        minlat -= max((maxlat-minlat)*.08, .003)
-        maxlat += max((maxlat-minlat)*.08, .003)
-        minlon -= max((maxlon-minlon)*.08, .003)
-        maxlon += max((maxlon-minlon)*.08, .003)
-        W,H=730,335
-        desenho=Drawing(W,H)
-        desenho.add(Rect(0,0,W,H,fillColor=colors.HexColor("#F2F5F8"),strokeColor=colors.HexColor("#AAB7C4")))
-        def xy(lat,lon):
-            return (15+(lon-minlon)/(maxlon-minlon)*(W-30), 15+(lat-minlat)/(maxlat-minlat)*(H-30))
-        for lat,lon,r in coords:
-            servico=str(r.get("Serviço Executado", "") or "")
-            cor=colors.HexColor("#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2")
-            x,y=xy(lat,lon)
-            desenho.add(Circle(x,y,2.5,fillColor=cor,strokeColor=None))
-        for _,c in concentracoes.iterrows():
-            x,y=xy(float(c["LATITUDE"]),float(c["LONGITUDE"]))
-            desenho.add(Circle(x,y,7,strokeColor=colors.purple,fillColor=None,strokeWidth=1.5))
-            desenho.add(String(x+9,y+4,str(c["ID_CONCENTRACAO"]),fontSize=8,fillColor=colors.black))
-        historia.append(desenho)
-    else:
-        historia.append(Paragraph("Nenhuma O.S. georreferenciada no filtro atual.", estilos["Normal"]))
+    # Captura real do mapa Folium, incluindo tiles OSM e camadas operacionais.
+    # Não substituímos falhas por um desenho esquemático potencialmente enganoso.
+    imagem_mapa = capturar_mapa_folium(mapa_relatorio)
+    historia.append(Image(io.BytesIO(imagem_mapa), width=26.9*cm, height=14.67*cm))
     historia.append(Spacer(1,12))
     historia.append(Paragraph(f"O.S. analisadas: {len(pontos)} · Concentrações: {len(concentracoes)}", estilos["Heading2"]))
     for _, c in concentracoes.iterrows():
@@ -2136,53 +2170,22 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
 st.title("Farol Operacional")
 st.caption("O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
-with st.sidebar:
-    st.header("Configuração")
-    raio_operacional = st.number_input(
-        "Raio operacional (m)", min_value=50, max_value=5000,
-        value=RAIO_OPERACIONAL_PADRAO, step=50,
-        help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
-    )
-    raio_concentracao = st.number_input(
-        "Raio da concentração (m)", min_value=50, max_value=5000,
-        value=RAIO_CONCENTRACAO_PADRAO, step=50,
-        help="Distância usada para agrupar O.S. espacialmente.",
-    )
-    minimo_os = st.number_input(
-        "Mínimo de O.S. por concentração", min_value=2, max_value=100,
-        value=2, step=1,
-    )
-
-    st.divider()
-    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
-        try:
-            st.switch_page("app.py")
-        except Exception as erro:
-            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
-
-if modo_escuro:
-    st.markdown("""
-    <style>
-      .stApp { background-color: #0e1117; color: #fafafa; }
-      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
-      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
-      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
-    </style>
-    """, unsafe_allow_html=True)
-
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
+_inicio_geometria = tempo_execucao.perf_counter()
 bairros = descobrir_kmz()
+_tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
 # PONTOS e EVENTOS são mantidos sem limpeza automática.
 
 # Inicializa as quatro abas.
+_inicio_planilhas = tempo_execucao.perf_counter()
 with st.spinner("Carregando dados operacionais..."):
     df_pocos = carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
     df_loggers = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
     df_pontos = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
     df_eventos = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
+_tempo_planilhas = tempo_execucao.perf_counter() - _inicio_planilhas
 
 # Normaliza tipos para análise.
 if not df_pontos.empty:
@@ -2203,7 +2206,6 @@ if not df_loggers.empty:
 # ============================================================
 
 with st.sidebar:
-    st.divider()
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -2220,17 +2222,82 @@ with st.sidebar:
         st.rerun()
     if not PODE_EDITAR_FAROL:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
-    st.caption("O mapa é a tela inicial do Farol Operacional.")
+
+    st.divider()
+    st.markdown("### 🔎 Filtros")
+    # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
+    cidades_filtro = set()
+    for dados, campo in ((df_pontos, "Cidade"), (df_pocos, "MUNICIPIO"), (df_loggers, "MUNICIPIO")):
+        if campo in dados.columns and not dados.empty:
+            cidades_filtro.update(str(v).strip() for v in dados[campo].dropna() if str(v).strip())
+    cidades_filtro = sorted(cidades_filtro, key=normalizar_texto)
+    cidade_sel = st.selectbox("Cidade dos poços e loggers", ["Todas"] + cidades_filtro, key="farol_filtro_cidade_sidebar")
+    cidade_especifica = cidade_sel != "Todas"
+    mostrar_pocos_cidade = st.checkbox(
+        "Mostrar poços / ativos da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_pocos_cidade",
+    )
+    mostrar_loggers_cidade = st.checkbox(
+        "Mostrar loggers da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
+    )
+    if not cidade_especifica:
+        st.caption("Os equipamentos próximos às concentrações continuam visíveis. Selecione uma cidade para acrescentar outros equipamentos.")
+
+    st.divider()
+    st.markdown("### ⚙️ Configuração")
+    raio_operacional = st.number_input(
+        "Raio operacional (m)", min_value=50, max_value=5000,
+        value=RAIO_OPERACIONAL_PADRAO, step=50,
+        help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
+    )
+    raio_concentracao = st.number_input(
+        "Raio da concentração (m)", min_value=50, max_value=5000,
+        value=RAIO_CONCENTRACAO_PADRAO, step=50,
+        help="Distância usada para agrupar O.S. espacialmente.",
+    )
+    minimo_os = st.number_input(
+        "Mínimo de O.S. por concentração", min_value=2, max_value=100,
+        value=2, step=1,
+    )
+
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
-    # Reservar posição fixa do relatório, independentemente da existência de concentrações.
     espaco_relatorio_operacional = st.empty()
-    # Botão administrativo sempre acessível, mesmo com PONTOS vazia.
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
                      use_container_width=True, key="abrir_limpeza_farol"):
             modal_limpar_dados_operacionais()
+    if PERFIL_FAROL == "admin":
+        espaco_diagnostico_farol = st.empty()
+    st.divider()
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        try:
+            st.switch_page("app.py")
+        except Exception as erro:
+            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
+    # O seletor de tema permanece no fim da barra lateral.
+    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
 
+if modo_escuro:
+    st.markdown("""
+    <style>
+      .stApp { background-color: #0e1117; color: #fafafa; }
+      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
+      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
+      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def ativos_da_cidade(df, campo, cidade, habilitado):
+    """Evita enviar ao Folium milhares de equipamentos de outros municípios."""
+    if not habilitado or cidade == "Todas" or df.empty or campo not in df.columns:
+        return df.iloc[0:0].copy()
+    return df.loc[normalizar_texto_series(df[campo]) == normalizar_texto(cidade)].copy()
+
+ativos_pocos_cidade = ativos_da_cidade(df_pocos, "MUNICIPIO", cidade_sel, mostrar_pocos_cidade)
+ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mostrar_loggers_cidade)
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
@@ -2239,17 +2306,11 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
     st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
                "As áreas destacadas representam os bairros inteiros dos arquivos geográficos, inclusive quando o evento informa impacto parcial.")
-    modo_ativos = st.radio(
-        "Visualização de poços e loggers",
-        ["Somente próximos às concentrações", "Todos os cadastrados", "Ocultar poços e loggers"],
-        horizontal=True,
-        key="farol_modo_ativos",
-    )
 
     if df_pontos.empty:
         st.warning("A aba PONTOS ainda não possui dados.")
-        ativos_pocos = df_pocos if modo_ativos == "Todos os cadastrados" else df_pocos.iloc[0:0]
-        ativos_loggers = df_loggers if modo_ativos == "Todos os cadastrados" else df_loggers.iloc[0:0]
+        ativos_pocos = ativos_pocos_cidade
+        ativos_loggers = ativos_loggers_cidade
         mapa = criar_mapa(
             bairros, df_pontos, ativos_pocos, ativos_loggers,
             pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
@@ -2260,21 +2321,22 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             mapa.location = [lat_foco, lon_foco]
             mapa.options["zoom"] = 15
             mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
-        st_folium(mapa, width=None, height=650, returned_objects=[], key="farol_mapa_principal")
+        estado_mapa = st_folium(mapa, width=None, height=650,
+                               returned_objects=["center", "zoom"], key="farol_mapa_principal")
+        if estado_mapa:
+            st.session_state["farol_ultimo_centro_mapa"] = estado_mapa.get("center")
+            st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
     else:
         # Filtros.
-        f1, f2, f3, f4 = st.columns(4)
-        cidades = sorted([x for x in df_pontos["Cidade"].dropna().astype(str).unique() if x.strip()])
+        f1, f2, f3 = st.columns(3)
         bairros_os = sorted([x for x in df_pontos["Bairro"].dropna().astype(str).unique() if x.strip()])
         status_os = sorted([x for x in df_pontos["Status OS"].dropna().astype(str).unique() if x.strip()])
 
         with f1:
-            cidade_sel = st.selectbox("Cidade", ["Todas"] + cidades)
-        with f2:
             bairro_sel = st.multiselect("Bairro", bairros_os)
-        with f3:
+        with f2:
             status_sel = st.multiselect("Status", status_os)
-        with f4:
+        with f3:
             apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
 
         servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
@@ -2288,8 +2350,6 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         )
 
         analise = df_pontos.copy()
-        if cidade_sel != "Todas":
-            analise = analise[normalizar_texto_series(analise["Cidade"]) == normalizar_texto(cidade_sel)]
         if bairro_sel:
             bairros_norm = {limpar_nome_bairro(x) for x in bairro_sel}
             analise = analise[analise["Bairro"].map(limpar_nome_bairro).isin(bairros_norm)]
@@ -2302,6 +2362,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         if apenas_com_coord:
             analise = analise.dropna(subset=["Latitude", "Longitude"])
 
+        _inicio_analise = tempo_execucao.perf_counter()
         concentracoes, pontos_cluster = criar_concentracoes(
             analise,
             raio_m=raio_concentracao,
@@ -2314,27 +2375,62 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             raio=int(raio_operacional),
         )
 
+        _tempo_analise = tempo_execucao.perf_counter() - _inicio_analise
+
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("O.S. analisadas", len(analise))
         k2.metric("O.S. com coordenada", int(analise[["Latitude", "Longitude"]].notna().all(axis=1).sum()))
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
-        if modo_ativos == "Todos os cadastrados":
-            ativos_pocos, ativos_loggers = df_pocos, df_loggers
-        elif modo_ativos == "Ocultar poços e loggers":
-            ativos_pocos, ativos_loggers = df_pocos.iloc[0:0], df_loggers.iloc[0:0]
-        else:
-            ativos_pocos, ativos_loggers = filtrar_ativos_proximos(
-                concentracoes, df_pocos, df_loggers, float(raio_operacional)
-            )
+        # A camada cartográfica SEMPRE inclui os equipamentos próximos às concentrações.
+        # A cidade selecionada apenas acrescenta os demais equipamentos da cidade.
+        # A análise de proximidade continua utilizando as bases completas.
+        def equipamentos_proximos(base, tipo):
+            if base.empty or proximidades.empty:
+                return base.iloc[0:0].copy()
+            correspondencias = proximidades.loc[
+                proximidades["Tipo"] == tipo, ["Identificação", "Município"]
+            ]
+            if correspondencias.empty:
+                return base.iloc[0:0].copy()
+            chaves = set(zip(
+                correspondencias["Identificação"].fillna("").astype(str).map(normalizar_texto),
+                correspondencias["Município"].fillna("").astype(str).map(normalizar_texto),
+            ))
+            chaves_base = list(zip(
+                base["IDENTIFICACAO_ATIVO"].fillna("").astype(str).map(normalizar_texto),
+                base["MUNICIPIO"].fillna("").astype(str).map(normalizar_texto),
+            ))
+            return base.loc[[chave in chaves for chave in chaves_base]].copy()
+
+        def juntar_sem_duplicar(base, proximos, adicionais):
+            if proximos.empty:
+                return adicionais.copy()
+            if adicionais.empty:
+                return proximos.copy()
+            # Índices originais das abas permitem evitar marcadores duplicados.
+            return base.loc[base.index.isin(proximos.index.union(adicionais.index))].copy()
+
+        ativos_pocos = juntar_sem_duplicar(
+            df_pocos,
+            equipamentos_proximos(df_pocos, "Poço / Ativo"),
+            ativos_pocos_cidade,
+        )
+        ativos_loggers = juntar_sem_duplicar(
+            df_loggers,
+            equipamentos_proximos(df_loggers, "Logger"),
+            ativos_loggers_cidade,
+        )
 
         st.caption(
             f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
-            f"{len(ativos_loggers)} logger(s) no mapa."
+            f"{len(ativos_loggers)} logger(s) no mapa: equipamentos próximos às "
+            "concentrações e, quando habilitados, equipamentos adicionais da cidade selecionada."
         )
         st.markdown("### 🗺️ Mapa operacional")
         st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
+        _inicio_renderizacao = tempo_execucao.perf_counter()
         mapa = criar_mapa(
             bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
             proximidades, mostrar_bairros=bool(bairros),
@@ -2345,8 +2441,21 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             mapa.location = [lat_foco, lon_foco]
             mapa.options["zoom"] = 15
             mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
-        st_folium(mapa, width=None, height=650, returned_objects=[], key="farol_mapa_principal")
+        estado_mapa = st_folium(mapa, width=None, height=650,
+                               returned_objects=["center", "zoom"], key="farol_mapa_principal")
+        if estado_mapa:
+            st.session_state["farol_ultimo_centro_mapa"] = estado_mapa.get("center")
+            st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
 
+        _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
+        if PERFIL_FAROL == "admin":
+            with espaco_diagnostico_farol.container():
+                with st.expander("⏱️ Diagnóstico de desempenho", expanded=False):
+                    st.caption("Tempo desta interação; valores baixos podem indicar uso do cache.")
+                    st.write(f"Geometrias: {_tempo_geometria:.2f} s")
+                    st.write(f"Google Sheets: {_tempo_planilhas:.2f} s")
+                    st.write(f"Análise espacial: {_tempo_analise:.2f} s")
+                    st.write(f"Montagem e exibição do mapa: {_tempo_mapa:.2f} s")
         if concentracoes.empty:
             st.warning("Nenhuma concentração atingiu o mínimo configurado.")
         else:
@@ -2405,18 +2514,29 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         if concentracoes.empty:
             resumo_pdf = concentracoes.copy()
             observacoes_df = pd.DataFrame()
-        try:
-            pdf_operacional = gerar_pdf_operacional(
-                resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
-                bairros, int(raio_operacional), observacoes_df
-            )
-            espaco_relatorio_operacional.download_button(
-                "📄 Gerar relatório operacional (PDF)", data=pdf_operacional,
-                file_name="Farol_Relatorio_Operacional.pdf", mime="application/pdf",
-                use_container_width=True, key="download_pdf_operacional"
-            )
-        except Exception as erro:
-            espaco_relatorio_operacional.error(f"Não foi possível gerar o relatório: {erro}")
+        with espaco_relatorio_operacional.container():
+            if st.button("📸 Gerar relatório operacional (PDF)",
+                         use_container_width=True, key="gerar_pdf_operacional"):
+                try:
+                    # Replica a região e o zoom efetivamente escolhidos pelo analista.
+                    centro_atual = st.session_state.get("farol_ultimo_centro_mapa")
+                    zoom_atual = st.session_state.get("farol_ultimo_zoom_mapa")
+                    if isinstance(centro_atual, dict) and {"lat", "lng"} <= centro_atual.keys():
+                        mapa.location = [float(centro_atual["lat"]), float(centro_atual["lng"])]
+                        mapa.options.pop("bounds", None)
+                    if zoom_atual is not None:
+                        mapa.options["zoom"] = float(zoom_atual)
+                    with st.spinner("Capturando o mapa com fundo cartográfico e preparando PDF..."):
+                        st.session_state["farol_pdf_operacional_pronto"] = gerar_pdf_operacional(
+                            resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
+                            bairros, int(raio_operacional), observacoes_df, mapa
+                        )
+                except Exception as erro:
+                    st.error(f"Não foi possível capturar o mapa para o relatório: {erro}")
+            if st.session_state.get("farol_pdf_operacional_pronto"):
+                st.download_button("⬇️ Baixar relatório gerado", data=st.session_state["farol_pdf_operacional_pronto"],
+                                   file_name="Farol_Relatorio_Operacional.pdf", mime="application/pdf",
+                                   use_container_width=True, key="download_pdf_operacional")
     # Sem dados de O.S.: manter a opção visível, porém desabilitada.
     if df_pontos.empty:
         espaco_relatorio_operacional.button(
