@@ -38,6 +38,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
+from branca.element import Element
 
 from auth import verificar_autenticacao, tem_acesso_modulo
 
@@ -1460,6 +1461,42 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             ).add_to(fg_os)
     fg_os.add_to(mapa)
 
+    # Rótulos só ficam visíveis em aproximações de detalhe (~200 m na escala).
+    # A lógica é executada no Leaflet, sem provocar rerun do Streamlit.
+    mapa.get_root().header.add_child(Element("""
+    <style>
+      .leaflet-tooltip.farol-rotulo-equipamento {
+        display: none;
+        background: rgba(255,255,255,.95);
+        color: #1e293b;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        padding: 2px 5px;
+        font: 600 11px/1.25 Arial, sans-serif;
+        box-shadow: 0 1px 3px rgba(0,0,0,.18);
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .farol-zoom-detalhe .leaflet-tooltip.farol-rotulo-equipamento { display: block; }
+    </style>
+    """))
+    mapa.get_root().script.add_child(Element(f"""
+    (function() {{
+      var mapaFarol = {mapa.get_name()};
+      var limiarZoom = 16.5;
+      function atualizarRotulosFarol() {{
+        var container = mapaFarol.getContainer();
+        if (mapaFarol.getZoom() >= limiarZoom) {{
+          container.classList.add('farol-zoom-detalhe');
+        }} else {{
+          container.classList.remove('farol-zoom-detalhe');
+        }}
+      }}
+      mapaFarol.on('zoomend', atualizarRotulosFarol);
+      mapaFarol.whenReady(atualizarRotulosFarol);
+    }})();
+    """))
+
     fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
     for _, r in df_loggers.iterrows():
         lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
@@ -1468,7 +1505,11 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             continue
         folium.Marker(
             [lat, lon],
-            tooltip=f"Logger: {r.get('IDENTIFICACAO_ATIVO','')}",
+            tooltip=folium.Tooltip(
+                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or "Logger")),
+                permanent=True, direction="top", offset=(0, -12),
+                class_name="farol-rotulo-equipamento",
+            ),
             popup=folium.Popup(
                 f"<b>Logger:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Endereço:</b> {r.get('ENDERECO','')}", max_width=300
@@ -1485,7 +1526,11 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             continue
         folium.Marker(
             [lat, lon],
-            tooltip=f"Poço / Ativo: {r.get('IDENTIFICACAO_ATIVO','')}",
+            tooltip=folium.Tooltip(
+                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")),
+                permanent=True, direction="top", offset=(0, -12),
+                class_name="farol-rotulo-equipamento",
+            ),
             popup=folium.Popup(
                 f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
