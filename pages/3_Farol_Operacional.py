@@ -1444,20 +1444,34 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
 
     fg_conc = folium.FeatureGroup(name="Concentrações", show=True)
     for _, c in concentracoes.iterrows():
-        lat, lon = c["LATITUDE"], c["LONGITUDE"]
+        lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+        codigo = html_escape(str(c["ID_CONCENTRACAO"]))
+        bairros_html = html_escape(str(c.get("BAIRROS", "") or "Não informados"))
+        # Sem rótulos permanentes: os dados aparecem somente ao clicar na concentração.
+        conteudo_popup = (
+            "<div style='min-width:230px;max-width:340px;font-size:13px'>"
+            f"<b>Concentração {codigo}</b>"
+            "<details open style='margin-top:7px'>"
+            "<summary style='cursor:pointer;font-weight:600'>Informações da concentração</summary>"
+            f"<div style='padding-top:7px'><b>O.S.:</b> {int(c['QTD_OS'])}<br>"
+            f"<b>Matrículas:</b> {int(c['QTD_MATRICULAS'])}<br>"
+            f"<b>Bairros:</b> {bairros_html}</div>"
+            "</details>"
+            "<small style='display:block;margin-top:8px'>O painel completo da concentração também será expandido abaixo do mapa.</small>"
+            "</div>"
+        )
+        popup_concentracao = folium.Popup(conteudo_popup, max_width=370)
         folium.Circle(
             [lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
             color="purple", fill=True, fill_opacity=0.08,
-            popup=folium.Popup(
-                f"<b>{c['ID_CONCENTRACAO']}</b><br>"
-                f"O.S.: {c['QTD_OS']}<br>"
-                f"Matrículas: {c['QTD_MATRICULAS']}<br>"
-                f"Bairros: {c['BAIRROS']}", max_width=350
-            ),
+            popup=popup_concentracao,
         ).add_to(fg_conc)
-        folium.Marker(
-            [lat, lon],
-            icon=folium.DivIcon(html=f"<div style='font-size:12px;font-weight:bold'>{c['ID_CONCENTRACAO']}<br>{c['QTD_OS']} O.S.</div>"),
+        # Ponto central discreto e clicável; sem código, contagens ou texto sobre o mapa.
+        folium.CircleMarker(
+            [lat, lon], radius=7, color="#7135A8", weight=2,
+            fill=True, fill_color="#7135A8", fill_opacity=0.9,
+            tooltip="Clique para consultar a concentração",
+            popup=folium.Popup(conteudo_popup, max_width=370),
         ).add_to(fg_conc)
     fg_conc.add_to(mapa)
 
@@ -2220,7 +2234,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
         estado_mapa = st_folium(
             mapa, width=None, height=650,
-            returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
+            returned_objects=["center", "zoom", "last_object_clicked"] if sincronizar_mapa_pdf else ["last_object_clicked"],
             key="farol_mapa_principal",
         )
         if sincronizar_mapa_pdf and estado_mapa:
@@ -2228,6 +2242,23 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
             if estado_mapa.get("zoom") is not None:
                 st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
+
+        # Clique em um centro de concentração expande seu painel de análise.
+        # Movimentação e zoom continuam sem enviar eventos ao Streamlit, exceto
+        # quando o usuário habilita a sincronização opcional para o PDF.
+        clique = (estado_mapa or {}).get("last_object_clicked")
+        if isinstance(clique, dict) and not concentracoes.empty:
+            lat_clique, lon_clique = parse_float(clique.get("lat")), parse_float(clique.get("lng"))
+            if lat_clique is not None and lon_clique is not None:
+                mais_proxima = None
+                menor_distancia = float("inf")
+                for _, centro in concentracoes.iterrows():
+                    distancia = distancia_metros(lat_clique, lon_clique, centro["LATITUDE"], centro["LONGITUDE"])
+                    if distancia is not None and distancia < menor_distancia:
+                        menor_distancia, mais_proxima = distancia, str(centro["ID_CONCENTRACAO"])
+                # Apenas o clique no marcador central (até 3 m) seleciona o painel.
+                if menor_distancia <= 3 and mais_proxima:
+                    st.session_state["farol_concentracao_expandida"] = mais_proxima
 
         _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
         if PERFIL_FAROL == "admin":
@@ -2270,7 +2301,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
                     f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
                 )
-                with st.expander(titulo, expanded=False):
+                with st.expander(titulo, expanded=(st.session_state.get("farol_concentracao_expandida") == codigo)):
                     if st.button("🎯 Focar esta concentração no mapa", key=f"foco_{codigo}"):
                         st.session_state["farol_foco_concentracao"] = (float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]))
                         st.rerun()
