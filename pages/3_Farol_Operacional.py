@@ -2242,7 +2242,7 @@ with st.sidebar:
         disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
     )
     if not cidade_especifica:
-        st.caption("Selecione uma cidade para habilitar a exibição de ativos e loggers.")
+        st.caption("Os equipamentos próximos às concentrações continuam visíveis. Selecione uma cidade para acrescentar outros equipamentos.")
 
     st.divider()
     st.markdown("### ⚙️ Configuração")
@@ -2383,13 +2383,50 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
-        # Apenas equipamentos da cidade selecionada entram na camada cartográfica.
-        # A análise de proximidade acima permanece completa para os indicadores.
-        ativos_pocos, ativos_loggers = ativos_pocos_cidade, ativos_loggers_cidade
+        # A camada cartográfica SEMPRE inclui os equipamentos próximos às concentrações.
+        # A cidade selecionada apenas acrescenta os demais equipamentos da cidade.
+        # A análise de proximidade continua utilizando as bases completas.
+        def equipamentos_proximos(base, tipo):
+            if base.empty or proximidades.empty:
+                return base.iloc[0:0].copy()
+            correspondencias = proximidades.loc[
+                proximidades["Tipo"] == tipo, ["Identificação", "Município"]
+            ]
+            if correspondencias.empty:
+                return base.iloc[0:0].copy()
+            chaves = set(zip(
+                correspondencias["Identificação"].fillna("").astype(str).map(normalizar_texto),
+                correspondencias["Município"].fillna("").astype(str).map(normalizar_texto),
+            ))
+            chaves_base = list(zip(
+                base["IDENTIFICACAO_ATIVO"].fillna("").astype(str).map(normalizar_texto),
+                base["MUNICIPIO"].fillna("").astype(str).map(normalizar_texto),
+            ))
+            return base.loc[[chave in chaves for chave in chaves_base]].copy()
+
+        def juntar_sem_duplicar(base, proximos, adicionais):
+            if proximos.empty:
+                return adicionais.copy()
+            if adicionais.empty:
+                return proximos.copy()
+            # Índices originais das abas permitem evitar marcadores duplicados.
+            return base.loc[base.index.isin(proximos.index.union(adicionais.index))].copy()
+
+        ativos_pocos = juntar_sem_duplicar(
+            df_pocos,
+            equipamentos_proximos(df_pocos, "Poço / Ativo"),
+            ativos_pocos_cidade,
+        )
+        ativos_loggers = juntar_sem_duplicar(
+            df_loggers,
+            equipamentos_proximos(df_loggers, "Logger"),
+            ativos_loggers_cidade,
+        )
 
         st.caption(
             f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
-            f"{len(ativos_loggers)} logger(s) no mapa."
+            f"{len(ativos_loggers)} logger(s) no mapa: equipamentos próximos às "
+            "concentrações e, quando habilitados, equipamentos adicionais da cidade selecionada."
         )
         st.markdown("### 🗺️ Mapa operacional")
         st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
