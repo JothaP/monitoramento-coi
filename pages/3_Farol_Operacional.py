@@ -1304,24 +1304,6 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             ).add_to(fg_os)
     fg_os.add_to(mapa)
 
-    fg_pocos = folium.FeatureGroup(name="Poços / Ativos", show=True)
-    for _, r in df_pocos.iterrows():
-        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
-        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
-        if lat is None or lon is None:
-            continue
-        folium.Marker(
-            [lat, lon],
-            tooltip=f"Poço / Ativo: {r.get('IDENTIFICACAO_ATIVO','')}",
-            popup=folium.Popup(
-                f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
-                f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
-                f"<b>Município:</b> {r.get('MUNICIPIO','')}", max_width=300
-            ),
-            icon=folium.Icon(icon="tint", prefix="fa", color="blue"),
-        ).add_to(fg_pocos)
-    fg_pocos.add_to(mapa)
-
     fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
     for _, r in df_loggers.iterrows():
         lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
@@ -1338,6 +1320,25 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             icon=folium.Icon(icon="signal", prefix="fa", color="orange"),
         ).add_to(fg_loggers)
     fg_loggers.add_to(mapa)
+
+    fg_pocos = folium.FeatureGroup(name="Poços / Ativos", show=True)
+    for _, r in df_pocos.iterrows():
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
+            continue
+        folium.Marker(
+            [lat, lon],
+            tooltip=f"Poço / Ativo: {r.get('IDENTIFICACAO_ATIVO','')}",
+            popup=folium.Popup(
+                f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
+                f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
+                f"<b>Município:</b> {r.get('MUNICIPIO','')}", max_width=300
+            ),
+            icon=folium.Icon(icon="tint", prefix="fa", color="blue"),
+            z_index_offset=1000,  # Mantém ativos acima dos loggers coincidentes.
+        ).add_to(fg_pocos)
+    fg_pocos.add_to(mapa)
 
     fg_conc = folium.FeatureGroup(name="Concentrações", show=True)
     for _, c in concentracoes.iterrows():
