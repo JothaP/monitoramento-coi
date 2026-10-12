@@ -17,3 +17,4 @@ xlrd
 reportlab
 shapely
 pyproj
+playwright
