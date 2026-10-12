@@ -1028,41 +1028,70 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     return cdf, df
 
 
+def _indice_espacial_ativos(df, tamanho_celula=0.01):
+    """Grade espacial simples, sem dependências adicionais.
+
+    Retém posições por índice posicional para preservar a ordem e índices repetidos.
+    """
+    grade = {}
+    registros = list(df.to_dict("records"))
+    for pos, r in enumerate(registros):
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
+            continue
+        celula = (math.floor(lat / tamanho_celula), math.floor(lon / tamanho_celula))
+        grade.setdefault(celula, []).append((pos, lat, lon))
+    return grade, registros
+
+
+def _candidatos_no_raio(grade, lat, lon, raio_m, tamanho_celula=0.01):
+    """Busca por caixa conservadora; a decisão final usa Haversine original."""
+    if lat is None or lon is None or raio_m < 0:
+        return []
+    # A margem é deliberadamente conservadora para evitar falsos negativos.
+    delta_lat = raio_m / 110000.0 + 1e-9
+    limite_lat = min(89.999999, abs(lat) + delta_lat)
+    cos_min = max(0.000001, math.cos(math.radians(limite_lat)))
+    delta_lon = raio_m / (110000.0 * cos_min) + 1e-9
+    x0 = math.floor((lat - delta_lat) / tamanho_celula)
+    x1 = math.floor((lat + delta_lat) / tamanho_celula)
+    y0 = math.floor((lon - delta_lon) / tamanho_celula)
+    y1 = math.floor((lon + delta_lon) / tamanho_celula)
+    candidatos = []
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            for pos, alat, alon in grade.get((x, y), ()):
+                d = distancia_metros(lat, lon, alat, alon)
+                if d is not None and d <= raio_m:
+                    candidatos.append((pos, d))
+    candidatos.sort(key=lambda item: item[0])
+    return candidatos
+
+
 @st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=500):
     registros = []
-
+    grade_pocos, pocos = _indice_espacial_ativos(df_pocos)
+    grade_loggers, loggers = _indice_espacial_ativos(df_loggers)
     for _, c in concentracoes.iterrows():
-        for _, p in df_pocos.iterrows():
-            lat = parse_float(p.get("LATITUDE"))
-            lon = parse_float(p.get("LONGITUDE"))
-            d = distancia_metros(c["LATITUDE"], c["LONGITUDE"], lat, lon)
-            if d is not None and d <= raio:
+        lat = normalizar_coordenada(c.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(c.get("LONGITUDE"), "lon")
+        for grade, ativos, tipo, nome_coluna in (
+            (grade_pocos, pocos, "Poço / Ativo", "NOME_POCO"),
+            (grade_loggers, loggers, "Logger", "ENDERECO"),
+        ):
+            for pos, d in _candidatos_no_raio(grade, lat, lon, raio):
+                p = ativos[pos]
                 registros.append({
                     "Concentração": c["ID_CONCENTRACAO"],
-                    "Tipo": "Poço / Ativo",
+                    "Tipo": tipo,
                     "Identificação": p.get("IDENTIFICACAO_ATIVO", ""),
-                    "Nome": p.get("NOME_POCO", ""),
+                    "Nome": p.get(nome_coluna, ""),
                     "Município": p.get("MUNICIPIO", ""),
                     "Distância (m)": round(d, 1),
                     "Distância": distancia_formatada(d),
                 })
-
-        for _, p in df_loggers.iterrows():
-            lat = parse_float(p.get("LATITUDE"))
-            lon = parse_float(p.get("LONGITUDE"))
-            d = distancia_metros(c["LATITUDE"], c["LONGITUDE"], lat, lon)
-            if d is not None and d <= raio:
-                registros.append({
-                    "Concentração": c["ID_CONCENTRACAO"],
-                    "Tipo": "Logger",
-                    "Identificação": p.get("IDENTIFICACAO_ATIVO", ""),
-                    "Nome": p.get("ENDERECO", ""),
-                    "Município": p.get("MUNICIPIO", ""),
-                    "Distância (m)": round(d, 1),
-                    "Distância": distancia_formatada(d),
-                })
-
     return pd.DataFrame(registros)
 
 
@@ -1208,7 +1237,7 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
 
 @st.cache_data(ttl=180, show_spinner=False, max_entries=12)
 def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
-    """Retorna ativos dentro do raio de qualquer centro de concentração, sem duplicar."""
+    """Exibe ativos perto de qualquer concentração, sem duplicatas, na ordem original."""
     if concentracoes.empty:
         return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
     centros = [
@@ -1220,15 +1249,11 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
         return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
 
     def filtrar(df):
-        selecionados = []
-        for _, r in df.iterrows():
-            lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
-            lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
-            if lat is None or lon is None:
-                continue
-            if any(distancia_metros(lat, lon, clat, clon) <= raio_m for clat, clon in centros):
-                selecionados.append(r.name)
-        return df.loc[selecionados].copy()
+        grade, _ = _indice_espacial_ativos(df)
+        posicoes = set()
+        for lat, lon in centros:
+            posicoes.update(pos for pos, _ in _candidatos_no_raio(grade, lat, lon, raio_m))
+        return df.iloc[sorted(posicoes)].copy()
 
     return filtrar(df_pocos), filtrar(df_loggers)
 
