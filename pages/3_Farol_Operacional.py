@@ -2102,36 +2102,128 @@ def capturar_mapa_folium(mapa, largura=1100, altura=600):
                 browser.close()
 
 
-def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos, bairros, raio, observacoes, mapa_relatorio):
-    """PDF com captura real do mapa Folium e análises das concentrações."""
+def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=None):
+    """Mapa exclusivo do PDF: apenas concentrações e O.S. dos agrupamentos."""
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=13, tiles="OpenStreetMap",
+                      control_scale=True, zoom_control=False)
+    selecionadas = (concentracoes if concentracao is None else
+                    concentracoes[concentracoes["ID_CONCENTRACAO"] == concentracao["ID_CONCENTRACAO"]])
+    coordenadas = []
+    for _, c in selecionadas.iterrows():
+        lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+        raio = RAIO_CONCENTRACAO_PADRAO
+        folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
+                      fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
+        folium.CircleMarker([lat, lon], radius=5, color="#7135A8", weight=2,
+                            fill=True, fill_color="#7135A8", fill_opacity=1).add_to(mapa)
+        coordenadas.append((lat, lon))
+        if "_grupo" not in pontos_cluster.columns:
+            continue
+        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+        for _, r in grupo.iterrows():
+            y = normalizar_coordenada(r.get("Latitude"), "lat")
+            x = normalizar_coordenada(r.get("Longitude"), "lon")
+            if y is None or x is None:
+                continue
+            servico = str(r.get("Serviço Executado", "") or "")
+            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+            folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
+                                fill=True, fill_color=cor, fill_opacity=.92).add_to(mapa)
+            coordenadas.append((y, x))
+    if coordenadas:
+        if concentracao is not None:
+            # Enquadramento compacto, mas incluindo todo o círculo da concentração.
+            lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+            raio = RAIO_CONCENTRACAO_PADRAO * 1.08
+            dy = raio / 111320.0
+            dx = raio / (111320.0 * max(.2, math.cos(math.radians(lat))))
+            mapa.fit_bounds([[min(y for y, _ in coordenadas + [(lat-dy, lon-dx)]),
+                              min(x for _, x in coordenadas + [(lat-dy, lon-dx)])],
+                             [max(y for y, _ in coordenadas + [(lat+dy, lon+dx)]),
+                              max(x for _, x in coordenadas + [(lat+dy, lon+dx)])]], padding=(12, 12))
+        else:
+            # Os círculos inteiros devem aparecer no mapa geral.
+            extremos = list(coordenadas)
+            for _, c in selecionadas.iterrows():
+                y, x = float(c["LATITUDE"]), float(c["LONGITUDE"])
+                dy = RAIO_CONCENTRACAO_PADRAO / 111320.0
+                dx = RAIO_CONCENTRACAO_PADRAO / (111320.0 * max(.2, math.cos(math.radians(y))))
+                extremos.extend([(y-dy, x-dx), (y+dy, x+dx)])
+            mapa.fit_bounds([[min(y for y, _ in extremos), min(x for _, x in extremos)],
+                             [max(y for y, _ in extremos), max(x for _, x in extremos)]], padding=(24, 24))
+    return mapa
+
+
+def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos, bairros, raio, observacoes, mapa_relatorio=None):
+    """Relatório geral com mapa panorâmico e ficha cartográfica de cada concentração.
+
+    Os mapas do PDF não incluem poços/ativos, loggers ou eventos: somente O.S.
+    agrupadas e os círculos das concentrações.
+    """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.2*cm,
                             rightMargin=1.2*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
     estilos = getSampleStyleSheet()
+    normal = ParagraphStyle("FarolGeralNormal", parent=estilos["Normal"], fontSize=8.5, leading=12)
+    pequeno = ParagraphStyle("FarolGeralPequeno", parent=normal, fontSize=7.5, leading=10)
+    titulo = ParagraphStyle("FarolGeralTitulo", parent=estilos["Heading2"], fontSize=13, leading=17)
     historia = [Paragraph("Farol Operacional — Relatório de concentrações", estilos["Title"]),
                 Paragraph("Gerado em " + datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M") +
-                          " · Captura cartográfica do mapa operacional", estilos["Normal"]),
-                Spacer(1, 12)]
-    # Captura real do mapa Folium, incluindo tiles OSM e camadas operacionais.
-    # Não substituímos falhas por um desenho esquemático potencialmente enganoso.
-    imagem_mapa = capturar_mapa_folium(mapa_relatorio)
-    historia.append(Image(io.BytesIO(imagem_mapa), width=26.9*cm, height=14.67*cm))
-    historia.append(Spacer(1,12))
-    historia.append(Paragraph(f"O.S. analisadas: {len(pontos)} · Concentrações: {len(concentracoes)}", estilos["Heading2"]))
-    for _, c in concentracoes.iterrows():
-        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]] if "_grupo" in pontos_cluster.columns else pd.DataFrame()
-        codigo = str(c["ID_CONCENTRACAO"])
-        nota = str(c.get("OBSERVACAO_ANALISTA", "") or "")
-        historia.append(Paragraph(xml_escape(f"{codigo} — {int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas"), estilos["Heading3"]))
-        historia.append(Paragraph(xml_escape("Bairros: " + str(c["BAIRROS"])), estilos["Normal"]))
-        historia.append(Paragraph(xml_escape("Acompanhamento: " + (nota or "Sem observação registrada")), estilos["Normal"]))
-        if "EVENTOS_RELACIONADOS" in c:
-            historia.append(Paragraph(xml_escape("Eventos relacionados: " + str(c["EVENTOS_RELACIONADOS"])), estilos["Normal"]))
-        if not grupo.empty:
-            for _, os_reg in grupo.iterrows():
-                linha_os = f"O.S. {os_reg.get('Nº da O.S', '')} · Matrícula {os_reg.get('Matrícula', '')} · {os_reg.get('Bairro', '')} · {os_reg.get('Status OS', '')}"
-                historia.append(Paragraph(xml_escape(linha_os), estilos["Normal"]))
-        historia.append(Spacer(1,7))
+                          " · Visão geral e análise individualizada", normal), Spacer(1, 10)]
+    if concentracoes.empty:
+        historia.append(Paragraph("Nenhuma concentração identificada com os parâmetros atuais.", normal))
+    else:
+        mapa_geral = mapa_relatorio_concentracoes(concentracoes, pontos_cluster)
+        imagem_geral = capturar_mapa_folium(mapa_geral, largura=1280, altura=640)
+        historia.append(Paragraph("Panorama territorial das concentrações", titulo))
+        historia.append(Image(io.BytesIO(imagem_geral), width=26.9*cm, height=13.45*cm))
+        historia.append(Spacer(1, 8))
+        historia.append(Paragraph(
+            f"O.S. na base: {len(pontos)} · Concentrações identificadas: {len(concentracoes)} · "
+            "Mapa: somente concentrações e suas O.S.; sem ativos ou loggers.", normal))
+        historia.append(PageBreak())
+        for indice, (_, c) in enumerate(concentracoes.iterrows()):
+            grupo = (pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+                     if "_grupo" in pontos_cluster.columns else pd.DataFrame())
+            codigo = str(c["ID_CONCENTRACAO"])
+            nota = str(c.get("OBSERVACAO_ANALISTA", "") or "")
+            historia.append(Paragraph(xml_escape(f"{codigo} — Análise da concentração"), titulo))
+            imagem_foco = capturar_mapa_folium(
+                mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=c),
+                largura=760, altura=560)
+            imagem = Image(io.BytesIO(imagem_foco), width=13.6*cm, height=10.02*cm)
+            resumo = [
+                Paragraph(xml_escape(f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas distintas"), normal),
+                Spacer(1, 8),
+                Paragraph("<b>Bairros:</b> " + xml_escape(str(c.get("BAIRROS", "") or "Não informado")), normal),
+                Spacer(1, 8),
+                Paragraph("<b>Acompanhamento:</b> " + xml_escape(nota or "Sem observação registrada"), normal),
+            ]
+            if "EVENTOS_RELACIONADOS" in c:
+                resumo.extend([Spacer(1, 8), Paragraph("<b>Eventos relacionados:</b> " +
+                                xml_escape(str(c["EVENTOS_RELACIONADOS"])), normal)])
+            ficha = Table([[imagem, resumo]], colWidths=[14.0*cm, 12.6*cm], hAlign="LEFT")
+            ficha.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#F4F7FB")),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("LEFTPADDING", (1, 0), (1, 0), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]))
+            historia.append(ficha)
+            historia.append(Spacer(1, 10))
+            historia.append(Paragraph("Ordens de serviço vinculadas", estilos["Heading3"]))
+            if grupo.empty:
+                historia.append(Paragraph("Nenhuma O.S. vinculada ao agrupamento.", normal))
+            else:
+                for _, os_reg in grupo.iterrows():
+                    linha = (f"O.S. {os_reg.get('Nº da O.S', '')} · "
+                             f"Matrícula {os_reg.get('Matrícula', '')} · "
+                             f"{os_reg.get('Bairro', '')} · {os_reg.get('Status OS', '')}")
+                    historia.append(Paragraph(xml_escape(linha), pequeno))
+            if indice < len(concentracoes) - 1:
+                historia.append(PageBreak())
     doc.build(historia)
     return buffer.getvalue()
 
@@ -2536,25 +2628,14 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             resumo_pdf = concentracoes.copy()
             observacoes_df = pd.DataFrame()
         with espaco_relatorio_operacional.container():
-            if not sincronizar_mapa_pdf:
-                st.caption("Para incluir no PDF o centro e zoom escolhidos manualmente, ative 'Sincronizar enquadramento para PDF' na barra lateral antes de ajustar o mapa.")
+            st.caption("O PDF utiliza enquadramento automático: primeiro todas as concentrações e, depois, uma imagem aproximada de cada agrupamento. Não inclui marcadores de ativos ou loggers.")
             if st.button("📸 Gerar relatório operacional (PDF)",
                          use_container_width=True, key="gerar_pdf_operacional"):
                 try:
-                    # Replica a região e o zoom efetivamente escolhidos pelo analista.
-                    # Só usa a posição interativa quando a sincronização foi ativada.
-                    # Caso contrário, usa o enquadramento original do mapa (fit_bounds).
-                    centro_atual = st.session_state.get("farol_ultimo_centro_mapa") if sincronizar_mapa_pdf else None
-                    zoom_atual = st.session_state.get("farol_ultimo_zoom_mapa") if sincronizar_mapa_pdf else None
-                    if isinstance(centro_atual, dict) and {"lat", "lng"} <= centro_atual.keys():
-                        mapa.location = [float(centro_atual["lat"]), float(centro_atual["lng"])]
-                        mapa.options.pop("bounds", None)
-                    if zoom_atual is not None:
-                        mapa.options["zoom"] = float(zoom_atual)
-                    with st.spinner("Capturando o mapa com fundo cartográfico e preparando PDF..."):
+                    with st.spinner("Capturando mapa geral e mapas individuais das concentrações..."):
                         st.session_state["farol_pdf_operacional_pronto"] = gerar_pdf_operacional(
                             resumo_pdf, analise, pontos_cluster, proximidades, df_eventos,
-                            bairros, int(raio_operacional), observacoes_df, mapa
+                            bairros, int(raio_operacional), observacoes_df
                         )
                 except Exception as erro:
                     st.error(f"Não foi possível capturar o mapa para o relatório: {erro}")
