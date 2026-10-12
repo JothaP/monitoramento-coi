@@ -2264,6 +2264,35 @@ with st.sidebar:
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
     espaco_relatorio_operacional = st.empty()
+    # Exportação temporária dos cadastros fixos para a migração ao GitHub.
+    # Apenas administradores podem obter os arquivos completos.
+    if PERFIL_FAROL == "admin":
+        with st.expander("📦 Exportar cadastros para GitHub", expanded=False):
+            st.caption("Baixe os cadastros atuais antes de ativar a versão com leitura local.")
+            try:
+                pacote_cadastros = io.BytesIO()
+                with zipfile.ZipFile(pacote_cadastros, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_saida:
+                    for nome_csv, dataframe, cabecalho in (
+                        ("pocos.csv", df_pocos, CABECALHO_POCOS),
+                        ("loggers.csv", df_loggers, CABECALHO_LOGGERS),
+                    ):
+                        # CSV com vírgula como separador, compatível com a leitura da versão GitHub.
+                        # dtype texto e BOM UTF-8 preservam identificadores e vírgulas decimais.
+                        dados_csv = dataframe.reindex(columns=cabecalho).fillna("").astype(str).to_csv(index=False, sep=",")
+                        zip_saida.writestr(nome_csv, dados_csv.encode("utf-8-sig"))
+                st.write(f"Poços / ativos: **{len(df_pocos)}** registros")
+                st.write(f"Loggers: **{len(df_loggers)}** registros")
+                st.download_button(
+                    "⬇️ Baixar ZIP (pocos.csv + loggers.csv)",
+                    data=pacote_cadastros.getvalue(),
+                    file_name="cadastros_farol_github.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key="exportar_cadastros_github_admin",
+                )
+            except Exception as erro_exportacao:
+                st.error(f"Não foi possível gerar o ZIP dos cadastros: {erro_exportacao}")
+
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
                      use_container_width=True, key="abrir_limpeza_farol"):
