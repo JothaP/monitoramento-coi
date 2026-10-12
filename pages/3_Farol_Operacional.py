@@ -1448,7 +1448,7 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             classificacao = ("Informação de Falta de água (146005)" if eh_informacao
                              else "Reclamação de Falta de água")
             popup = folium.Popup(
-                f"<b>O.S.:</b> {r.get('Nº da O.S','')}<br>"
+                f"O.S.: {r.get('Nº da O.S','')}<br>"
                 f"<b>Matrícula:</b> {r.get('Matrícula','')}<br>"
                 f"<b>Bairro:</b> {r.get('Bairro','')}<br>"
                 f"<b>Status:</b> {r.get('Status OS','')}<br>"
@@ -1534,7 +1534,7 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             popup=folium.Popup(
                 f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
-                f"<b>Município:</b> {r.get('MUNICIPIO','')}", max_width=300
+                f"Município: {r.get('MUNICIPIO','')}", max_width=300
             ),
             icon=folium.Icon(icon="tint", prefix="fa", color="blue"),
             z_index_offset=1000,  # Mantém ativos acima dos loggers coincidentes.
@@ -1552,9 +1552,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             f"<b>Concentração {codigo}</b>"
             "<details open style='margin-top:7px'>"
             "<summary style='cursor:pointer;font-weight:600'>Informações da concentração</summary>"
-            f"<div style='padding-top:7px'><b>O.S.:</b> {int(c['QTD_OS'])}<br>"
+            f"<div style='padding-top:7px'>O.S.: {int(c['QTD_OS'])}<br>"
             f"<b>Matrículas:</b> {int(c['QTD_MATRICULAS'])}<br>"
-            f"<b>Bairros:</b> {bairros_html}</div>"
+            f"Bairros: {bairros_html}</div>"
             "</details>"
             "<small style='display:block;margin-top:8px'>O painel completo da concentração também será expandido abaixo do mapa.</small>"
             "</div>"
@@ -1688,7 +1688,63 @@ def texto_relatorio(valor):
     return str(valor).strip() or "—"
 
 
-def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio):
+def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
+    """Mapa compacto do agrupamento; não depende do enquadramento do mapa principal."""
+    lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+    mapa = folium.Map(location=[lat, lon], zoom_start=16, tiles="OpenStreetMap",
+                      control_scale=True, zoom_control=False, attribution_control=True)
+    raio_grupo = RAIO_CONCENTRACAO_PADRAO
+    folium.Circle([lat, lon], radius=raio_grupo, color="#8522a5", weight=3,
+                  fill=True, fill_color="#8522a5", fill_opacity=0.07).add_to(mapa)
+    folium.CircleMarker([lat, lon], radius=6, color="#7135A8", fill=True,
+                        fill_color="#7135A8").add_to(mapa)
+    for _, registro in os_grupo.iterrows():
+        y = normalizar_coordenada(registro.get("Latitude"), "lat")
+        x = normalizar_coordenada(registro.get("Longitude"), "lon")
+        if y is None or x is None:
+            continue
+        servico = str(registro.get("Serviço Executado", "") or "")
+        cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+        folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
+                            fill=True, fill_color=cor, fill_opacity=.9).add_to(mapa)
+    # A tabela de proximidades não possui coordenadas: recuperá-las dos cadastros locais.
+    cadastros = {"LOGGER": carregar_cadastro_github(ARQUIVO_LOGGERS_CSV, CABECALHO_LOGGERS), "ATIVO": carregar_pocos()}
+    for _, ativo in ativos.iterrows():
+        tipo = str(ativo.get("Tipo", ""))
+        eh_logger = "LOGGER" in tipo.upper()
+        cadastro = cadastros["LOGGER" if eh_logger else "ATIVO"]
+        identificacao = str(ativo.get("Identificação", "") or "").strip()
+        correspondencias = cadastro[cadastro["IDENTIFICACAO_ATIVO"].astype(str).str.strip() == identificacao]
+        if correspondencias.empty:
+            continue
+        registro_geo = correspondencias.iloc[0]
+        y = normalizar_coordenada(registro_geo.get("LATITUDE"), "lat")
+        x = normalizar_coordenada(registro_geo.get("LONGITUDE"), "lon")
+        if y is None or x is None:
+            continue
+        identificacao = identificacao or str(ativo.get("Nome", "") or tipo)
+        folium.Marker(
+            [y, x], icon=folium.Icon(icon="signal" if eh_logger else "tint",
+                                    prefix="fa", color="orange" if eh_logger else "blue"),
+            tooltip=folium.Tooltip(html_escape(identificacao), permanent=True,
+                                  direction="top", offset=(0, -12),
+                                  class_name="farol-rotulo-relatorio"),
+            z_index_offset=0 if eh_logger else 1000,
+        ).add_to(mapa)
+    mapa.get_root().header.add_child(Element("""<style>
+    .leaflet-tooltip.farol-rotulo-relatorio {background:rgba(255,255,255,.96);color:#1e293b;
+      border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;
+      font:600 11px Arial,sans-serif;box-shadow:0 1px 3px #0002;white-space:nowrap}
+    </style>"""))
+    # O círculo inteiro deve caber no enquadramento; pequena margem para ruas e rótulos.
+    delta_lat = (raio_grupo * 1.13) / 111320.0
+    delta_lon = (raio_grupo * 1.13) / (111320.0 * max(.2, math.cos(math.radians(lat))))
+    mapa.fit_bounds([[lat-delta_lat, lon-delta_lon], [lat+delta_lat, lon+delta_lon]],
+                    padding=(12, 12))
+    return mapa
+
+
+def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_mapa=None):
     """Gera PDF em memória, sem gravar ou alterar informações no Sheets."""
     fonte_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     fonte_negrito = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -1722,6 +1778,39 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
         ]))
         return t
     historia.append(p("Farol Operacional — " + str(concentracao["ID_CONCENTRACAO"]), titulo))
+    historia.append(p("RELATÓRIO INDIVIDUAL DE CONCENTRAÇÃO | VISÃO TERRITORIAL", pequeno))
+    historia.append(Spacer(1, .25*cm))
+    if imagem_mapa:
+        # Ficha em duas colunas: 55% mapa e 45% dados. O restante do PDF permanece tabular.
+        largura_mapa, largura_info = 14.15*cm, 11.15*cm
+        altura_mapa = 12.1*cm
+        mapa_pdf = Image(io.BytesIO(imagem_mapa), width=largura_mapa, height=altura_mapa)
+        mapa_pdf.hAlign = "LEFT"
+        cidades_ficha = ", ".join(sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()}))
+        info = [
+            p("RESUMO OPERACIONAL", subtitulo), Spacer(1, .15*cm),
+            p(f"O.S.: {len(os_grupo)}", normal), Spacer(1, .18*cm),
+            p(f"Matrículas distintas: {concentracao['QTD_MATRICULAS']}", normal), Spacer(1, .18*cm),
+            p(f"Município: {cidades_ficha or 'Não informado'}", normal), Spacer(1, .18*cm),
+            p(f"Bairros: {texto_relatorio(concentracao['BAIRROS'])}", normal), Spacer(1, .18*cm),
+            p(f"Equipamentos próximos: {len(ativos)}", normal), Spacer(1, .18*cm),
+            p(f"Eventos relacionados: {len(eventos_relacionados)}", normal), Spacer(1, .18*cm),
+            p(f"Raio operacional: {raio} m", normal), Spacer(1, .25*cm),
+            p("A imagem mostra a concentração e seus equipamentos próximos. A proximidade não comprova vínculo hidráulico ou causalidade.", pequeno),
+        ]
+        ficha = Table([[mapa_pdf, info]], colWidths=[largura_mapa+.35*cm, largura_info],
+                      hAlign="LEFT")
+        ficha.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("BACKGROUND", (1,0), (1,0), colors.HexColor("#F4F7FB")),
+            ("LEFTPADDING", (0,0), (0,0), 0),
+            ("RIGHTPADDING", (0,0), (0,0), 6),
+            ("LEFTPADDING", (1,0), (1,0), 12),
+            ("TOPPADDING", (0,0), (-1,-1), 7),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+        ]))
+        historia.append(ficha)
+        historia.append(Spacer(1, .25*cm))
     cidades = ", ".join(sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()}))
     resumo = (
         f"Município(s): {cidades or 'Não informado'} | Bairros: {texto_relatorio(concentracao['BAIRROS'])} | "
@@ -1795,13 +1884,21 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
         colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
         st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
                      use_container_width=True, hide_index=True)
-    try:
-        pdf = gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio)
-        st.download_button("📄 Baixar relatório em PDF", data=pdf,
+    # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
+    if st.button("📸 Preparar PDF com mapa da concentração", key=f"preparar_pdf_{codigo}"):
+        try:
+            with st.spinner("Capturando mapa aproximado e preparando relatório..."):
+                mapa_ficha = mapa_exclusivo_concentracao(concentracao, os_grupo, ativos)
+                imagem_ficha = capturar_mapa_folium(mapa_ficha, largura=800, altura=690)
+                st.session_state[f"farol_pdf_individual_{codigo}"] = gerar_pdf_concentracao(
+                    concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_ficha
+                )
+        except Exception as erro:
+            st.error(f"Não foi possível gerar o PDF cartográfico: {erro}")
+    if st.session_state.get(f"farol_pdf_individual_{codigo}"):
+        st.download_button("📄 Baixar relatório em PDF", data=st.session_state[f"farol_pdf_individual_{codigo}"],
                            file_name=f"Farol_{codigo}_{datetime.now(FUSO_FAROL):%Y%m%d}.pdf",
                            mime="application/pdf", key=f"baixar_pdf_{codigo}")
-    except Exception as erro:
-        st.error(f"Não foi possível gerar o PDF: {erro}")
 
 
 @st.dialog("📥 Importação de bases", width="large")
@@ -1923,7 +2020,7 @@ def modal_eventos():
     if PODE_EDITAR_FAROL and not df_eventos.empty:
         st.divider()
         st.markdown("### ✏️ Corrigir evento cadastrado")
-        st.caption("Correções em Áreas Impactadas serão protegidas contra futuras importações. Os demais campos continuam atualizáveis pela base.")
+        st.caption("Selecione o evento pela identificação e corrija somente Áreas Impactadas, quando necessário. A correção será preservada nas próximas importações.")
         opcoes = list(range(len(df_eventos)))
         indice_evento = st.selectbox(
             "Evento para editar", opcoes,
@@ -1931,19 +2028,27 @@ def modal_eventos():
                 f"{df_eventos.iloc[i].get('Protocolo', '') or 'Sem protocolo'} · "
                 f"{df_eventos.iloc[i].get('Cidade', '')} · "
                 f"{df_eventos.iloc[i].get('Serviço', '')} · "
-                f"{df_eventos.iloc[i].get('Data', '')} · linha {i + 2}"
+                f"{df_eventos.iloc[i].get('Data', '')} · Evento {i + 1}"
             ), key="farol_evento_editar_indice",
         )
         registro = df_eventos.iloc[indice_evento].to_dict()
+        st.caption(
+            f"Evento {indice_evento + 1} de {len(df_eventos)} — "
+            "a numeração exibida não inclui o cabeçalho da planilha."
+        )
         with st.form(f"farol_edicao_evento_{indice_evento}"):
-            campos = {}
-            for campo in CABECALHO_EVENTOS:
-                atual = str(registro.get(campo, "") or "")
-                if campo in {"Áreas Impactadas", "Descrição do Serviço"}:
-                    campos[campo] = st.text_area(campo, value=atual, height=95)
-                else:
-                    campos[campo] = st.text_input(campo, value=atual)
-            salvar = st.form_submit_button("💾 Salvar correções", use_container_width=True)
+            area_atual = str(registro.get("Áreas Impactadas", "") or "")
+            area_editada = st.text_area(
+                "Áreas Impactadas",
+                value=area_atual,
+                height=110,
+                help="Somente este campo pode ser alterado. A correção ficará protegida nas próximas importações.",
+            )
+            salvar = st.form_submit_button(
+                "💾 Salvar área impactada",
+                use_container_width=True,
+            )
+        campos = {"Áreas Impactadas": area_editada}
         if salvar:
             try:
                 atualizar_evento_cadastrado(indice_evento, registro, campos)
@@ -1953,7 +2058,7 @@ def modal_eventos():
                 st.error(f"Não foi possível salvar o evento: {erro}")
 
 
-def capturar_mapa_folium(mapa):
+def capturar_mapa_folium(mapa, largura=1100, altura=600):
     """Renderiza o Folium em Chromium e captura o mapa com as camadas visíveis.
 
     Requer `playwright` no requirements.txt e Chromium no sistema (packages.txt).
@@ -1965,9 +2070,9 @@ def capturar_mapa_folium(mapa):
 
     html = mapa.get_root().render()
     # A captura deve ter uma proporção próxima da visualização operacional.
-    html = html.replace('</head>', """<style>
-        html, body {margin:0 !important; padding:0 !important; width:1100px !important; height:600px !important; overflow:hidden !important;}
-        .folium-map {width:1100px !important; height:600px !important;}
+    html = html.replace('</head>', f"""<style>
+        html, body {margin:0 !important; padding:0 !important; width:{largura}px !important; height:{altura}px !important; overflow:hidden !important;}
+        .folium-map {width:{largura}px !important; height:{altura}px !important;}
         </style></head>""", 1)
     with tempfile.TemporaryDirectory(prefix="farol_mapa_") as pasta:
         arquivo = os.path.join(pasta, "mapa.html")
@@ -1984,7 +2089,7 @@ def capturar_mapa_folium(mapa):
             except Exception as erro:
                 raise RuntimeError("Chromium indisponível. Configure packages.txt com 'chromium' e requirements.txt com 'playwright'.") from erro
             try:
-                pagina = browser.new_page(viewport={"width": 1100, "height": 600}, device_scale_factor=1.5)
+                pagina = browser.new_page(viewport={"width": largura, "height": altura}, device_scale_factor=1.5)
                 pagina.goto(Path(arquivo).as_uri(), wait_until="load", timeout=45000)
                 pagina.wait_for_function("typeof L !== 'undefined' && document.querySelector('.leaflet-map-pane') !== null", timeout=30000)
                 pagina.wait_for_timeout(2400)
