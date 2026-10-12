@@ -1820,6 +1820,18 @@ with st.sidebar:
     step=1,
 )
 
+    # Desativado por padrão: o navegador move o mapa sem enviar centro/zoom
+    # ao Python a cada arrasto. Ative apenas para registrar o enquadramento
+    # exato que será usado no relatório PDF.
+    sincronizar_mapa_pdf = st.checkbox(
+        "Sincronizar enquadramento para PDF",
+        value=False,
+        key="farol_sincronizar_mapa_pdf",
+        help="Ative antes de ajustar o mapa para o PDF. Enquanto ativo, arrastar/zoom pode recarregar a página.",
+    )
+    if sincronizar_mapa_pdf:
+        st.caption("Modo PDF ativo: centro e zoom serão registrados. Para navegar sem recarregamentos, desmarque esta opção.")
+
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
     espaco_relatorio_operacional = st.empty()
@@ -1880,11 +1892,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             mapa.location = [lat_foco, lon_foco]
             mapa.options["zoom"] = 15
             mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
-        estado_mapa = st_folium(mapa, width=None, height=650,
-                               returned_objects=["center", "zoom"], key="farol_mapa_principal")
-        if estado_mapa:
-            st.session_state["farol_ultimo_centro_mapa"] = estado_mapa.get("center")
-            st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
+        estado_mapa = st_folium(
+            mapa, width=None, height=650,
+            returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
+            key="farol_mapa_principal",
+        )
+        if sincronizar_mapa_pdf and estado_mapa:
+            if estado_mapa.get("center") is not None:
+                st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
+            if estado_mapa.get("zoom") is not None:
+                st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
     else:
         # Filtros.
         f1, f2, f3 = st.columns(3)
@@ -2000,11 +2017,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             mapa.location = [lat_foco, lon_foco]
             mapa.options["zoom"] = 15
             mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
-        estado_mapa = st_folium(mapa, width=None, height=650,
-                               returned_objects=["center", "zoom"], key="farol_mapa_principal")
-        if estado_mapa:
-            st.session_state["farol_ultimo_centro_mapa"] = estado_mapa.get("center")
-            st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa.get("zoom")
+        estado_mapa = st_folium(
+            mapa, width=None, height=650,
+            returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
+            key="farol_mapa_principal",
+        )
+        if sincronizar_mapa_pdf and estado_mapa:
+            if estado_mapa.get("center") is not None:
+                st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
+            if estado_mapa.get("zoom") is not None:
+                st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
 
         _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
         if PERFIL_FAROL == "admin":
@@ -2074,12 +2096,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             resumo_pdf = concentracoes.copy()
             observacoes_df = pd.DataFrame()
         with espaco_relatorio_operacional.container():
+            if not sincronizar_mapa_pdf:
+                st.caption("Para incluir no PDF o centro e zoom escolhidos manualmente, ative 'Sincronizar enquadramento para PDF' na barra lateral antes de ajustar o mapa.")
             if st.button("📸 Gerar relatório operacional (PDF)",
                          use_container_width=True, key="gerar_pdf_operacional"):
                 try:
                     # Replica a região e o zoom efetivamente escolhidos pelo analista.
-                    centro_atual = st.session_state.get("farol_ultimo_centro_mapa")
-                    zoom_atual = st.session_state.get("farol_ultimo_zoom_mapa")
+                    # Só usa a posição interativa quando a sincronização foi ativada.
+                    # Caso contrário, usa o enquadramento original do mapa (fit_bounds).
+                    centro_atual = st.session_state.get("farol_ultimo_centro_mapa") if sincronizar_mapa_pdf else None
+                    zoom_atual = st.session_state.get("farol_ultimo_zoom_mapa") if sincronizar_mapa_pdf else None
                     if isinstance(centro_atual, dict) and {"lat", "lng"} <= centro_atual.keys():
                         mapa.location = [float(centro_atual["lat"]), float(centro_atual["lng"])]
                         mapa.options.pop("bounds", None)
