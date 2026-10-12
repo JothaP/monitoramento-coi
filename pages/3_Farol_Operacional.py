@@ -78,6 +78,7 @@ _RESET_LOCK = threading.Lock()
 
 RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIRETORIO_KMZ = os.path.join(RAIZ_PROJETO, "geodados", "municipios")
+DIRETORIO_CADASTROS = os.path.join(RAIZ_PROJETO, "dados")
 ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
 RAIO_OPERACIONAL_PADRAO = 500
 RAIO_CONCENTRACAO_PADRAO = 500
@@ -327,6 +328,8 @@ def obter_planilha():
 
 
 def obter_aba(nome, cabecalho):
+    if nome in (NOME_ABA_POCOS, NOME_ABA_LOGGERS):
+        raise PermissionError("Poços e loggers são cadastros fixos do GitHub (somente leitura).")
     planilha = obter_planilha()
     if planilha.id != SPREADSHEET_ID:
         st.error("Conexão bloqueada: planilha diferente da configurada para o Farol.")
@@ -494,6 +497,8 @@ def garantir_cabecalho_exato(nome, cabecalho):
 
 
 def append_dataframe(nome, cabecalho, df):
+    if nome in (NOME_ABA_POCOS, NOME_ABA_LOGGERS):
+        raise PermissionError("Cadastros de poços e loggers são somente leitura.")
     exigir_edicao_farol()
     if df is None or df.empty:
         return 0
@@ -1354,8 +1359,40 @@ def identificacao_exibicao(row):
     return f"{nome} — {ativo}" if nome and ativo else nome or ativo or str(row.get("ID_POCO", ""))
 
 
+@st.cache_data(show_spinner=False)
+def carregar_cadastro_local(nome_arquivo, colunas, versao_arquivo):
+    """Carrega cadastro versionado no GitHub, sem consultas ao Google Sheets.
+
+    versao_arquivo contém tamanho e mtime, permitindo recarregar após deploy.
+    """
+    caminho = os.path.join(DIRETORIO_CADASTROS, nome_arquivo)
+    if not os.path.isfile(caminho):
+        st.error(f"Cadastro local não encontrado: dados/{nome_arquivo}. Exporte as abas atuais antes de implantar esta versão.")
+        st.stop()
+    try:
+        dados = pd.read_csv(caminho, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+    except Exception as erro:
+        st.error(f"Erro ao ler dados/{nome_arquivo}: {erro}")
+        st.stop()
+    ausentes = [coluna for coluna in colunas if coluna not in dados.columns]
+    if ausentes:
+        st.error(f"Colunas ausentes em dados/{nome_arquivo}: {', '.join(ausentes)}")
+        st.stop()
+    return dados.reindex(columns=colunas).fillna("")
+
+
+def carregar_cadastro_github(nome_arquivo, colunas):
+    caminho = os.path.join(DIRETORIO_CADASTROS, nome_arquivo)
+    versao = (os.path.getsize(caminho), os.path.getmtime(caminho)) if os.path.isfile(caminho) else (0, 0)
+    return carregar_cadastro_local(nome_arquivo, tuple(colunas), versao)
+
+
 def carregar_pocos():
-    return carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
+    return carregar_cadastro_github("pocos.csv", CABECALHO_POCOS)
+
+
+def carregar_loggers():
+    return carregar_cadastro_github("loggers.csv", CABECALHO_LOGGERS)
 
 
 def preparar_pocos(df):
@@ -2181,8 +2218,8 @@ _tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 # Inicializa as quatro abas.
 _inicio_planilhas = tempo_execucao.perf_counter()
 with st.spinner("Carregando dados operacionais..."):
-    df_pocos = carregar_aba(NOME_ABA_POCOS, CABECALHO_POCOS)
-    df_loggers = carregar_aba(NOME_ABA_LOGGERS, CABECALHO_LOGGERS)
+    df_pocos = carregar_pocos()
+    df_loggers = carregar_loggers()
     df_pontos = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
     df_eventos = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
 _tempo_planilhas = tempo_execucao.perf_counter() - _inicio_planilhas
@@ -2548,7 +2585,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
 
 if st.session_state.get("farol_tela", "mapa") == "cadastros":
     espaco_relatorio_operacional.caption("📄 Relatório disponível na tela Mapa operacional.")
-    st.subheader("Cadastro de Poços / Ativos e Loggers")
+    st.subheader("Consulta de Poços / Ativos e Loggers")
+    st.caption("Cadastros fixos em arquivos CSV do GitHub (somente leitura).")
 
     c_poco, c_logger = st.columns(2)
 
