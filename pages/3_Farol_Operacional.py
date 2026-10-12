@@ -2198,17 +2198,35 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
     selecionadas = (concentracoes if concentracao is None else
                     concentracoes[concentracoes["ID_CONCENTRACAO"] == concentracao["ID_CONCENTRACAO"]])
     coordenadas = []
+    # No panorama, a camada de O.S. será desenhada uma única vez, incluindo
+    # registros dentro e fora das concentrações.
+    if panoramico and pontos is not None and not pontos.empty:
+        nomes_os = {normalizar_municipio(v) for v in cidades} if cidades else None
+        for _, r in pontos.iterrows():
+            if nomes_os is not None and normalizar_municipio(r.get("Cidade", "")) not in nomes_os:
+                continue
+            y = normalizar_coordenada(r.get("Latitude"), "lat")
+            x = normalizar_coordenada(r.get("Longitude"), "lon")
+            if y is None or x is None:
+                continue
+            servico = str(r.get("Serviço Executado", "") or "")
+            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+            folium.CircleMarker([y, x], radius=4, color=cor, weight=1,
+                                fill=True, fill_color=cor, fill_opacity=.85).add_to(mapa)
     for _, c in selecionadas.iterrows():
         lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
         raio = RAIO_CONCENTRACAO_PADRAO
-        folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
-                      fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
-        folium.CircleMarker([lat, lon], radius=5, color="#7135A8", weight=2,
-                            fill=True, fill_color="#7135A8", fill_opacity=1).add_to(mapa)
+        if not panoramico:
+            folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
+                          fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
+            folium.CircleMarker([lat, lon], radius=5, color="#7135A8", weight=2,
+                                fill=True, fill_color="#7135A8", fill_opacity=1).add_to(mapa)
         coordenadas.append((lat, lon))
         if "_grupo" not in pontos_cluster.columns:
             continue
         grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+        if panoramico:
+            continue
         for _, r in grupo.iterrows():
             y = normalizar_coordenada(r.get("Latitude"), "lat")
             x = normalizar_coordenada(r.get("Longitude"), "lon")
@@ -2219,24 +2237,13 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
                                 fill=True, fill_color=cor, fill_opacity=.92).add_to(mapa)
             coordenadas.append((y, x))
-    if panoramico and pontos is not None and not pontos.empty:
-        # Panorama como o mapa principal: TODAS as O.S. do recorte,
-        # não apenas as que participam de concentrações.
-        nomes = {normalizar_municipio(v) for v in cidades} if cidades else None
-        for _, r in pontos.iterrows():
-            if nomes is not None and normalizar_municipio(r.get("Cidade", "")) not in nomes:
-                continue
-            y = normalizar_coordenada(r.get("Latitude"), "lat")
-            x = normalizar_coordenada(r.get("Longitude"), "lon")
-            if y is None or x is None:
-                continue
-            servico = str(r.get("Serviço Executado", "") or "")
-            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
-            folium.CircleMarker([y, x], radius=3.5, color=cor, weight=.7,
-                                fill=True, fill_color=cor, fill_opacity=.85).add_to(mapa)
     # Panorama: equipamentos do(s) município(s) selecionado(s), sem mostrar
     # cadastros nacionais inteiros. Individual: apenas equipamentos próximos.
     nomes = {normalizar_municipio(v) for v in cidades} if cidades else None
+    if panoramico and pocos is not None and loggers is not None:
+        # Exatamente como o mapa operacional: apenas equipamentos próximos
+        # das concentrações, nunca o cadastro inteiro da cidade.
+        pocos, loggers = filtrar_ativos_proximos(selecionadas, pocos, loggers, raio_ativos)
     for cadastro, eh_logger in ((loggers, True), (pocos, False)):
         if cadastro is None or cadastro.empty:
             continue
@@ -2255,11 +2262,15 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             elif nomes is not None and normalizar_municipio(r.get("MUNICIPIO", "")) not in nomes:
                 continue
             nome = str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Equipamento")
-            # CircleMarker em vez de pinos grandes para não ocultar as concentrações.
-            cor = "#E89021" if eh_logger else "#149AC8"
-            folium.CircleMarker([y, x], radius=5 if concentracao is not None else 4,
-                                color="white", weight=1.2, fill=True, fill_color=cor,
-                                fill_opacity=.95, tooltip=("Logger: " if eh_logger else "Ativo: ")+nome).add_to(mapa)
+            if panoramico:
+                icone = (folium.Icon(icon="signal", prefix="fa", color="orange") if eh_logger
+                         else folium.Icon(icon="tint", prefix="fa", color="blue"))
+                folium.Marker([y, x], icon=icone,
+                              z_index_offset=0 if eh_logger else 1000).add_to(mapa)
+            else:
+                cor = "#E89021" if eh_logger else "#149AC8"
+                folium.CircleMarker([y, x], radius=5, color="white", weight=1.2,
+                                    fill=True, fill_color=cor, fill_opacity=.95).add_to(mapa)
             if concentracao is not None:
                 # Rótulo permanente nas fichas, sem alterar o mapa interativo.
                 folium.Marker([y, x], icon=folium.DivIcon(
@@ -2267,6 +2278,17 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
                          'font: bold 11px Arial;background:rgba(255,255,255,.94);'
                          'border:1px solid #aab7c4;border-radius:3px;padding:2px 4px;'
                          'color:#193348;display:inline-block">'+html_escape(nome)+'</div>')).add_to(mapa)
+    if panoramico:
+        # Desenha os círculos DEPOIS dos equipamentos, garantindo que as
+        # concentrações continuem visíveis como na referência enviada.
+        for _, c in selecionadas.iterrows():
+            lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+            folium.Circle([lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
+                          color="#8522A5", weight=3.2, fill=True,
+                          fill_color="#8522A5", fill_opacity=.055).add_to(mapa)
+            folium.CircleMarker([lat, lon], radius=6, color="#7135A8",
+                                weight=2, fill=True, fill_color="#7135A8",
+                                fill_opacity=1).add_to(mapa)
     if coordenadas:
         if concentracao is not None:
             lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
