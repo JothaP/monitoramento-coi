@@ -72,6 +72,7 @@ NOME_ABA_PONTOS = "PONTOS"
 NOME_ABA_EVENTOS = "EVENTOS"
 NOME_ABA_CONTROLE = "CONTROLE_FAROL"
 NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
+NOME_ABA_AREAS_PROTEGIDAS = "FAROL_AREAS_EDITADAS"
 FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
@@ -486,14 +487,25 @@ def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
 
 
 def limpar_dados_operacionais_admin():
-    """Remove apenas registros de PONTOS e EVENTOS; preserva os cabeçalhos e outras abas."""
+    """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
     if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
         raise PermissionError("Somente administradores podem limpar os dados operacionais.")
     planilha = obter_planilha()
     resultados = []
-    for nome, cabecalho in ((NOME_ABA_PONTOS, CABECALHO_PONTOS), (NOME_ABA_EVENTOS, CABECALHO_EVENTOS)):
-        aba = planilha.worksheet(nome)
-        # clear() não exclui a aba; repõe cabeçalhos para manter a importação funcional.
+    abas = (
+        (NOME_ABA_PONTOS, CABECALHO_PONTOS),
+        (NOME_ABA_EVENTOS, CABECALHO_EVENTOS),
+        (NOME_ABA_AREAS_PROTEGIDAS, ["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]),
+    )
+    for nome, cabecalho in abas:
+        try:
+            aba = planilha.worksheet(nome)
+        except gspread.WorksheetNotFound:
+            # A aba auxiliar só existe após a primeira edição manual.
+            if nome == NOME_ABA_AREAS_PROTEGIDAS:
+                continue
+            raise
+        # Apaga registros, não a aba, e mantém os cabeçalhos para futuras importações.
         aba.clear()
         aba.update(range_name="A1", values=[cabecalho], value_input_option="RAW")
         resultados.append(nome)
@@ -506,9 +518,15 @@ def modal_limpar_dados_operacionais():
     if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao() or not tem_acesso_modulo("3"):
         st.error("Operação exclusiva do administrador.")
         st.stop()
-    st.warning("Esta ação excluirá todas as O.S. da aba PONTOS e todos os eventos da aba EVENTOS. Não é possível desfazer pela ferramenta.")
+    st.warning(
+        "Esta ação excluirá todas as O.S. de PONTOS, os eventos de EVENTOS e "
+        "as correções manuais de FAROL_AREAS_EDITADAS. Não é possível desfazer pela ferramenta."
+    )
     st.caption("Poços, loggers, observações das concentrações e demais abas serão preservados.")
-    confirmado = st.checkbox("Confirmo que desejo apagar os registros de PONTOS e EVENTOS.", key="confirmar_limpeza_farol")
+    confirmado = st.checkbox(
+        "Confirmo que desejo apagar os registros de PONTOS, EVENTOS e FAROL_AREAS_EDITADAS.",
+        key="confirmar_limpeza_farol",
+    )
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Cancelar", use_container_width=True, key="cancelar_limpeza_farol"):
@@ -697,11 +715,60 @@ def upsert_pontos(df_novo):
     return len(novo), len(final)
 
 
+def carregar_areas_editadas():
+    """Correções explícitas sobrevivem à reimportação de EVENTOS.
+
+    Aba separada também permite proteger uma correção para campo vazio.
+    """
+    try:
+        aba = obter_planilha().worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+    except gspread.WorksheetNotFound:
+        return {}
+    linhas = aba.get_all_values()
+    if not linhas:
+        return {}
+    cab = linhas[0]
+    if "CHAVE_EVENTO" not in cab or "AREAS_IMPACTADAS" not in cab:
+        raise ValueError("Cabeçalho inválido em FAROL_AREAS_EDITADAS.")
+    i_chave, i_area = cab.index("CHAVE_EVENTO"), cab.index("AREAS_IMPACTADAS")
+    return {linha[i_chave]: linha[i_area] if i_area < len(linha) else ""
+            for linha in linhas[1:] if i_chave < len(linha) and linha[i_chave]}
+
+
+def registrar_area_editada(chave, area):
+    """Registra correção humana com chave estável do evento, mesmo quando vazia."""
+    exigir_edicao_farol()
+    if not chave:
+        raise ValueError("Não foi possível identificar o evento para proteger a área.")
+    planilha = obter_planilha()
+    try:
+        aba = planilha.worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_AREAS_PROTEGIDAS, rows=1000, cols=4)
+        aba.update(range_name="A1:D1", values=[["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]], value_input_option="RAW")
+    linhas = aba.get_all_values()
+    cab = linhas[0] if linhas else ["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]
+    if "CHAVE_EVENTO" not in cab or "AREAS_IMPACTADAS" not in cab:
+        raise ValueError("Cabeçalho inválido em FAROL_AREAS_EDITADAS.")
+    dados = {"CHAVE_EVENTO": chave, "AREAS_IMPACTADAS": str(area),
+             "ATUALIZADO_EM": datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M"),
+             "AUTOR": str(st.session_state.get("usuario_logado", ""))}
+    valores = [dados.get(c, "") for c in cab]
+    col_chave = cab.index("CHAVE_EVENTO")
+    for n, linha in enumerate(linhas[1:], start=2):
+        if col_chave < len(linha) and linha[col_chave] == chave:
+            from gspread.utils import rowcol_to_a1
+            aba.update(range_name=f"A{n}:{rowcol_to_a1(n, len(cab))}", values=[valores], value_input_option="RAW")
+            return
+    aba.append_row(valores, value_input_option="RAW")
+
+
 def upsert_eventos(df_novo):
     exigir_edicao_farol()
     atual = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
     atual = atual.reindex(columns=CABECALHO_EVENTOS).fillna("")
     novo = df_novo.reindex(columns=CABECALHO_EVENTOS).fillna("")
+    areas_protegidas = carregar_areas_editadas()
 
     mapa = {}
     for _, registro in atual.iterrows():
@@ -718,6 +785,10 @@ def upsert_eventos(df_novo):
             }
         else:
             mapa[chave] = dados_novos
+    # Reaplica a correção humana APÓS a mesclagem de dados da importação.
+    for chave, evento in mapa.items():
+        if chave in areas_protegidas:
+            evento["Áreas Impactadas"] = areas_protegidas[chave]
     final = pd.DataFrame(list(mapa.values()), columns=CABECALHO_EVENTOS)
     substituir_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS, final)
     return len(novo), len(final)
@@ -1682,6 +1753,12 @@ def atualizar_evento_cadastrado(indice, original, alteracoes):
     for campo in CABECALHO_EVENTOS:
         if str(mapa_atual.get(campo, "")) != str(original.get(campo, "")):
             raise ValueError("Este evento foi alterado na planilha. Atualize a página antes de salvar.")
+    # A proteção fica em aba independente, para sobreviver à substituição
+    # completa da aba EVENTOS durante futuras importações.
+    area_antiga = str(original.get("Áreas Impactadas", ""))
+    area_nova = str(alteracoes.get("Áreas Impactadas", area_antiga))
+    if area_nova != area_antiga:
+        registrar_area_editada(chave_evento(original), area_nova)
     for campo, novo_valor in alteracoes.items():
         if campo not in cabecalho:
             raise ValueError(f"Coluna não encontrada na planilha: {campo}")
@@ -1731,7 +1808,7 @@ def modal_eventos():
     if PODE_EDITAR_FAROL and not df_eventos.empty:
         st.divider()
         st.markdown("### ✏️ Corrigir evento cadastrado")
-        st.caption("Selecione o evento e corrija os campos. A alteração será salva na aba EVENTOS do Google Sheets.")
+        st.caption("Correções em Áreas Impactadas serão protegidas contra futuras importações. Os demais campos continuam atualizáveis pela base.")
         opcoes = list(range(len(df_eventos)))
         indice_evento = st.selectbox(
             "Evento para editar", opcoes,
