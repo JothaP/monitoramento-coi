@@ -1,4 +1,5 @@
 import io
+import csv
 import json
 import os
 import re
@@ -2138,10 +2139,60 @@ def limites_cidades_relatorio(bairros, cidades):
             [max(y for y, x in coordenadas), max(x for y, x in coordenadas)]]
 
 
+def protocolo_os_relatorio(registro):
+    """Número de O.S. com ano da emissão, sem fabricar ano quando ausente."""
+    numero = str(registro.get("Nº da O.S", "") or "").strip()
+    if not numero or numero.lower() == "nan":
+        return ""
+    if re.search(r"/\d{4}-1$", numero):
+        return numero
+    emissao = str(registro.get("Dt. Emissão", "") or "").strip()
+    ano = None
+    for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            ano = datetime.strptime(emissao, formato).year
+            break
+        except ValueError:
+            pass
+    if ano is None:
+        encontrado = re.search(r"(?<!\d)(20\d{2})(?!\d)", emissao)
+        if encontrado:
+            ano = int(encontrado.group(1))
+    return f"{numero}/{ano}-1" if ano else numero
+
+
+def planilha_os_relatorio(concentracoes, pontos_cluster):
+    """CSV tabular, pronto para Excel e para selecionar O.S. por concentração."""
+    saida = io.StringIO()
+    escritor = csv.writer(saida, delimiter=";", lineterminator="\n")
+    escritor.writerow(["Concentração", "Município", "Bairro", "O.S. / Ano", "Matrícula", "Status", "Dt. Emissão", "Serviço Executado"])
+    for _, c in concentracoes.iterrows():
+        if "_grupo" not in pontos_cluster.columns:
+            continue
+        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+        for _, registro in grupo.iterrows():
+            escritor.writerow([str(c["ID_CONCENTRACAO"]), str(registro.get("Cidade", "")),
+                              str(registro.get("Bairro", "")), protocolo_os_relatorio(registro),
+                              str(registro.get("Matrícula", "")), str(registro.get("Status OS", "")),
+                              str(registro.get("Dt. Emissão", "")), str(registro.get("Serviço Executado", ""))])
+    return ("\ufeff" + saida.getvalue()).encode("utf-8")
+
+
+def nome_arquivo_relatorio(cidades=None, extensao="pdf"):
+    data = datetime.now(FUSO_FAROL).strftime("%d-%m-%Y")
+    if not cidades:
+        base = "Relatorio_Geral"
+    else:
+        nomes = [re.sub(r"[^A-Za-z0-9_-]", "_", unicodedata.normalize("NFKD", str(c)).encode("ascii", "ignore").decode("ascii")) for c in cidades]
+        base = "Relatorio_" + "_".join(nomes)
+    return f"Farol_{base}_{data}.{extensao}"
+
+
 def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=None,
                                   cidades=None, bairros=None, pocos=None, loggers=None,
-                                  panoramico=False):
-    """Mapa do relatório: panorama com ativos, fichas individuais só com O.S."""
+                                  panoramico=False, pontos=None, raio_ativos=500):
+    """Panorama completo com O.S. e infraestrutura; fichas com equipamentos próximos."""
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=13, tiles="OpenStreetMap",
                       control_scale=True, zoom_control=False)
     selecionadas = (concentracoes if concentracao is None else
@@ -2168,22 +2219,54 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
                                 fill=True, fill_color=cor, fill_opacity=.92).add_to(mapa)
             coordenadas.append((y, x))
-    if panoramico:
-        # A visão geral reproduz as camadas operacionais: poços e loggers,
-        # sem adicionar marcadores de infraestrutura às fichas individuais.
-        for cadastro, eh_logger in ((loggers, True), (pocos, False)):
-            if cadastro is None or cadastro.empty:
+    if panoramico and pontos is not None and not pontos.empty:
+        # Panorama como o mapa principal: TODAS as O.S. do recorte,
+        # não apenas as que participam de concentrações.
+        nomes = {normalizar_municipio(v) for v in cidades} if cidades else None
+        for _, r in pontos.iterrows():
+            if nomes is not None and normalizar_municipio(r.get("Cidade", "")) not in nomes:
                 continue
-            for _, r in cadastro.iterrows():
-                y = normalizar_coordenada(r.get("LATITUDE"), "lat")
-                x = normalizar_coordenada(r.get("LONGITUDE"), "lon")
-                if y is None or x is None:
+            y = normalizar_coordenada(r.get("Latitude"), "lat")
+            x = normalizar_coordenada(r.get("Longitude"), "lon")
+            if y is None or x is None:
+                continue
+            servico = str(r.get("Serviço Executado", "") or "")
+            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+            folium.CircleMarker([y, x], radius=3.5, color=cor, weight=.7,
+                                fill=True, fill_color=cor, fill_opacity=.85).add_to(mapa)
+    # Panorama: equipamentos do(s) município(s) selecionado(s), sem mostrar
+    # cadastros nacionais inteiros. Individual: apenas equipamentos próximos.
+    nomes = {normalizar_municipio(v) for v in cidades} if cidades else None
+    for cadastro, eh_logger in ((loggers, True), (pocos, False)):
+        if cadastro is None or cadastro.empty:
+            continue
+        for _, r in cadastro.iterrows():
+            y = normalizar_coordenada(r.get("LATITUDE"), "lat")
+            x = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+            if y is None or x is None:
+                continue
+            if concentracao is not None:
+                # Distância geodésica aproximada em metros, suficiente para filtro visual.
+                lat0, lon0 = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+                dy = (y-lat0)*111320.0
+                dx = (x-lon0)*111320.0*math.cos(math.radians(lat0))
+                if math.hypot(dx, dy) > raio_ativos:
                     continue
-                nome = str(r.get("IDENTIFICACAO_ATIVO", "") or "")
-                folium.Marker([y, x], tooltip=nome,
-                    icon=folium.Icon(icon="signal" if eh_logger else "tint",
-                                     prefix="fa", color="orange" if eh_logger else "blue"),
-                    z_index_offset=0 if eh_logger else 1000).add_to(mapa)
+            elif nomes is not None and normalizar_municipio(r.get("MUNICIPIO", "")) not in nomes:
+                continue
+            nome = str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Equipamento")
+            # CircleMarker em vez de pinos grandes para não ocultar as concentrações.
+            cor = "#E89021" if eh_logger else "#149AC8"
+            folium.CircleMarker([y, x], radius=5 if concentracao is not None else 4,
+                                color="white", weight=1.2, fill=True, fill_color=cor,
+                                fill_opacity=.95, tooltip=("Logger: " if eh_logger else "Ativo: ")+nome).add_to(mapa)
+            if concentracao is not None:
+                # Rótulo permanente nas fichas, sem alterar o mapa interativo.
+                folium.Marker([y, x], icon=folium.DivIcon(
+                    html='<div style="position:relative;left:9px;top:-12px;white-space:nowrap;'
+                         'font: bold 11px Arial;background:rgba(255,255,255,.94);'
+                         'border:1px solid #aab7c4;border-radius:3px;padding:2px 4px;'
+                         'color:#193348;display:inline-block">'+html_escape(nome)+'</div>')).add_to(mapa)
     if coordenadas:
         if concentracao is not None:
             lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
@@ -2229,13 +2312,17 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
         historia.append(Paragraph("Nenhuma concentração identificada para a seleção.", normal))
     else:
         mapa_geral = mapa_relatorio_concentracoes(concentracoes, pontos_cluster,
-                    cidades=cidades, bairros=bairros, pocos=pocos, loggers=loggers, panoramico=True)
+                    cidades=cidades, bairros=bairros, pocos=pocos, loggers=loggers,
+                    panoramico=True, pontos=pontos, raio_ativos=raio)
         imagem_geral = capturar_mapa_folium(mapa_geral, largura=1280, altura=700)
-        historia.append(Paragraph("Panorama territorial das concentrações", titulo))
-        historia.append(Image(io.BytesIO(imagem_geral), width=26.9*cm, height=14.7*cm))
-        historia.append(Spacer(1, 7))
-        historia.append(Paragraph(
-            f"Concentrações: {len(concentracoes)} · Panorama com O.S., concentrações, poços/ativos e loggers.", pequeno))
+        # Mantém título, imagem e legenda na MESMA página.
+        # Altura calculada para caber no A4 paisagem com cabeçalho e margens.
+        historia.append(KeepTogether([
+            Paragraph("Panorama territorial das concentrações", titulo),
+            Image(io.BytesIO(imagem_geral), width=26.0*cm, height=14.22*cm),
+            Spacer(1, 4),
+            Paragraph(f"Concentrações: {len(concentracoes)} · O.S., concentrações e equipamentos operacionais.", pequeno),
+        ]))
         historia.append(PageBreak())
         for indice, (_, c) in enumerate(concentracoes.iterrows()):
             grupo = (pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
@@ -2248,7 +2335,8 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                                      bairros_concentracao or "BAIRRO NÃO INFORMADO"])
             historia.append(Paragraph(xml_escape(cabecalho), titulo))
             imagem_foco = capturar_mapa_folium(
-                mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=c),
+                mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=c,
+                                            pocos=pocos, loggers=loggers, raio_ativos=raio),
                 largura=760, altura=560)
             imagem = Image(io.BytesIO(imagem_foco), width=13.4*cm, height=9.87*cm)
             resumo = [
@@ -2258,21 +2346,34 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             ]
             if "EVENTOS_RELACIONADOS" in c:
                 resumo.extend([Spacer(1, 4), Paragraph("<b>Eventos relacionados:</b> " +
-                               xml_escape(str(c["EVENTOS_RELACIONADOS"])), pequeno)])
+                               xml_escape(str(int(float(c["EVENTOS_RELACIONADOS"]))) if pd.notna(c["EVENTOS_RELACIONADOS"]) else "0"), pequeno)])
             resumo.extend([Spacer(1, 7), Paragraph("<b>Ordens de serviço vinculadas</b>", normal), Spacer(1, 4)])
+            linhas_os = []
             if grupo.empty:
                 resumo.append(Paragraph("Nenhuma O.S. vinculada ao agrupamento.", pequeno))
             else:
-                # Mantém as O.S. no painel lateral. Em grupos extensos, o conteúdo
-                # excedente continua logo abaixo, sem comprimir o mapa.
-                linhas = []
-                for _, os_reg in grupo.iterrows():
-                    linha = (f"O.S. {os_reg.get('Nº da O.S', '')} · "
-                             f"Matrícula {os_reg.get('Matrícula', '')} · "
-                             f"{os_reg.get('Status OS', '')}")
-                    linhas.append(Paragraph(xml_escape(linha), pequeno))
-                limite = 21
-                resumo.extend(linhas[:limite])
+                linhas_os = [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
+                              str(r.get("Status OS", ""))] for _, r in grupo.iterrows()]
+                # A tabela possui células independentes e pode ser copiada do PDF.
+                # CSV completo fica disponível para importar no Excel.
+                limite = 17
+                dados_tabela = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
+                                 Paragraph("<b>Matrícula</b>", pequeno),
+                                 Paragraph("<b>Status</b>", pequeno)]]
+                dados_tabela.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
+                                     for linha in linhas_os[:limite]])
+                tabela_os = Table(dados_tabela, colWidths=[3.25*cm, 2.8*cm, 5.8*cm], repeatRows=1)
+                tabela_os.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DEE8F2")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
+                    ("LINEBELOW", (0, 0), (-1, 0), .5, colors.HexColor("#A8B9C8")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ]))
+                resumo.append(tabela_os)
             ficha = Table([[imagem, resumo]], colWidths=[13.8*cm, 12.8*cm], hAlign="LEFT")
             ficha.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -2283,10 +2384,18 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]))
             historia.append(ficha)
-            if not grupo.empty and len(grupo) > 21:
+            if len(linhas_os) > 17:
                 historia.append(Spacer(1, 8))
                 historia.append(Paragraph("Continuação das O.S. vinculadas", pequeno))
-                historia.extend(linhas[21:])
+                dados_extra = [[Paragraph("<b>O.S. / Ano</b>", pequeno), Paragraph("<b>Matrícula</b>", pequeno),
+                                Paragraph("<b>Status</b>", pequeno)]]
+                dados_extra.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
+                                    for linha in linhas_os[17:]])
+                tabela_extra = Table(dados_extra, colWidths=[5*cm, 5*cm, 15*cm], repeatRows=1)
+                tabela_extra.setStyle(TableStyle([("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                                                  [colors.white, colors.HexColor("#F4F7FB")]),
+                                                  ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                historia.append(tabela_extra)
             if indice < len(concentracoes) - 1:
                 historia.append(PageBreak())
     doc.build(historia)
@@ -2324,8 +2433,9 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
                           proximidades, eventos, bairros, raio, observacoes,
                           cidades=cidades, pocos=pocos, loggers=loggers)
                 st.session_state["farol_pdf_operacional_pronto"] = pdf
-                st.session_state["farol_pdf_operacional_nome"] = (
-                    "Farol_Relatorio_Geral.pdf" if cidades is None else "Farol_Relatorio_Municipios.pdf")
+                st.session_state["farol_pdf_operacional_nome"] = nome_arquivo_relatorio(cidades, "pdf")
+                st.session_state["farol_os_relatorio_csv"] = planilha_os_relatorio(selecionadas, pontos_cluster)
+                st.session_state["farol_os_relatorio_nome"] = nome_arquivo_relatorio(cidades, "csv")
                 st.success("Relatório gerado. Faça o download abaixo.")
             except Exception as erro:
                 st.error(f"Não foi possível gerar o relatório: {erro}")
@@ -2335,6 +2445,12 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
             file_name=st.session_state.get("farol_pdf_operacional_nome", "Farol_Relatorio.pdf"),
             mime="application/pdf", use_container_width=True,
             key="farol_download_relatorio_modal")
+        if st.session_state.get("farol_os_relatorio_csv"):
+            st.download_button("📊 Baixar planilha das O.S. (Excel/CSV)",
+                data=st.session_state["farol_os_relatorio_csv"],
+                file_name=st.session_state.get("farol_os_relatorio_nome", "Farol_OS.csv"),
+                mime="text/csv", use_container_width=True,
+                key="farol_download_os_relatorio_csv")
 
 # ============================================================
 # INTERFACE
