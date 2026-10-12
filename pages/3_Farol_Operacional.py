@@ -2071,8 +2071,8 @@ def capturar_mapa_folium(mapa, largura=1100, altura=600):
     html = mapa.get_root().render()
     # A captura deve ter uma proporção próxima da visualização operacional.
     html = html.replace('</head>', f"""<style>
-        html, body {margin:0 !important; padding:0 !important; width:{largura}px !important; height:{altura}px !important; overflow:hidden !important;}
-        .folium-map {width:{largura}px !important; height:{altura}px !important;}
+        html, body {{margin:0 !important; padding:0 !important; width:{largura}px !important; height:{altura}px !important; overflow:hidden !important;}}
+        .folium-map {{width:{largura}px !important; height:{altura}px !important;}}
         </style></head>""", 1)
     with tempfile.TemporaryDirectory(prefix="farol_mapa_") as pasta:
         arquivo = os.path.join(pasta, "mapa.html")
