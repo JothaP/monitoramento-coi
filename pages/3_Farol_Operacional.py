@@ -1814,9 +1814,11 @@ with st.sidebar:
         help="Distância usada para agrupar O.S. espacialmente.",
     )
     minimo_os = st.number_input(
-        "Mínimo de O.S. por concentração", min_value=2, max_value=100,
-        value=2, step=1,
-    )
+    "Mínimo de O.S. por concentração",
+    min_value=2,
+    value=3,
+    step=1,
+)
 
     if st.session_state.pop("farol_mensagem_limpeza", None):
         st.success("Dados operacionais limpos com sucesso.")
