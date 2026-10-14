@@ -517,9 +517,9 @@ if modulo_7:
 
     with col7:
 
-        st.markdown("#### 🗺️ Módulo 7")
-        st.markdown("**Mapeamento de Melhorias**")
-        st.caption("Status: Suspenso")
+        st.markdown("#### 🧪 Módulo 7")
+        st.markdown("**Módulo de Testes**")
+        st.caption("Status: Ambiente Privado")
 
         if st.button(
             "Acessar Mapeamento de Melhorias",
