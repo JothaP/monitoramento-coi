@@ -239,7 +239,7 @@ def slug_hash(*valores):
 def limpar_nome_bairro(valor):
     texto = normalizar_texto(valor)
     texto = re.sub(r"\s*\(\s*PARCIAL\s*\)\s*$", "", texto)
-    texto = re.sub(r"\s+", " ", texto).strip()
+    texto = re.sub(r"\s+", " ", texto).strip(" \t.,;:!?")
     return texto
 
 
@@ -296,7 +296,7 @@ def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
     saida = []
     vistos = set()
     for parte in partes:
-        original = parte.strip(" \t-*•")
+        original = parte.strip(" \t-*•.,;:!?")
         if not original:
             continue
         # Desconsidera linha isolada com o nome da cidade, quando a descrição o inclui.
@@ -306,13 +306,11 @@ def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
         chave = resolver_nome_bairro(original, nomes)
         candidatos = [(chave, original)]
         if nomes and chave not in nomes:
-            # Só divide 'A e B' se os dois nomes resultantes estiverem no município.
-            pedacos = re.split(r"\s+E\s+", chave)
-            if len(pedacos) == 2:
-                esquerda = resolver_nome_bairro(pedacos[0], nomes)
-                direita = resolver_nome_bairro(pedacos[1], nomes)
-                if esquerda in nomes and direita in nomes:
-                    candidatos = [(esquerda, pedacos[0]), (direita, pedacos[1])]
+            # Só divide a conjunção quando TODOS os nomes resultantes existem
+            # no catálogo geográfico do município. Preserva nomes compostos.
+            pedacos = [resolver_nome_bairro(p, nomes) for p in re.split(r"\s+E\s+", chave)]
+            if len(pedacos) >= 2 and all(p in nomes for p in pedacos):
+                candidatos = [(p, p) for p in pedacos]
         for bairro, origem in candidatos:
             if bairro and bairro not in vistos:
                 vistos.add(bairro)
@@ -2898,11 +2896,35 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 ativos_pocos = df_pocos.loc[df_pocos.index.isin(ativos_pocos.index.union(ativos_pocos_cidade.index))].copy()
             if not ativos_loggers_cidade.empty:
                 ativos_loggers = df_loggers.loc[df_loggers.index.isin(ativos_loggers.index.union(ativos_loggers_cidade.index))].copy()
+            # Mostra os limites dos bairros próximos, mesmo sem eventos.
+            # Usa a janela geográfica do detalhe para não desenhar o município inteiro.
+            bbox_lat_min = min(float(c["LATITUDE"]) - raio_visual / 111320.0 for c in concentracoes_visiveis)
+            bbox_lat_max = max(float(c["LATITUDE"]) + raio_visual / 111320.0 for c in concentracoes_visiveis)
+            bbox_lon_min = min(float(c["LONGITUDE"]) - raio_visual / (111320.0 * max(.2, math.cos(math.radians(float(c["LATITUDE"]))))) for c in concentracoes_visiveis)
+            bbox_lon_max = max(float(c["LONGITUDE"]) + raio_visual / (111320.0 * max(.2, math.cos(math.radians(float(c["LATITUDE"]))))) for c in concentracoes_visiveis)
+            cidades_detalhe = set()
+            for c in concentracoes_visiveis:
+                cidades_detalhe.update(normalizar_municipio(x) for x in str(c.get("MUNICIPIO", c.get("CIDADE", ""))).split(",") if x.strip())
+            # Não depender do nome de coluna: obtém os municípios diretamente
+            # dos bairros próximos às coordenadas das concentrações.
+            bairros_detalhe = []
+            for bairro in bairros:
+                if cidades_detalhe and normalizar_municipio(bairro.get("municipio", "")) not in cidades_detalhe:
+                    continue
+                for poly in bairro.get("poligonos_mapa", bairro["poligonos"]):
+                    if not poly:
+                        continue
+                    ys = [p[0] for p in poly]
+                    xs = [p[1] for p in poly]
+                    if (max(ys) >= bbox_lat_min and min(ys) <= bbox_lat_max
+                            and max(xs) >= bbox_lon_min and min(xs) <= bbox_lon_max):
+                        bairros_detalhe.append(bairro)
+                        break
             eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
             mapa = criar_mapa(
-                [], pontos_mapa, ativos_pocos, ativos_loggers,
+                bairros_detalhe, pontos_mapa, ativos_pocos, ativos_loggers,
                 concentracoes_detalhe,
-                proximidades_atuais, mostrar_bairros=False,
+                proximidades_atuais, mostrar_bairros=True,
                 eventos_mapeados=eventos_mapeados,
                 raio_circulo=raio_concentracao,
             )
