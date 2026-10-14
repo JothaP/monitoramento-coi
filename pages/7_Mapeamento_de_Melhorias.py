@@ -2910,8 +2910,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
                 resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
                 indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
+                bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
                 titulo = (
-                    f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'} | "
+                    f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'}"
+                    f" — {bairros_grupo or 'Bairro não informado'} | "
                     f"{int(concentracao['QTD_OS'])} O.S. · "
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
                     f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
