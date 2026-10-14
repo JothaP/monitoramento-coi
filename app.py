@@ -522,7 +522,7 @@ if modulo_7:
         st.caption("Status: Ambiente Privado")
 
         if st.button(
-            "Acessar Mapeamento de Melhorias",
+            "Acessar Ambiente de Testes",
             type="primary",
             use_container_width=True,
             key="acessar_mapeamento_melhorias",
