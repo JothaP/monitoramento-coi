@@ -1445,6 +1445,18 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
     return filtrar(df_pocos), filtrar(df_loggers)
 
 
+def icone_bandeira_concentracao():
+    """Bandeira central da concentração, distinta dos pontos de O.S."""
+    return folium.DivIcon(
+        html=("<div style=\"font-size:25px;line-height:29px;"
+              "width:30px;height:30px;text-align:center;"
+              "filter:drop-shadow(0 1px 2px rgba(0,0,0,.35));\">🚩</div>"),
+        icon_size=(30, 30),
+        icon_anchor=(15, 25),
+        class_name="farol-bandeira-concentracao",
+    )
+
+
 def criar_mapa_panorama_v2(concentracoes, raio_m=500):
     """Panorama leve: somente mapa-base e concentrações clicáveis.
 
@@ -1463,10 +1475,9 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500):
         folium.Circle([lat, lon], radius=float(raio_m), color="#7c3aed",
                       weight=2, fill=True, fill_opacity=.07,
                       tooltip=f"{codigo} · {int(c['QTD_OS'])} O.S.").add_to(mapa)
-        folium.CircleMarker([lat, lon], radius=8, color="#5b21b6", weight=2,
-                            fill=True, fill_color="#7c3aed", fill_opacity=1,
-                            popup=folium.Popup(resumo, max_width=320),
-                            tooltip=f"{codigo} — Abrir concentração").add_to(mapa)
+        folium.Marker([lat, lon], icon=icone_bandeira_concentracao(),
+                      popup=folium.Popup(resumo, max_width=320),
+                      tooltip=f"{codigo} — Abrir concentração").add_to(mapa)
         limites.append([lat, lon])
     if len(limites) > 1:
         mapa.fit_bounds(limites, padding=(35, 35), max_zoom=14)
@@ -1627,10 +1638,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             popup=popup_concentracao,
         ).add_to(fg_conc)
         # Ponto central discreto e clicável; sem código, contagens ou texto sobre o mapa.
-        folium.CircleMarker(
-            [lat, lon], radius=7, color="#7135A8", weight=2,
-            fill=True, fill_color="#7135A8", fill_opacity=0.9,
-            tooltip="Clique para consultar a concentração",
+        folium.Marker(
+            [lat, lon], icon=icone_bandeira_concentracao(),
+            tooltip="🚩 Clique para consultar a concentração",
             popup=folium.Popup(conteudo_popup, max_width=370),
         ).add_to(fg_conc)
     fg_conc.add_to(mapa)
@@ -1757,8 +1767,7 @@ def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
     raio_grupo = RAIO_CONCENTRACAO_PADRAO
     folium.Circle([lat, lon], radius=raio_grupo, color="#8522a5", weight=3,
                   fill=True, fill_color="#8522a5", fill_opacity=0.07).add_to(mapa)
-    folium.CircleMarker([lat, lon], radius=6, color="#7135A8", fill=True,
-                        fill_color="#7135A8").add_to(mapa)
+    folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
     for _, registro in os_grupo.iterrows():
         y = normalizar_coordenada(registro.get("Latitude"), "lat")
         x = normalizar_coordenada(registro.get("Longitude"), "lon")
@@ -2279,8 +2288,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
         if not panoramico:
             folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
                           fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
-            folium.CircleMarker([lat, lon], radius=5, color="#7135A8", weight=2,
-                                fill=True, fill_color="#7135A8", fill_opacity=1).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
         coordenadas.append((lat, lon))
         if "_grupo" not in pontos_cluster.columns:
             continue
@@ -2346,9 +2354,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             folium.Circle([lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
                           color="#8522A5", weight=3.2, fill=True,
                           fill_color="#8522A5", fill_opacity=.055).add_to(mapa)
-            folium.CircleMarker([lat, lon], radius=6, color="#7135A8",
-                                weight=2, fill=True, fill_color="#7135A8",
-                                fill_opacity=1).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
     if coordenadas:
         if concentracao is not None:
             lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
