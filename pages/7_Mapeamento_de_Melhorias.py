@@ -49,12 +49,12 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional",
+    page_title="Farol Operacional V2 - Homologação",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-if not verificar_autenticacao() or not tem_acesso_modulo("3"):
+if not verificar_autenticacao() or not tem_acesso_modulo("7"):
     st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
     st.stop()
 
@@ -1444,6 +1444,37 @@ def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
     return filtrar(df_pocos), filtrar(df_loggers)
 
 
+def criar_mapa_panorama_v2(concentracoes, raio_m=500):
+    """Panorama leve: somente mapa-base e concentrações clicáveis.
+
+    A ausência das camadas operacionais no panorama é intencional.
+    """
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12,
+                      control_scale=True, tiles="OpenStreetMap", prefer_canvas=True)
+    limites = []
+    for _, c in concentracoes.iterrows():
+        lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+        codigo = html_escape(str(c["ID_CONCENTRACAO"]))
+        bairros_txt = html_escape(str(c.get("BAIRROS", "") or "Não informado"))
+        resumo = (f"<b>{codigo}</b><br>{bairros_txt}<br>"
+                  f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas<br>"
+                  "<small>Clique no ponto central para abrir a análise detalhada.</small>")
+        folium.Circle([lat, lon], radius=float(raio_m), color="#7c3aed",
+                      weight=2, fill=True, fill_opacity=.07,
+                      tooltip=f"{codigo} · {int(c['QTD_OS'])} O.S.").add_to(mapa)
+        folium.CircleMarker([lat, lon], radius=8, color="#5b21b6", weight=2,
+                            fill=True, fill_color="#7c3aed", fill_opacity=1,
+                            popup=folium.Popup(resumo, max_width=320),
+                            tooltip=f"{codigo} — Abrir concentração").add_to(mapa)
+        limites.append([lat, lon])
+    if len(limites) > 1:
+        mapa.fit_bounds(limites, padding=(35, 35), max_zoom=14)
+    elif len(limites) == 1:
+        mapa.location = limites[0]
+        mapa.options["zoom"] = 14
+    return mapa
+
+
 def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
@@ -2550,6 +2581,7 @@ if not df_loggers.empty:
 # ============================================================
 
 with st.sidebar:
+    st.markdown("### 🧪 Farol V2 — Módulo 7")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -2659,8 +2691,8 @@ ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mo
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
-    eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
-    st.subheader("🗺️ Visão geográfica operacional")
+    eventos_mapeados, eventos_sem_geometria = [], []  # V2: eventos geográficos somente no detalhe
+    st.subheader("🗺️ Farol V2 — Panorama e concentrações")
 
     st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
                "As áreas destacadas representam os bairros inteiros dos arquivos geográficos, inclusive quando o evento informa impacto parcial.")
@@ -2747,93 +2779,108 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
-        # A camada cartográfica SEMPRE inclui os equipamentos próximos às concentrações.
-        # A cidade selecionada apenas acrescenta os demais equipamentos da cidade.
-        # A análise de proximidade continua utilizando as bases completas.
-        def equipamentos_proximos(base, tipo):
-            if base.empty or proximidades.empty:
-                return base.iloc[0:0].copy()
-            correspondencias = proximidades.loc[
-                proximidades["Tipo"] == tipo, ["Identificação", "Município"]
-            ]
-            if correspondencias.empty:
-                return base.iloc[0:0].copy()
-            # A seleção por chave composta preserva a regra de município + identificação.
-            chaves = pd.MultiIndex.from_arrays([
-                correspondencias["Identificação"].fillna("").astype(str).map(normalizar_texto),
-                correspondencias["Município"].fillna("").astype(str).map(normalizar_texto),
-            ])
-            chaves_base = pd.MultiIndex.from_arrays([
-                base["IDENTIFICACAO_ATIVO"].fillna("").astype(str).map(normalizar_texto),
-                base["MUNICIPIO"].fillna("").astype(str).map(normalizar_texto),
-            ])
-            return base.loc[chaves_base.isin(chaves)].copy()
-
-        def juntar_sem_duplicar(base, proximos, adicionais):
-            if proximos.empty:
-                return adicionais.copy()
-            if adicionais.empty:
-                return proximos.copy()
-            # Índices originais das abas permitem evitar marcadores duplicados.
-            return base.loc[base.index.isin(proximos.index.union(adicionais.index))].copy()
-
-        ativos_pocos = juntar_sem_duplicar(
-            df_pocos,
-            equipamentos_proximos(df_pocos, "Poço / Ativo"),
-            ativos_pocos_cidade,
-        )
-        ativos_loggers = juntar_sem_duplicar(
-            df_loggers,
-            equipamentos_proximos(df_loggers, "Logger"),
-            ativos_loggers_cidade,
-        )
-
-        st.caption(
-            f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
-            f"{len(ativos_loggers)} logger(s) no mapa: equipamentos próximos às "
-            "concentrações e, quando habilitados, equipamentos adicionais da cidade selecionada."
-        )
-        st.markdown("### 🗺️ Mapa operacional")
-        st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
+        # V2: o panorama não constrói camadas de O.S., equipamentos ou eventos.
+        # Os dados completos continuam disponíveis para análise e relatórios.
+        st.caption("Panorama leve: selecione o centro roxo de uma concentração para abrir seu mapa operacional completo.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
-        mapa = criar_mapa(
-            bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
-            proximidades, mostrar_bairros=bool(bairros),
-            eventos_mapeados=eventos_mapeados,
-        )
-        if st.session_state.get("farol_foco_concentracao"):
-            lat_foco, lon_foco = st.session_state["farol_foco_concentracao"]
-            mapa.location = [lat_foco, lon_foco]
-            mapa.options["zoom"] = 15
-            mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
-        estado_mapa = st_folium(
-            mapa, width=None, height=650,
-            returned_objects=["center", "zoom", "last_object_clicked"] if sincronizar_mapa_pdf else ["last_object_clicked"],
-            key="farol_mapa_principal",
-        )
+        codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
+        selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
+        if selecionada not in codigos_validos:
+            selecionada = ""
+            st.session_state["farol_v2_concentracao"] = ""
+
+        if selecionada:
+            c_atual = concentracoes.loc[concentracoes["ID_CONCENTRACAO"].astype(str) == selecionada].iloc[0]
+            st.markdown(f"### 📍 {selecionada} — Detalhamento operacional")
+            if st.button("⬅️ Voltar ao panorama", key="farol_v2_voltar"):
+                st.session_state["farol_v2_concentracao"] = ""
+                st.session_state["farol_concentracao_expandida"] = ""
+                st.rerun()
+            grupo_atual = pontos_cluster.loc[pontos_cluster["_grupo"] == c_atual["GRUPO"]].copy()
+            # Exibir também O.S. próximas, mantendo a análise da concentração selecionada.
+            lat_c, lon_c = float(c_atual["LATITUDE"]), float(c_atual["LONGITUDE"])
+            raio_visual = max(float(raio_concentracao) * 1.5, 650.0)
+            pontos_mapa = analise.loc[
+                analise.apply(lambda r: (
+                    (lambda d: d is not None and d <= raio_visual)(
+                        distancia_metros(lat_c, lon_c, r.get("Latitude"), r.get("Longitude"))
+                    )
+                ), axis=1)
+            ].copy()
+            # Proximidades somente do agrupamento aberto, com cadastros completos.
+            proximidades_atuais = proximidades.loc[
+                proximidades["Concentração"].astype(str) == selecionada
+            ].copy() if not proximidades.empty else proximidades.copy()
+            def _ativos_detalhe(base, tipo):
+                if base.empty or proximidades_atuais.empty:
+                    return base.iloc[0:0].copy()
+                ids = set(proximidades_atuais.loc[
+                    proximidades_atuais["Tipo"] == tipo, "Identificação"
+                ].fillna("").astype(str).map(normalizar_texto))
+                return base.loc[base["IDENTIFICACAO_ATIVO"].fillna("").astype(str).map(normalizar_texto).isin(ids)].copy()
+            ativos_pocos = _ativos_detalhe(df_pocos, "Poço / Ativo")
+            ativos_loggers = _ativos_detalhe(df_loggers, "Logger")
+            # O filtro opcional da cidade acrescenta equipamentos, sem duplicações.
+            if not ativos_pocos_cidade.empty:
+                ativos_pocos = df_pocos.loc[df_pocos.index.isin(ativos_pocos.index.union(ativos_pocos_cidade.index))].copy()
+            if not ativos_loggers_cidade.empty:
+                ativos_loggers = df_loggers.loc[df_loggers.index.isin(ativos_loggers.index.union(ativos_loggers_cidade.index))].copy()
+            eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
+            mapa = criar_mapa(
+                [], pontos_mapa, ativos_pocos, ativos_loggers,
+                concentracoes.loc[concentracoes["ID_CONCENTRACAO"].astype(str) == selecionada],
+                proximidades_atuais, mostrar_bairros=False,
+                eventos_mapeados=eventos_mapeados,
+            )
+            delta_lat = raio_visual / 111320.0
+            delta_lon = raio_visual / (111320.0 * max(.2, math.cos(math.radians(lat_c))))
+            mapa.fit_bounds([[lat_c-delta_lat, lon_c-delta_lon],
+                             [lat_c+delta_lat, lon_c+delta_lon]], padding=(25, 25))
+            estado_mapa = st_folium(
+                mapa, width=None, height=650,
+                returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
+                key="farol_v2_mapa_detalhe",
+            )
+            st.caption(f"Mapa detalhado: {len(pontos_mapa)} O.S. na área, "
+                       f"{len(ativos_pocos)} poço(s)/ativo(s) e {len(ativos_loggers)} logger(s).")
+        else:
+            mapa = criar_mapa_panorama_v2(concentracoes, raio_m=raio_concentracao)
+            estado_mapa = st_folium(
+                mapa, width=None, height=650,
+                returned_objects=["last_object_clicked"],
+                key="farol_v2_mapa_panorama",
+            )
+            clique = (estado_mapa or {}).get("last_object_clicked")
+            if isinstance(clique, dict) and not concentracoes.empty:
+                lat_clique = parse_float(clique.get("lat"))
+                lon_clique = parse_float(clique.get("lng"))
+                if lat_clique is not None and lon_clique is not None:
+                    melhor, menor = "", float("inf")
+                    for _, centro in concentracoes.iterrows():
+                        d = distancia_metros(lat_clique, lon_clique,
+                                             centro["LATITUDE"], centro["LONGITUDE"])
+                        if d is not None and d < menor:
+                            menor, melhor = d, str(centro["ID_CONCENTRACAO"])
+                    if melhor and menor <= 4:
+                        st.session_state["farol_v2_concentracao"] = melhor
+                        st.session_state["farol_concentracao_expandida"] = melhor
+                        st.rerun()
+            # Alternativa acessível ao clique, útil em dispositivos móveis.
+            escolha = st.selectbox(
+                "Abrir concentração", [""] + sorted(codigos_validos),
+                format_func=lambda x: "Selecione uma concentração..." if not x else x,
+                key="farol_v2_seletor",
+            )
+            if escolha and st.button("🔎 Abrir mapa detalhado", key="farol_v2_abrir"):
+                st.session_state["farol_v2_concentracao"] = escolha
+                st.session_state["farol_concentracao_expandida"] = escolha
+                st.rerun()
         exibir_atualizacoes_abaixo_mapa()
-        if sincronizar_mapa_pdf and estado_mapa:
+        if sincronizar_mapa_pdf and estado_mapa and selecionada:
             if estado_mapa.get("center") is not None:
                 st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
             if estado_mapa.get("zoom") is not None:
                 st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
-
-        # Clique em um centro de concentração expande seu painel de análise.
-        # Movimentação e zoom continuam sem enviar eventos ao Streamlit, exceto
-        # quando o usuário habilita a sincronização opcional para o PDF.
-        clique = (estado_mapa or {}).get("last_object_clicked")
-        if isinstance(clique, dict) and not concentracoes.empty:
-            lat_clique, lon_clique = parse_float(clique.get("lat")), parse_float(clique.get("lng"))
-            if lat_clique is not None and lon_clique is not None:
-                mais_proxima = None
-                menor_distancia = float("inf")
-                for _, centro in concentracoes.iterrows():
-                    distancia = distancia_metros(lat_clique, lon_clique, centro["LATITUDE"], centro["LONGITUDE"])
-                    if distancia is not None and distancia < menor_distancia:
-                        menor_distancia, mais_proxima = distancia, str(centro["ID_CONCENTRACAO"])
-                # Apenas o clique no marcador central (até 3 m) seleciona o painel.
-                if menor_distancia <= 3 and mais_proxima:
-                    st.session_state["farol_concentracao_expandida"] = mais_proxima
 
         _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
         if PERFIL_FAROL == "admin":
@@ -2877,9 +2924,11 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
                     f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
                 )
-                with st.expander(titulo, expanded=(st.session_state.get("farol_concentracao_expandida") == codigo)):
+                if str(codigo) != str(st.session_state.get("farol_v2_concentracao", "")):
+                    continue
+                with st.expander(titulo, expanded=True):
                     if st.button("🎯 Focar esta concentração no mapa", key=f"foco_{codigo}"):
-                        st.session_state["farol_foco_concentracao"] = (float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]))
+                        st.session_state["farol_v2_concentracao"] = str(codigo)
                         st.rerun()
                     if PODE_EDITAR_FAROL:
                         nota_editada = st.text_area("Observação do analista", value=texto_nota,
