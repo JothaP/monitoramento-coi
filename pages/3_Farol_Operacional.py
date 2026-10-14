@@ -50,12 +50,12 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional V2 - Homologação",
+    page_title="Farol Operacional - Módulo 3",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-if not verificar_autenticacao() or not tem_acesso_modulo("7"):
+if not verificar_autenticacao() or not tem_acesso_modulo("3"):
     st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
     st.stop()
 
@@ -2664,7 +2664,7 @@ if not df_loggers.empty:
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### 🧪 Farol V2 — Módulo 7")
+    st.markdown("### 🚰 Farol Operacional — Módulo 3")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
