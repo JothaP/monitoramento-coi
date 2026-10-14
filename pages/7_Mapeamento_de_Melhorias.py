@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 
 import gspread
 import pandas as pd
+import numpy as np
 import streamlit as st
 import folium
 import plotly.express as px
@@ -1475,7 +1476,7 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500):
     return mapa
 
 
-def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
@@ -1621,7 +1622,7 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         )
         popup_concentracao = folium.Popup(conteudo_popup, max_width=370)
         folium.Circle(
-            [lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
+            [lat, lon], radius=(raio_circulo if raio_circulo is not None else RAIO_CONCENTRACAO_PADRAO),
             color="purple", fill=True, fill_opacity=0.08,
             popup=popup_concentracao,
         ).add_to(fg_conc)
@@ -2797,19 +2798,60 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 st.session_state["farol_concentracao_expandida"] = ""
                 st.rerun()
             grupo_atual = pontos_cluster.loc[pontos_cluster["_grupo"] == c_atual["GRUPO"]].copy()
-            # Exibir também O.S. próximas, mantendo a análise da concentração selecionada.
             lat_c, lon_c = float(c_atual["LATITUDE"]), float(c_atual["LONGITUDE"])
-            raio_visual = max(float(raio_concentracao) * 1.5, 650.0)
-            pontos_mapa = analise.loc[
-                analise.apply(lambda r: (
-                    (lambda d: d is not None and d <= raio_visual)(
-                        distancia_metros(lat_c, lon_c, r.get("Latitude"), r.get("Longitude"))
-                    )
-                ), axis=1)
-            ].copy()
-            # Proximidades somente do agrupamento aberto, com cadastros completos.
+
+            # Exibir as demais concentrações cujos círculos se tocam ou ficam
+            # muito próximos. A proximidade é VISUAL: não altera a formação,
+            # a numeração nem as contagens das concentrações originais.
+            raio_feicao = float(raio_concentracao)
+            tolerancia_vizinhanca_m = 75.0
+            cidades_atual = {
+                normalizar_texto(x) for x in grupo_atual["Cidade"].dropna().astype(str)
+                if str(x).strip()
+            } if "Cidade" in grupo_atual.columns else set()
+            concentracoes_visiveis = [c_atual]
+            for _, candidata in concentracoes.iterrows():
+                if str(candidata["ID_CONCENTRACAO"]) == selecionada:
+                    continue
+                # Não aproximar concentrações de municípios distintos.
+                grupo_candidata = pontos_cluster.loc[
+                    pontos_cluster["_grupo"] == candidata["GRUPO"]
+                ]
+                cidades_candidata = {
+                    normalizar_texto(x) for x in grupo_candidata["Cidade"].dropna().astype(str)
+                    if str(x).strip()
+                } if "Cidade" in grupo_candidata.columns else set()
+                if cidades_atual and cidades_candidata and not (cidades_atual & cidades_candidata):
+                    continue
+                distancia = distancia_metros(lat_c, lon_c, candidata["LATITUDE"], candidata["LONGITUDE"])
+                if distancia is not None and distancia <= 2 * raio_feicao + tolerancia_vizinhanca_m:
+                    concentracoes_visiveis.append(candidata)
+
+            concentracoes_detalhe = pd.DataFrame(concentracoes_visiveis)
+            ids_detalhe = set(concentracoes_detalhe["ID_CONCENTRACAO"].astype(str))
+            vizinhas = [str(c["ID_CONCENTRACAO"]) for c in concentracoes_visiveis[1:]]
+
+            # Inclui os pontos das concentrações vizinhas e O.S. no entorno,
+            # sem carregar as O.S. do município inteiro.
+            raio_visual = max(raio_feicao * 1.5, 650.0)
+            lat_os = pd.to_numeric(analise["Latitude"], errors="coerce").to_numpy(dtype=float)
+            lon_os = pd.to_numeric(analise["Longitude"], errors="coerce").to_numpy(dtype=float)
+            mascara_os = np.zeros(len(analise), dtype=bool)
+            for c in concentracoes_visiveis:
+                lat_ref = math.radians(float(c["LATITUDE"]))
+                lon_ref = math.radians(float(c["LONGITUDE"]))
+                dlat = np.radians(lat_os) - lat_ref
+                dlon = np.radians(lon_os) - lon_ref
+                h = (np.sin(dlat / 2) ** 2
+                     + np.cos(lat_ref) * np.cos(np.radians(lat_os)) * np.sin(dlon / 2) ** 2)
+                distancias = 2 * 6371000.0 * np.arcsin(np.sqrt(np.clip(h, 0, 1)))
+                mascara_os |= np.isfinite(distancias) & (distancias <= raio_visual)
+            pontos_mapa = analise.loc[mascara_os].copy()
+
+            # Equipamentos próximos de TODAS as feições visíveis, sem mudar
+            # os equipamentos vinculados ao painel da concentração principal.
             proximidades_atuais = proximidades.loc[
-                proximidades["Concentração"].astype(str) == selecionada
+                proximidades["Concentração"].astype(str).isin(ids_detalhe)
             ].copy() if not proximidades.empty else proximidades.copy()
             def _ativos_detalhe(base, tipo):
                 if base.empty or proximidades_atuais.empty:
@@ -2828,14 +2870,21 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
             mapa = criar_mapa(
                 [], pontos_mapa, ativos_pocos, ativos_loggers,
-                concentracoes.loc[concentracoes["ID_CONCENTRACAO"].astype(str) == selecionada],
+                concentracoes_detalhe,
                 proximidades_atuais, mostrar_bairros=False,
                 eventos_mapeados=eventos_mapeados,
+                raio_circulo=raio_concentracao,
             )
-            delta_lat = raio_visual / 111320.0
-            delta_lon = raio_visual / (111320.0 * max(.2, math.cos(math.radians(lat_c))))
-            mapa.fit_bounds([[lat_c-delta_lat, lon_c-delta_lon],
-                             [lat_c+delta_lat, lon_c+delta_lon]], padding=(25, 25))
+            # Ajusta o enquadramento para mostrar integralmente os círculos
+            # próximos, com margem para O.S. e equipamentos.
+            limites = []
+            for c in concentracoes_visiveis:
+                lat_ref, lon_ref = float(c["LATITUDE"]), float(c["LONGITUDE"])
+                delta_lat = raio_visual / 111320.0
+                delta_lon = raio_visual / (111320.0 * max(.2, math.cos(math.radians(lat_ref))))
+                limites.extend([[lat_ref - delta_lat, lon_ref - delta_lon],
+                                [lat_ref + delta_lat, lon_ref + delta_lon]])
+            mapa.fit_bounds(limites, padding=(25, 25))
             estado_mapa = st_folium(
                 mapa, width=None, height=650,
                 returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
@@ -2843,6 +2892,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             )
             st.caption(f"Mapa detalhado: {len(pontos_mapa)} O.S. na área, "
                        f"{len(ativos_pocos)} poço(s)/ativo(s) e {len(ativos_loggers)} logger(s).")
+            if vizinhas:
+                st.info("Concentração(ões) próxima(s) também visível(is): "
+                        + ", ".join(vizinhas)
+                        + ". Os agrupamentos permanecem independentes; selecione outro registro na lista para analisar seus dados.")
         else:
             mapa = criar_mapa_panorama_v2(concentracoes, raio_m=raio_concentracao)
             estado_mapa = st_folium(
