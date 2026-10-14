@@ -55,11 +55,17 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-if not verificar_autenticacao() or not tem_acesso_modulo("3"):
-    st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
+# O Farol (módulo 3) é autorizado para os três perfis válidos.
+# A autenticação continua obrigatória; o módulo 7 permanece privado.
+if not verificar_autenticacao():
+    st.error("Sessão não autenticada. Entre pelo Hub Central.")
     st.stop()
 
 PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
+if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
+    st.error("Seu perfil não está autorizado a acessar o Farol Operacional.")
+    st.stop()
+
 PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
 
 def exigir_edicao_farol():
@@ -540,7 +546,7 @@ def exibir_atualizacoes_abaixo_mapa():
 
 def limpar_dados_operacionais_admin():
     """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
-    if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
+    if not verificar_autenticacao() or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
         raise PermissionError("Somente administradores podem limpar os dados operacionais.")
     planilha = obter_planilha()
     resultados = []
@@ -569,7 +575,7 @@ def limpar_dados_operacionais_admin():
 
 @st.dialog("🗑️ Limpar dados operacionais")
 def modal_limpar_dados_operacionais():
-    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao() or not tem_acesso_modulo("3"):
+    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao():
         st.error("Operação exclusiva do administrador.")
         st.stop()
     st.warning(
