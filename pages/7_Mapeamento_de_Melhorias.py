@@ -76,7 +76,7 @@ def exigir_edicao_farol():
 # Definir em Streamlit Cloud > App settings > Secrets:
 # farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
 # Não utilizar a planilha de produção como fallback.
-SPREADSHEET_ID_PRODUCAO = "1plvaCyZ23zAIjasrFnJxZm9Q-jB85AbCtSjIizhuoKg"
+SPREADSHEET_ID_PRODUCAO = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
 SPREADSHEET_ID = str(st.secrets.get("farol_v2_spreadsheet_id", "")).strip()
 if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_PRODUCAO:
     st.error("Módulo 7 protegido: configure farol_v2_spreadsheet_id com o ID de uma CÓPIA independente da planilha de produção em Secrets.")
