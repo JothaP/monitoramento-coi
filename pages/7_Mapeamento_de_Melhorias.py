@@ -2865,16 +2865,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         st.session_state["farol_v2_concentracao"] = melhor
                         st.session_state["farol_concentracao_expandida"] = melhor
                         st.rerun()
-            # Alternativa acessível ao clique, útil em dispositivos móveis.
-            escolha = st.selectbox(
-                "Abrir concentração", [""] + sorted(codigos_validos),
-                format_func=lambda x: "Selecione uma concentração..." if not x else x,
-                key="farol_v2_seletor",
-            )
-            if escolha and st.button("🔎 Abrir mapa detalhado", key="farol_v2_abrir"):
-                st.session_state["farol_v2_concentracao"] = escolha
-                st.session_state["farol_concentracao_expandida"] = escolha
-                st.rerun()
+            # A lista tradicional de concentrações permanece abaixo do mapa.
+            # Evita-se o seletor adicional, que causava outra interação e rerun.
         exibir_atualizacoes_abaixo_mapa()
         if sincronizar_mapa_pdf and estado_mapa and selecionada:
             if estado_mapa.get("center") is not None:
@@ -2924,30 +2916,35 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                     f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
                     f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
                 )
-                if str(codigo) != str(st.session_state.get("farol_v2_concentracao", "")):
-                    continue
-                with st.expander(titulo, expanded=True):
-                    if st.button("🎯 Focar esta concentração no mapa", key=f"foco_{codigo}"):
+                # Preservar TODOS os registros no formato original de expansores.
+                # Somente a concentração ativa carrega o relatório detalhado,
+                # evitando gerar tabelas e componentes pesados para as demais.
+                ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
+                with st.expander(titulo, expanded=ativa):
+                    if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
+                                 key=f"foco_{codigo}", disabled=ativa):
                         st.session_state["farol_v2_concentracao"] = str(codigo)
+                        st.session_state["farol_concentracao_expandida"] = str(codigo)
                         st.rerun()
-                    if PODE_EDITAR_FAROL:
-                        nota_editada = st.text_area("Observação do analista", value=texto_nota,
-                                                    key=f"nota_{codigo}_{chave_nota}", height=90,
-                                                    placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
-                        if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
-                            try:
-                                salvar_observacao_concentracao(chave_nota, municipio_nota,
-                                    float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
-                                st.success("Acompanhamento salvo.")
-                                st.rerun()
-                            except Exception as erro:
-                                st.error(f"Não foi possível salvar: {erro}")
-                    else:
-                        st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
-                    exibir_relatorio_concentracao(
-                        codigo, concentracoes, pontos_cluster, proximidades,
-                        df_eventos, int(raio_operacional), bairros
-                    )
+                    if ativa:
+                        if PODE_EDITAR_FAROL:
+                            nota_editada = st.text_area("Observação do analista", value=texto_nota,
+                                                        key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                        placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
+                            if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                                try:
+                                    salvar_observacao_concentracao(chave_nota, municipio_nota,
+                                        float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
+                                    st.success("Acompanhamento salvo.")
+                                    st.rerun()
+                                except Exception as erro:
+                                    st.error(f"Não foi possível salvar: {erro}")
+                        else:
+                            st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
+                        exibir_relatorio_concentracao(
+                            codigo, concentracoes, pontos_cluster, proximidades,
+                            df_eventos, int(raio_operacional), bairros
+                        )
         # Disponível também quando não há concentrações no filtro atual.
         if concentracoes.empty:
             resumo_pdf = concentracoes.copy()
