@@ -1753,6 +1753,25 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
     return os_grupo, ativos, pd.DataFrame(eventos_relacionados)
 
 
+
+def descricao_eventos_pdf(eventos_relacionados):
+    """Resumo Serviço / Código do Ativo dos eventos efetivamente relacionados à concentração."""
+    if eventos_relacionados is None or eventos_relacionados.empty:
+        return "Nenhum evento relacionado"
+    descricoes = []
+    for _, evento in eventos_relacionados.iterrows():
+        servico = str(evento.get("Serviço", "") or "").strip()
+        ativo = str(evento.get("Código do Ativo", "") or "").strip()
+        if servico.lower() in ("nan", "none", "nat"):
+            servico = ""
+        if ativo.lower() in ("nan", "none", "nat"):
+            ativo = ""
+        descricao = " / ".join(parte for parte in (servico, ativo) if parte)
+        if descricao and descricao not in descricoes:
+            descricoes.append(descricao)
+    return "; ".join(descricoes) if descricoes else "Evento sem serviço/ativo informado"
+
+
 def texto_relatorio(valor):
     if valor is None or pd.isna(valor):
         return "—"
@@ -1864,7 +1883,7 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
             p(f"Município: {cidades_ficha or 'Não informado'}", normal), Spacer(1, .18*cm),
             p(f"Bairros: {texto_relatorio(concentracao['BAIRROS'])}", normal), Spacer(1, .18*cm),
             p(f"Equipamentos próximos: {len(ativos)}", normal), Spacer(1, .18*cm),
-            p(f"Eventos relacionados: {len(eventos_relacionados)}", normal), Spacer(1, .18*cm),
+            p(f"Eventos relacionados: {descricao_eventos_pdf(eventos_relacionados)}", normal), Spacer(1, .18*cm),
             p(f"Raio operacional: {raio} m", normal), Spacer(1, .25*cm),
             p("A imagem mostra a concentração e seus equipamentos próximos. A proximidade não comprova vínculo hidráulico ou causalidade.", pequeno),
         ]
@@ -2432,9 +2451,15 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 Spacer(1, 5),
                 Paragraph("<b>Acompanhamento:</b> " + xml_escape(nota or "Sem observação registrada"), pequeno),
             ]
-            if "EVENTOS_RELACIONADOS" in c:
-                resumo.extend([Spacer(1, 4), Paragraph("<b>Eventos relacionados:</b> " +
-                               xml_escape(str(int(float(c["EVENTOS_RELACIONADOS"]))) if pd.notna(c["EVENTOS_RELACIONADOS"]) else "0"), pequeno)])
+            # Usar os registros dos eventos associados à concentração, e não somente sua quantidade.
+            _, _, eventos_da_concentracao = dados_relatorio_concentracao(
+                c, pontos_cluster, proximidades, eventos, bairros
+            )
+            resumo.extend([
+                Spacer(1, 4),
+                Paragraph("<b>Eventos relacionados:</b> " +
+                          xml_escape(descricao_eventos_pdf(eventos_da_concentracao)), pequeno),
+            ])
             resumo.extend([Spacer(1, 7), Paragraph("<b>Ordens de serviço vinculadas</b>", normal), Spacer(1, 4)])
             linhas_os = []
             if grupo.empty:
