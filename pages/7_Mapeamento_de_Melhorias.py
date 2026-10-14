@@ -353,14 +353,14 @@ def obter_cliente_google():
 
 
 @st.cache_resource(show_spinner=False)
-def obter_planilha():
-    planilha = obter_cliente_google().open_by_key(SPREADSHEET_ID)
+def obter_planilha(spreadsheet_id):
+    planilha = obter_cliente_google().open_by_key(spreadsheet_id)
 
     return planilha
 
 
 def obter_aba(nome, cabecalho):
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     if planilha.id != SPREADSHEET_ID:
         st.error("Conexão bloqueada: planilha diferente da configurada para o Farol.")
         st.stop()
@@ -392,17 +392,17 @@ def obter_aba(nome, cabecalho):
 
 
 @st.cache_resource(ttl=600, show_spinner=False)
-def obter_aba_para_leitura(nome):
+def obter_aba_para_leitura(nome, spreadsheet_id):
     """Reutiliza o objeto Worksheet; não lê toda a planilha para conferir cabeçalhos."""
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     if planilha.id != SPREADSHEET_ID:
         raise PermissionError("A planilha conectada não é a planilha autorizada do Farol.")
     return planilha.worksheet(nome)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def carregar_aba(nome, cabecalho):
-    aba = obter_aba_para_leitura(nome)
+def carregar_aba(nome, cabecalho, spreadsheet_id=None):
+    aba = obter_aba_para_leitura(nome, spreadsheet_id or SPREADSHEET_ID)
     # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
     # A conversão automática do gspread interpreta a vírgula como milhar
     # e transforma -5,18817 em -518817, invalidando os marcadores.
@@ -452,7 +452,7 @@ def invalidar_cache():
 def carregar_observacoes_concentracoes():
     """Lê anotações persistentes; operador não cria nem altera planilhas."""
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_OBSERVACOES)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_OBSERVACOES)
     except gspread.WorksheetNotFound:
         return pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
     registros = aba.get_all_records(numericise_ignore=["all"])
@@ -481,7 +481,7 @@ def identificar_observacao(concentracao, os_grupo, observacoes, raio_m):
 
 def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
     exigir_edicao_farol()
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     cab = ["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"]
     try:
         aba = planilha.worksheet(NOME_ABA_OBSERVACOES)
@@ -505,7 +505,7 @@ def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
 def carregar_datas_atualizacao():
     """Consulta apenas duas linhas de metadados; nunca lê as bases para obter datas."""
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_ATUALIZACOES)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_ATUALIZACOES)
         linhas = aba.get_all_values()
     except gspread.WorksheetNotFound:
         return {}
@@ -520,7 +520,7 @@ def registrar_atualizacao_base(tipo):
     exigir_edicao_farol()
     if tipo not in {"PONTOS", "EVENTOS"}:
         raise ValueError("Tipo de base desconhecido.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     try:
         aba = planilha.worksheet(NOME_ABA_ATUALIZACOES)
     except gspread.WorksheetNotFound:
@@ -555,7 +555,7 @@ def limpar_dados_operacionais_admin():
     """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
     if not verificar_autenticacao() or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
         raise PermissionError("Somente administradores podem limpar os dados operacionais.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     resultados = []
     abas = (
         (NOME_ABA_PONTOS, CABECALHO_PONTOS),
@@ -789,7 +789,7 @@ def carregar_areas_editadas():
     Aba separada também permite proteger uma correção para campo vazio.
     """
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_AREAS_PROTEGIDAS)
     except gspread.WorksheetNotFound:
         return {}
     linhas = aba.get_all_values()
@@ -808,7 +808,7 @@ def registrar_area_editada(chave, area):
     exigir_edicao_farol()
     if not chave:
         raise ValueError("Não foi possível identificar o evento para proteger a área.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     try:
         aba = planilha.worksheet(NOME_ABA_AREAS_PROTEGIDAS)
     except gspread.WorksheetNotFound:
