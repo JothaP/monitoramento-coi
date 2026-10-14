@@ -50,19 +50,19 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional - Módulo 3",
+    page_title="Farol Operacional V2 - Demonstração (Módulo 7)",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# O Farol (módulo 3) é autorizado para os três perfis válidos.
-# A autenticação continua obrigatória; o módulo 7 permanece privado.
+# Módulo 7 de demonstração: apenas admin e usuario.
+# Dados totalmente separados da planilha de produção.
 if not verificar_autenticacao():
     st.error("Sessão não autenticada. Entre pelo Hub Central.")
     st.stop()
 
 PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
-if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
+if PERFIL_FAROL not in {"admin", "usuario"}:
     st.error("Seu perfil não está autorizado a acessar o Farol Operacional.")
     st.stop()
 
@@ -73,7 +73,14 @@ def exigir_edicao_farol():
     if not PODE_EDITAR_FAROL:
         raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
-SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+# Definir em Streamlit Cloud > App settings > Secrets:
+# farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
+# Não utilizar a planilha de produção como fallback.
+SPREADSHEET_ID_PRODUCAO = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+SPREADSHEET_ID = str(st.secrets.get("farol_v2_spreadsheet_id", "")).strip()
+if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_PRODUCAO:
+    st.error("Módulo 7 protegido: configure farol_v2_spreadsheet_id com o ID de uma CÓPIA independente da planilha de produção em Secrets.")
+    st.stop()
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -2627,7 +2634,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
 # ============================================================
 
 st.title("Farol Operacional")
-st.caption("O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
+st.caption("🧪 AMBIENTE DE DEMONSTRAÇÃO — dados isolados do Módulo 3 | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
