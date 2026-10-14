@@ -1,3850 +1,2934 @@
 import io
+import csv
 import json
+import os
+import re
 import math
-import html
-from datetime import date, datetime
-from uuid import uuid4
+import hashlib
+import zipfile
+import sqlite3
+import threading
+import tempfile
+import time as tempo_execucao
+import shutil
+from pathlib import Path
+from xml.sax.saxutils import escape as xml_escape
+from html import escape as html_escape
+from zoneinfo import ZoneInfo
+import unicodedata
+from datetime import datetime, date, time as horario
+import xml.etree.ElementTree as ET
 
-import folium
 import gspread
 import pandas as pd
 import streamlit as st
+import folium
+import plotly.express as px
+from shapely import wkb
+from shapely.ops import transform as transformar_geometria
+from pyproj import CRS, Transformer
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Image, PageBreak
+from reportlab.pdfbase import pdfmetrics
+from reportlab.graphics.shapes import Drawing, Circle, String, Rect, PolyLine
+from reportlab.pdfbase.ttfonts import TTFont
 
 from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
+from branca.element import Element
 
-from auth import verificar_autenticacao
+from auth import verificar_autenticacao, tem_acesso_modulo
 
 
 # ============================================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO
 # ============================================================
 
 st.set_page_config(
-    page_title="Mapeamento de Melhorias - COI",
-    page_icon="🗺️",
+    page_title="Farol Operacional",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-
-# ============================================================
-# AUTENTICAÇÃO
-# ============================================================
-
-verificar_autenticacao()
-
-if not st.session_state.get("autenticado"):
-    st.warning(
-        "Você precisa estar autenticado para acessar este módulo."
-    )
-
-    if st.button("🏠 Voltar ao Menu Principal"):
-        st.switch_page("app.py")
-
+if not verificar_autenticacao() or not tem_acesso_modulo("3"):
+    st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
     st.stop()
 
+PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
+PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
 
-# ============================================================
-# RESTRIÇÃO — ADMINISTRADORES
-# ============================================================
+def exigir_edicao_farol():
+    """Bloqueia mutações mesmo quando funções são chamadas sem seus botões."""
+    if not PODE_EDITAR_FAROL:
+        raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
-if st.session_state.get("perfil") != "admin":
+SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
 
-    st.error(
-        "Este módulo está disponível exclusivamente para "
-        "administradores."
-    )
+NOME_ABA_POCOS = "POCOS"
+NOME_ABA_LOGGERS = "LOGGERS"
+NOME_ABA_PONTOS = "PONTOS"
+NOME_ABA_EVENTOS = "EVENTOS"
+NOME_ABA_CONTROLE = "CONTROLE_FAROL"
+NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
+NOME_ABA_AREAS_PROTEGIDAS = "FAROL_AREAS_EDITADAS"
+NOME_ABA_ATUALIZACOES = "FAROL_ATUALIZACOES"
+FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
+RESET_HORARIO = horario(0, 1)
+_RESET_LOCK = threading.Lock()
 
-    if st.button(
-        "🏠 Voltar ao Menu Principal",
-        use_container_width=True,
-    ):
-        st.switch_page("app.py")
+RAIZ_PROJETO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DIRETORIO_KMZ = os.path.join(RAIZ_PROJETO, "geodados", "municipios")
+DIRETORIO_DADOS = os.path.join(RAIZ_PROJETO, "dados")
+ARQUIVO_POCOS_CSV = os.path.join(DIRETORIO_DADOS, "pocos.csv")
+ARQUIVO_LOGGERS_CSV = os.path.join(DIRETORIO_DADOS, "loggers.csv")
+ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
+RAIO_OPERACIONAL_PADRAO = 500
+RAIO_CONCENTRACAO_PADRAO = 500
 
-    st.stop()
+CABECALHO_POCOS = [
+    "ID_POCO",
+    "IDENTIFICACAO_ATIVO",
+    "NOME_POCO",
+    "MUNICIPIO",
+    "LATITUDE",
+    "LONGITUDE",
+]
 
-# ============================================================
-# CONFIGURAÇÃO DA PLANILHA
-# ============================================================
+CABECALHO_LOGGERS = [
+    "ID_LOGGER",
+    "IDENTIFICACAO_ATIVO",
+    "ENDERECO",
+    "MUNICIPIO",
+    "LATITUDE",
+    "LONGITUDE",
+]
 
-# ATENÇÃO:
-# Esta planilha é EXCLUSIVA do Módulo 7.
-# Não utilizar o ID da planilha do Módulo 1.
-
-SPREADSHEET_ID = st.secrets.get(
-    "MAPEAMENTO_MELHORIAS_SPREADSHEET_ID",
-    "",
-)
-
-REGISTRO_SHEET = "Registro"
-HISTORICO_SHEET = "Historico"
-
-
-# ============================================================
-# ESTRUTURA DA ABA REGISTRO
-# ============================================================
-
-REGISTRO_HEADERS = [
-    "ID",
+CABECALHO_PONTOS = [
+    "Nº da O.S",
     "Matrícula",
-    "Endereço",
+    "Cidade",
     "Bairro",
     "Latitude",
     "Longitude",
-    "Parecer",
-    "Data de Registro",
-    "Tratativa 1",
-    "Executado?",
-    "Retorno",
-    "Responsável",
-    "Grau de Impacto",
-    "Resolvido",
+    "Status OS",
+    "Dt. Emissão",
+    "Serviço Executado",
+]
+
+CABECALHO_EVENTOS = [
+    "Data",
+    "Controlador",
+    "Status",
+    "Unidade",
+    "Cidade",
+    "Regional",
+    "Código do Ativo",
+    "Serviço",
+    "Equipe",
+    "Supervisor",
+    "Líder",
+    "Oracle Field",
+    "SAP",
+    "Protocolo",
+    "Link de Localização",
+    "Início",
+    "Prev. Término",
+    "Término Real",
+    "Tempo de Atendimento",
+    "Prazo de Normalização",
+    "Áreas Impactadas",
+    "Economias Afetadas",
+    "% Economias",
+    "Governança",
+    "Descrição do Serviço",
+    "Data de Criação",
 ]
 
 
 # ============================================================
-# ESTRUTURA DA ABA HISTORICO
+# NORMALIZAÇÃO / UTILITÁRIOS
 # ============================================================
 
-HISTORICO_HEADERS = [
-    "ID",
-    "Matrícula",
-    "N. O.S",
-    "Data de Abertura",
-    "Pressão",
-    "Pontual",
-]
-
-
-REGISTROS_POR_PAGINA = 10
-
-
-# ============================================================
-# ESTILO
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    .kpi-card {
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 12px;
-        padding: 15px 18px;
-        min-height: 115px;
-        background: rgba(128,128,128,0.04);
-    }
-
-    .kpi-title {
-        font-size: 0.82rem;
-        opacity: 0.70;
-        margin-bottom: 7px;
-    }
-
-    .kpi-value {
-        font-size: 1.35rem;
-        font-weight: 700;
-        line-height: 1.25;
-    }
-
-    .registro-card {
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 12px;
-        padding: 12px 14px;
-        margin-bottom: 10px;
-    }
-
-    .registro-label {
-        font-size: 0.75rem;
-        opacity: 0.65;
-    }
-
-    .registro-value {
-        font-weight: 600;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# UTILITÁRIOS
-# ============================================================
-
-def texto(valor):
+def normalizar_texto(valor):
     if valor is None:
         return ""
+    texto = str(valor).strip().upper()
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(c for c in texto if not unicodedata.combining(c))
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
 
-    if isinstance(valor, float) and math.isnan(valor):
+
+def normalizar_cabecalho(valor):
+    texto = normalizar_texto(valor)
+    texto = texto.replace("º", "O")
+    texto = re.sub(r"[^A-Z0-9]+", "", texto)
+    return texto
+
+
+def limpar_valor(valor):
+    if pd.isna(valor):
         return ""
-
-    return str(valor).strip()
-
-
-def escape(valor):
-    return html.escape(texto(valor))
-
-
-def gerar_id():
-    return uuid4().hex[:12]
+    if isinstance(valor, (pd.Timestamp, datetime, date)):
+        return valor.strftime("%d/%m/%Y %H:%M:%S") if hasattr(valor, "hour") else valor.strftime("%d/%m/%Y")
+    texto = str(valor).strip()
+    if texto.lower() in {"nan", "nat", "none"}:
+        return ""
+    return texto
 
 
-def parse_float(valor, default=None):
-    """Converte números aceitando vírgula/ponto e sinais Unicode."""
+def parse_float(valor):
+    if valor is None or (isinstance(valor, float) and math.isnan(valor)):
+        return None
+    texto = str(valor).strip().replace(" ", "")
+    if not texto:
+        return None
     try:
-        if valor is None:
-            return default
-
-        if isinstance(valor, bool):
-            return default
-
-        if isinstance(valor, (int, float)):
-            if isinstance(valor, float) and math.isnan(valor):
-                return default
-            return float(valor)
-
-        valor = texto(valor)
-        if not valor:
-            return default
-
-        # Google Sheets pode devolver o sinal de menos como caractere
-        # Unicode. Também removemos espaços comuns e não separáveis.
-        valor = (
-            valor.replace("\u2212", "-")
-            .replace("\u2012", "-")
-            .replace("\u2013", "-")
-            .replace("\u2014", "-")
-            .replace("\u00a0", "")
-            .strip()
-        )
-        valor = "".join(valor.split())
-
-        if valor.lower() in (
-            "nan",
-            "none",
-            "nat",
-            "null",
-        ):
-            return default
-
-        # Aceita tanto -5,0892 quanto -5.0892.
-        # Quando os dois separadores aparecem, considera o último
-        # separador como decimal e os anteriores como milhares.
-        if "," in valor and "." in valor:
-            if valor.rfind(",") > valor.rfind("."):
-                valor = valor.replace(".", "")
-                valor = valor.replace(",", ".")
+        # Trata 5,1234 e 5.1234, além de 1.234,56.
+        if "," in texto and "." in texto:
+            if texto.rfind(",") > texto.rfind("."):
+                texto = texto.replace(".", "").replace(",", ".")
             else:
-                valor = valor.replace(",", "")
-        elif "," in valor:
-            valor = valor.replace(",", ".")
-
-        return float(valor)
-
-    except (ValueError, TypeError):
-        return default
-
-
-def converter_float(valor):
-    return parse_float(valor, default=None)
-
-
-def normalizar_coordenada(valor, tipo="lat"):
-    """Normaliza coordenadas para float com até 6 casas decimais."""
-    num = parse_float(valor, default=None)
-
-    if num is None:
+                texto = texto.replace(",", "")
+        else:
+            texto = texto.replace(",", ".")
+        return float(texto)
+    except Exception:
         return None
 
-    if tipo == "lat" and not (-90.0 <= num <= 90.0):
+
+def novo_id(prefixo):
+    return f"{prefixo}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+
+
+def distancia_metros(lat1, lon1, lat2, lon2):
+    if None in (lat1, lon1, lat2, lon2):
+        return None
+    try:
+        lat1, lon1, lat2, lon2 = map(float, (lat1, lon1, lat2, lon2))
+    except Exception:
         return None
 
-    if tipo == "lon" and not (-180.0 <= num <= 180.0):
-        return None
-
-    if num == 0.0:
-        return None
-
-    return round(float(num), 6)
-
-
-def coordenadas_validas(latitude, longitude):
-    lat = normalizar_coordenada(latitude, "lat")
-    lon = normalizar_coordenada(longitude, "lon")
-
-    return lat is not None and lon is not None
+    raio = 6371000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * raio * math.asin(min(1, math.sqrt(a)))
 
 
-def formatar_data(valor):
-    if not texto(valor):
-        return "—"
-
-    try:
-        data = pd.to_datetime(
-            valor,
-            errors="coerce",
-        )
-
-        if pd.isna(data):
-            return texto(valor)
-
-        return data.strftime("%d/%m/%Y")
-
-    except Exception:
-        return texto(valor)
+def distancia_formatada(metros):
+    if metros is None:
+        return ""
+    if metros < 1000:
+        return f"{metros:.0f} m"
+    return f"{metros / 1000:.2f} km"
 
 
-def formatar_data_hora(valor):
-    if not texto(valor):
-        return "—"
-
-    try:
-        data = pd.to_datetime(
-            valor,
-            errors="coerce",
-        )
-
-        if pd.isna(data):
-            return texto(valor)
-
-        return data.strftime(
-            "%d/%m/%Y %H:%M"
-        )
-
-    except Exception:
-        return texto(valor)
+def slug_hash(*valores):
+    base = "|".join(normalizar_texto(v) for v in valores)
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
-def valor_data(valor):
-    if not texto(valor):
-        return date.today()
-
-    try:
-        data = pd.to_datetime(
-            valor,
-            errors="coerce",
-        )
-
-        if pd.isna(data):
-            return date.today()
-
-        return data.date()
-
-    except Exception:
-        return date.today()
+def limpar_nome_bairro(valor):
+    texto = normalizar_texto(valor)
+    texto = re.sub(r"\s*\(\s*PARCIAL\s*\)\s*$", "", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
 
 
-def valor_datetime(valor):
-    if not texto(valor):
-        return datetime.now()
+def indice_nomes_bairros(bairros_geograficos, municipio):
+    """Catálogo restrito ao município, sem correspondência aproximada arriscada."""
+    cidade = normalizar_municipio(municipio)
+    nomes = set()
+    for item in (bairros_geograficos or []):
+        if normalizar_municipio(item.get("municipio", "")) == cidade:
+            nome = limpar_nome_bairro(item.get("nome_normalizado") or item.get("nome"))
+            if nome:
+                nomes.add(nome)
+    return nomes
 
-    try:
-        data = pd.to_datetime(
-            valor,
-            errors="coerce",
-        )
 
-        if pd.isna(data):
-            return datetime.now()
+def resolver_nome_bairro(nome, nomes_disponiveis):
+    """Equivalência conservadora: nomes exatos ou prefixo genérico 'Bairro'."""
+    chave = limpar_nome_bairro(nome)
+    if chave in nomes_disponiveis:
+        return chave
+    sem_prefixo = re.sub(r"^BAIRRO\s+", "", chave).strip()
+    if sem_prefixo and sem_prefixo in nomes_disponiveis:
+        return sem_prefixo
+    return chave
 
-        return data.to_pydatetime()
 
-    except Exception:
-        return datetime.now()
+def evento_abrange_municipio(valor):
+    """Identifica abrangência municipal explícita, sem inferir por bairro vazio."""
+    texto = normalizar_texto(valor)
+    return bool(re.search(
+        r"\b(?:TODO\s+O\s+MUNICIPIO|MUNICIPIO\s+INTEIRO|"
+        r"TODA\s+A\s+CIDADE|CIDADE\s+INTEIRA|"
+        r"TODO\s+O\s+TERRITORIO\s+MUNICIPAL|"
+        r"TODOS\s+OS\s+BAIRROS)\b", texto
+    ))
+
+
+def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
+    """Lê bairros em listas, linhas e rótulos; separa 'e' só se ambos existirem no GPKG.
+
+    Nunca usa fuzzy matching nem divide nomes compostos sem confirmação.
+    Retorna chaves normalizadas para mapa, cruzamento de O.S. e relatórios.
+    """
+    if valor is None or str(valor).strip().lower() in ("", "nan", "none"):
+        return []
+    nomes = indice_nomes_bairros(bairros_geograficos, municipio)
+    if evento_abrange_municipio(valor):
+        return [{"bairro": nome, "parcial": False, "original": "Todo o município"}
+                for nome in sorted(nomes)]
+    texto = str(valor).replace("\r", "\n")
+    texto = re.sub(r"(?i)\bBAIRROS?\s*(?:IMPACTADOS?|AFETADOS?)?\s*:", "\n", texto)
+    texto = re.sub(r"(?i)\bAREAS?\s+IMPACTADAS?\s*:", "\n", texto)
+    partes = re.split(r"[,;\n]+", texto)
+    saida = []
+    vistos = set()
+    for parte in partes:
+        original = parte.strip(" \t-*•")
+        if not original:
+            continue
+        # Desconsidera linha isolada com o nome da cidade, quando a descrição o inclui.
+        if municipio and normalizar_municipio(original) == normalizar_municipio(municipio):
+            continue
+        parcial = bool(re.search(r"\(\s*PARCIAL\s*\)", original, flags=re.I))
+        chave = resolver_nome_bairro(original, nomes)
+        candidatos = [(chave, original)]
+        if nomes and chave not in nomes:
+            # Só divide 'A e B' se os dois nomes resultantes estiverem no município.
+            pedacos = re.split(r"\s+E\s+", chave)
+            if len(pedacos) == 2:
+                esquerda = resolver_nome_bairro(pedacos[0], nomes)
+                direita = resolver_nome_bairro(pedacos[1], nomes)
+                if esquerda in nomes and direita in nomes:
+                    candidatos = [(esquerda, pedacos[0]), (direita, pedacos[1])]
+        for bairro, origem in candidatos:
+            if bairro and bairro not in vistos:
+                vistos.add(bairro)
+                saida.append({"bairro": bairro, "parcial": parcial, "original": origem})
+    return saida
 
 
 # ============================================================
 # GOOGLE SHEETS
 # ============================================================
 
-@st.cache_resource
-def conectar_google_sheets(spreadsheet_id):
-
-    if not spreadsheet_id:
-        raise ValueError(
-            "MAPEAMENTO_MELHORIAS_SPREADSHEET_ID "
-            "não foi configurado nos secrets."
-        )
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-
-    credentials_dict = json.loads(
-        st.secrets["gcp_json"]
+@st.cache_resource(show_spinner=False)
+def obter_cliente_google():
+    dados = st.secrets["gcp_json"]
+    if isinstance(dados, str):
+        dados = json.loads(dados)
+    else:
+        dados = dict(dados)
+    credenciais = Credentials.from_service_account_info(
+        dados,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ],
     )
-
-    credentials = (
-        Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=scopes,
-        )
-    )
-
-    gc = gspread.authorize(
-        credentials
-    )
-
-    return gc.open_by_key(
-        spreadsheet_id
-    )
+    return gspread.authorize(credenciais)
 
 
-def garantir_cabecalho(
-    worksheet,
-    headers,
-):
-    valores = worksheet.get_all_values()
+@st.cache_resource(show_spinner=False)
+def obter_planilha():
+    planilha = obter_cliente_google().open_by_key(SPREADSHEET_ID)
 
-    if not valores:
-        worksheet.append_row(
-            headers,
-            value_input_option="USER_ENTERED",
-        )
-        return
-
-    atual = [
-        texto(x)
-        for x in valores[0]
-    ]
-
-    if atual != headers:
-        worksheet.clear()
-
-        worksheet.append_row(
-            headers,
-            value_input_option="USER_ENTERED",
-        )
+    return planilha
 
 
-@st.cache_resource
-def obter_planilhas():
-
-    try:
-        planilha = conectar_google_sheets(
-            SPREADSHEET_ID
-        )
-
-        try:
-            registro_ws = planilha.worksheet(
-                REGISTRO_SHEET
-            )
-        except gspread.WorksheetNotFound:
-            registro_ws = planilha.add_worksheet(
-                title=REGISTRO_SHEET,
-                rows=1000,
-                cols=len(REGISTRO_HEADERS),
-            )
-
-        try:
-            historico_ws = planilha.worksheet(
-                HISTORICO_SHEET
-            )
-        except gspread.WorksheetNotFound:
-            historico_ws = planilha.add_worksheet(
-                title=HISTORICO_SHEET,
-                rows=2000,
-                cols=len(HISTORICO_HEADERS),
-            )
-
-        garantir_cabecalho(
-            registro_ws,
-            REGISTRO_HEADERS,
-        )
-
-        garantir_cabecalho(
-            historico_ws,
-            HISTORICO_HEADERS,
-        )
-
-        return (
-            registro_ws,
-            historico_ws,
-        )
-
-    except Exception as exc:
-
-        st.error(
-            "Não foi possível acessar a planilha "
-            "**Mapeamento de Melhorias**."
-        )
-
-        st.exception(exc)
-
-        st.info(
-            "Verifique o compartilhamento da planilha "
-            "com a conta de serviço e o valor de "
-            "`MAPEAMENTO_MELHORIAS_SPREADSHEET_ID`."
-        )
-
+def obter_aba(nome, cabecalho):
+    planilha = obter_planilha()
+    if planilha.id != SPREADSHEET_ID:
+        st.error("Conexão bloqueada: planilha diferente da configurada para o Farol.")
         st.stop()
 
-
-def carregar_worksheet(
-    worksheet,
-    headers,
-):
-    """Carrega a aba preservando os valores brutos do Google Sheets.
-
-    Usamos get_all_values() em vez de get_all_records() para que a
-    configuração regional da planilha não altere a interpretação de
-    coordenadas com vírgula decimal. Latitude e Longitude são convertidas
-    explicitamente depois da leitura.
-    """
-    valores = worksheet.get_all_values()
-
-    if not valores or len(valores) <= 1:
-        return pd.DataFrame(columns=headers)
-
-    cabecalho = [texto(valor) for valor in valores[0]]
-    indice_coluna = {
-        nome: indice
-        for indice, nome in enumerate(cabecalho)
-    }
-
-    registros = []
-
-    for linha in valores[1:]:
-        registro = {}
-
-        for coluna in headers:
-            indice = indice_coluna.get(coluna)
-            if indice is None or indice >= len(linha):
-                registro[coluna] = ""
-            else:
-                registro[coluna] = linha[indice]
-
-        registros.append(registro)
-
-    df = pd.DataFrame(
-        registros,
-        columns=headers,
-    )
-
-    # A normalização acontece imediatamente após a leitura dos valores
-    # brutos. Assim, tanto "-5,0892" quanto "-5.0892" chegam ao mapa
-    # como float Python, independentemente da localidade do Sheets.
-    if "Latitude" in df.columns:
-        df["Latitude"] = df["Latitude"].apply(
-            lambda valor: normalizar_coordenada(valor, "lat")
-        )
-
-    if "Longitude" in df.columns:
-        df["Longitude"] = df["Longitude"].apply(
-            lambda valor: normalizar_coordenada(valor, "lon")
-        )
-
-    return df[headers].copy()
-
-
-def carregar_dados():
-
-    registro_ws, historico_ws = (
-        obter_planilhas()
-    )
-
-    df_registro = carregar_worksheet(
-        registro_ws,
-        REGISTRO_HEADERS,
-    )
-
-    df_historico = carregar_worksheet(
-        historico_ws,
-        HISTORICO_HEADERS,
-    )
-
-    return (
-        registro_ws,
-        historico_ws,
-        df_registro,
-        df_historico,
-    )
-
-
-# ============================================================
-# LOCALIZAÇÃO DE LINHAS
-# ============================================================
-
-def localizar_linha(
-    worksheet,
-    identificador,
-):
-
     try:
-        celula = worksheet.find(
-            str(identificador)
+        aba = planilha.worksheet(nome)
+
+    except gspread.WorksheetNotFound:
+        st.error(
+            f"ABA NÃO ENCONTRADA: {nome} | "
+            f"PLANILHA: {planilha.title} | "
+            f"ID: {planilha.id}"
         )
+        st.stop()
 
-        if celula:
-            return celula.row
+    valores = aba.get_all_values()
+    if not valores:
+        if PODE_EDITAR_FAROL:
+            aba.update("A1", [cabecalho])
+    elif [normalizar_cabecalho(x) for x in valores[0]] != [normalizar_cabecalho(x) for x in cabecalho]:
+        # Não apaga dados existentes. Apenas garante que as colunas mínimas estejam presentes.
+        cab_atual = valores[0]
+        faltantes = [c for c in cabecalho if normalizar_cabecalho(c) not in {normalizar_cabecalho(x) for x in cab_atual}]
+        if faltantes and PODE_EDITAR_FAROL:
+            nova_linha = cab_atual + faltantes
+            aba.resize(cols=max(aba.col_count, len(nova_linha)))
+            aba.update("A1", [nova_linha])
+    return aba
 
+
+@st.cache_resource(ttl=600, show_spinner=False)
+def obter_aba_para_leitura(nome):
+    """Reutiliza o objeto Worksheet; não lê toda a planilha para conferir cabeçalhos."""
+    planilha = obter_planilha()
+    if planilha.id != SPREADSHEET_ID:
+        raise PermissionError("A planilha conectada não é a planilha autorizada do Farol.")
+    return planilha.worksheet(nome)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def carregar_aba(nome, cabecalho):
+    aba = obter_aba_para_leitura(nome)
+    # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
+    # A conversão automática do gspread interpreta a vírgula como milhar
+    # e transforma -5,18817 em -518817, invalidando os marcadores.
+    registros = aba.get_all_records(numericise_ignore=["all"])
+    if not registros:
+        return pd.DataFrame(columns=cabecalho)
+    return pd.DataFrame(registros)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def carregar_cadastro_local(caminho, assinatura, cabecalho):
+    """Lê o CSV versionado no GitHub; a assinatura atualiza o cache após um deploy."""
+    del assinatura
+    try:
+        dados = pd.read_csv(caminho, sep=",", encoding="utf-8-sig", dtype=str, keep_default_na=False)
+    except UnicodeDecodeError as erro:
+        raise ValueError(f"Arquivo CSV precisa estar em UTF-8: {os.path.basename(caminho)}") from erro
+    faltantes = [col for col in cabecalho if col not in dados.columns]
+    if faltantes:
+        raise ValueError(f"{os.path.basename(caminho)}: colunas ausentes: {', '.join(faltantes)}")
+    return dados.reindex(columns=cabecalho).fillna("")
+
+
+def carregar_cadastro_github(caminho, cabecalho):
+    if not os.path.isfile(caminho):
+        raise FileNotFoundError(
+            f"Arquivo não encontrado: dados/{os.path.basename(caminho)}. "
+            "Envie os dois CSV à pasta dados/ na raiz do repositório."
+        )
+    info = os.stat(caminho)
+    return carregar_cadastro_local(caminho, (info.st_size, info.st_mtime_ns), tuple(cabecalho))
+
+
+def invalidar_cache():
+    carregar_aba.clear()
+    criar_concentracoes.clear()
+    pontos_proximos_concentracoes.clear()
+    eventos_georreferenciados.clear()
+    filtrar_ativos_proximos.clear()
+
+
+# O reset automático de PONTOS e EVENTOS foi desativado.
+# As duas abas permanecem preservadas até que um usuário autorizado
+# faça uma operação explícita de importação/atualização.
+
+@st.cache_data(ttl=30, show_spinner=False)
+def carregar_observacoes_concentracoes():
+    """Lê anotações persistentes; operador não cria nem altera planilhas."""
+    try:
+        aba = obter_planilha().worksheet(NOME_ABA_OBSERVACOES)
+    except gspread.WorksheetNotFound:
+        return pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
+    registros = aba.get_all_records(numericise_ignore=["all"])
+    return pd.DataFrame(registros) if registros else pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
+
+
+def identificar_observacao(concentracao, os_grupo, observacoes, raio_m):
+    """Associa observações por município e centro próximo, mesmo que o ID C001 mude."""
+    cidades = sorted({normalizar_municipio(v) for v in os_grupo.get("Cidade", []) if str(v).strip()})
+    municipio = cidades[0] if cidades else ""
+    lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+    melhor = None
+    menor_distancia = float("inf")
+    for _, r in observacoes.iterrows():
+        if normalizar_municipio(r.get("MUNICIPIO", "")) != municipio:
+            continue
+        olat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        olon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if olat is None or olon is None:
+            continue
+        distancia = distancia_metros(lat, lon, olat, olon)
+        if distancia is not None and distancia < menor_distancia and distancia <= min(float(raio_m), 300):
+            menor_distancia, melhor = distancia, r
+    return municipio, (str(melhor.get("CHAVE", "")) if melhor is not None else ""), (str(melhor.get("OBSERVACAO", "")) if melhor is not None else "")
+
+
+def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
+    exigir_edicao_farol()
+    planilha = obter_planilha()
+    cab = ["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"]
+    try:
+        aba = planilha.worksheet(NOME_ABA_OBSERVACOES)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_OBSERVACOES, rows=1000, cols=len(cab))
+        aba.update(range_name="A1:G1", values=[cab], value_input_option="RAW")
+    if not chave:
+        chave = hashlib.sha256(f"{municipio}|{lat:.5f}|{lon:.5f}|{datetime.now(FUSO_FAROL).isoformat()}".encode()).hexdigest()[:20]
+    valores = [chave, municipio, str(lat), str(lon), observacao.strip(), datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M"), st.session_state.get("usuario_logado", "")]
+    linhas = aba.get_all_values()
+    for i, linha in enumerate(linhas[1:], start=2):
+        if linha and linha[0] == chave:
+            aba.update(range_name=f"A{i}:G{i}", values=[valores], value_input_option="RAW")
+            carregar_observacoes_concentracoes.clear()
+            return
+    aba.append_row(valores, value_input_option="RAW")
+    carregar_observacoes_concentracoes.clear()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def carregar_datas_atualizacao():
+    """Consulta apenas duas linhas de metadados; nunca lê as bases para obter datas."""
+    try:
+        aba = obter_planilha().worksheet(NOME_ABA_ATUALIZACOES)
+        linhas = aba.get_all_values()
+    except gspread.WorksheetNotFound:
+        return {}
     except Exception:
-        pass
+        return {}
+    return {linha[0].strip().upper(): linha[1].strip()
+            for linha in linhas[1:] if len(linha) >= 2 and linha[0].strip()}
 
+
+def registrar_atualizacao_base(tipo):
+    """Persiste data/hora real de importação, inclusive entre sessões e reinícios."""
+    exigir_edicao_farol()
+    if tipo not in {"PONTOS", "EVENTOS"}:
+        raise ValueError("Tipo de base desconhecido.")
+    planilha = obter_planilha()
+    try:
+        aba = planilha.worksheet(NOME_ABA_ATUALIZACOES)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_ATUALIZACOES, rows=10, cols=2)
+        aba.update(range_name="A1:B1", values=[["BASE", "ATUALIZADO_EM"]], value_input_option="RAW")
+    linhas = aba.get_all_values()
+    momento = datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M:%S")
+    for numero_linha, linha in enumerate(linhas[1:], start=2):
+        if linha and linha[0].strip().upper() == tipo:
+            aba.update(range_name=f"A{numero_linha}:B{numero_linha}",
+                       values=[[tipo, momento]], value_input_option="RAW")
+            carregar_datas_atualizacao.clear()
+            return
+    aba.append_row([tipo, momento], value_input_option="RAW")
+    carregar_datas_atualizacao.clear()
+
+
+def exibir_atualizacoes_abaixo_mapa():
+    datas = carregar_datas_atualizacao()
+    os_em = datas.get("PONTOS", "Sem importação registrada")
+    eventos_em = datas.get("EVENTOS", "Sem importação registrada")
+    st.markdown(
+        '<div style="display:flex;flex-wrap:wrap;gap:8px 26px;margin:4px 0 14px;'
+        'font-size:13px;font-weight:600;color:#1558b0;">'
+        f'<span>O.S. — Atualizado em {os_em}</span>'
+        f'<span>Eventos — Atualizado em {eventos_em}</span>'
+        '</div>', unsafe_allow_html=True,
+    )
+
+
+def limpar_dados_operacionais_admin():
+    """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
+    if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
+        raise PermissionError("Somente administradores podem limpar os dados operacionais.")
+    planilha = obter_planilha()
+    resultados = []
+    abas = (
+        (NOME_ABA_PONTOS, CABECALHO_PONTOS),
+        (NOME_ABA_EVENTOS, CABECALHO_EVENTOS),
+        (NOME_ABA_AREAS_PROTEGIDAS, ["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]),
+        (NOME_ABA_ATUALIZACOES, ["BASE", "ATUALIZADO_EM"]),
+    )
+    for nome, cabecalho in abas:
+        try:
+            aba = planilha.worksheet(nome)
+        except gspread.WorksheetNotFound:
+            # A aba auxiliar só existe após a primeira edição manual.
+            if nome in {NOME_ABA_AREAS_PROTEGIDAS, NOME_ABA_ATUALIZACOES}:
+                continue
+            raise
+        # Apaga registros, não a aba, e mantém os cabeçalhos para futuras importações.
+        aba.clear()
+        aba.update(range_name="A1", values=[cabecalho], value_input_option="RAW")
+        resultados.append(nome)
+    invalidar_cache()
+    carregar_datas_atualizacao.clear()
+    return resultados
+
+
+@st.dialog("🗑️ Limpar dados operacionais")
+def modal_limpar_dados_operacionais():
+    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao() or not tem_acesso_modulo("3"):
+        st.error("Operação exclusiva do administrador.")
+        st.stop()
+    st.warning(
+        "Esta ação excluirá todas as O.S. de PONTOS, os eventos de EVENTOS e "
+        "as correções manuais de FAROL_AREAS_EDITADAS e os registros de atualização. "
+        "Não é possível desfazer pela ferramenta."
+    )
+    st.caption("Poços, loggers, observações das concentrações e demais abas serão preservados.")
+    confirmado = st.checkbox(
+        "Confirmo que desejo apagar os registros de PONTOS, EVENTOS e FAROL_AREAS_EDITADAS.",
+        key="confirmar_limpeza_farol",
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Cancelar", use_container_width=True, key="cancelar_limpeza_farol"):
+            st.rerun()
+    with c2:
+        if st.button("🗑️ Limpar agora", type="primary", disabled=not confirmado,
+                     use_container_width=True, key="executar_limpeza_farol"):
+            try:
+                abas = limpar_dados_operacionais_admin()
+                st.session_state["farol_mensagem_limpeza"] = "Dados removidos das abas: " + ", ".join(abas) + "."
+                st.rerun()
+            except Exception as erro:
+                invalidar_cache()
+                st.error(f"Falha durante a limpeza: {erro}. Confira o conteúdo das abas antes de repetir.")
+
+
+def garantir_cabecalho_exato(nome, cabecalho):
+    aba = obter_aba(nome, cabecalho)
+    valores = aba.get_all_values()
+    if not valores:
+        if PODE_EDITAR_FAROL:
+            aba.update("A1", [cabecalho])
+    return aba
+
+
+def append_dataframe(nome, cabecalho, df):
+    exigir_edicao_farol()
+    if df is None or df.empty:
+        return 0
+    aba = garantir_cabecalho_exato(nome, cabecalho)
+    df = df.reindex(columns=cabecalho).fillna("")
+    linhas = [[limpar_valor(v) for v in row] for row in df.itertuples(index=False, name=None)]
+    if linhas:
+        aba.append_rows(linhas, value_input_option="USER_ENTERED")
+    invalidar_cache()
+    return len(linhas)
+
+
+def substituir_aba(nome, cabecalho, df):
+    exigir_edicao_farol()
+    aba = garantir_cabecalho_exato(nome, cabecalho)
+    df = df.reindex(columns=cabecalho).fillna("")
+    linhas = [cabecalho] + [[limpar_valor(v) for v in row] for row in df.itertuples(index=False, name=None)]
+    aba.clear()
+    aba.resize(rows=max(1000, len(linhas) + 20), cols=max(len(cabecalho) + 5, 20))
+    # PONTOS: RAW preserva o ponto decimal como texto literal.
+    # USER_ENTERED interpreta o ponto como separador de milhar em planilhas pt-BR,
+    # convertendo -5.038017 em -5.038.017 e invalidando a coordenada.
+    modo_escrita = "RAW" if nome == NOME_ABA_PONTOS else "USER_ENTERED"
+    aba.update("A1", linhas, value_input_option=modo_escrita)
+    invalidar_cache()
+
+
+# ============================================================
+# LEITURA DE ARQUIVOS
+# ============================================================
+
+def ler_planilha_upload(upload):
+    if upload is None:
+        return pd.DataFrame()
+    nome = upload.name.lower()
+    dados = upload.getvalue()
+    if nome.endswith(".csv"):
+        for encoding in ("utf-8-sig", "latin1", "cp1252"):
+            try:
+                return pd.read_csv(io.BytesIO(dados), sep=None, engine="python", encoding=encoding, dtype=str)
+            except Exception:
+                pass
+        raise ValueError("Não foi possível ler o CSV.")
+    return pd.read_excel(io.BytesIO(dados), dtype=str)
+
+
+def localizar_coluna(df, candidatos, obrigatoria=False):
+    mapa = {normalizar_cabecalho(c): c for c in df.columns}
+    for candidato in candidatos:
+        n = normalizar_cabecalho(candidato)
+        if n in mapa:
+            return mapa[n]
+    for col in df.columns:
+        n = normalizar_cabecalho(col)
+        for candidato in candidatos:
+            nc = normalizar_cabecalho(candidato)
+            if nc and nc in n:
+                return col
+    if obrigatoria:
+        raise ValueError(f"Coluna não encontrada. Procuradas: {', '.join(candidatos)}")
     return None
 
 
-# ============================================================
-# CRUD REGISTRO
-# ============================================================
+def mapear_colunas(df, destino):
+    resultado = pd.DataFrame(index=df.index)
+    for col_destino in destino:
+        candidatos = [col_destino]
+        if col_destino == "Nº da O.S":
+            candidatos += ["N O S", "Nº OS", "OS", "NUMERO OS", "NUMERO DA OS", "ORDEM DE SERVICO"]
+        elif col_destino == "Dt. Emissão":
+            candidatos += ["DATA EMISSAO", "DATA DE EMISSAO", "DT EMISSAO"]
+        elif col_destino == "Matrícula":
+            candidatos += ["MATRICULA", "MATRÍCULA"]
+        elif col_destino == "Latitude":
+            candidatos += ["LAT", "LATITUDE"]
+        elif col_destino == "Longitude":
+            candidatos += ["LON", "LONG", "LONGITUDE"]
+        elif col_destino == "Código do Ativo":
+            candidatos += ["CODIGO DO ATIVO", "ATIVO", "COD ATIVO"]
+        elif col_destino == "Áreas Impactadas":
+            candidatos += ["AREAS IMPACTADAS", "ÁREA IMPACTADA", "BAIRROS AFETADOS"]
+        elif col_destino == "Descrição do Serviço":
+            candidatos += ["DESCRICAO DO SERVICO", "DESCRIÇÃO", "DESCRICAO"]
 
-def registro_para_lista(
-    dados,
-):
-    return [
-        dados.get(
-            coluna,
-            "",
-        )
-        for coluna in REGISTRO_HEADERS
-    ]
-
-
-def adicionar_registro(
-    dados,
-):
-
-    registro_ws, _ = (
-        obter_planilhas()
-    )
-
-    registro_ws.append_row(
-        registro_para_lista(
-            dados
-        ),
-        value_input_option="USER_ENTERED",
-    )
+        origem = localizar_coluna(df, candidatos)
+        resultado[col_destino] = df[origem].map(limpar_valor) if origem else ""
+    return resultado
 
 
-def atualizar_registro(
-    registro_id,
-    dados,
-):
+def preparar_pontos(df):
+    out = mapear_colunas(df, CABECALHO_PONTOS)
+    for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
+        out[coluna] = out[coluna].map(lambda valor: normalizar_coordenada(valor, tipo))
+    # Preserva as O.S. sem geolocalização para consulta e diagnóstico.
+    colunas_conteudo = [c for c in CABECALHO_PONTOS if c not in ("Latitude", "Longitude")]
+    out = out.loc[out[colunas_conteudo].apply(
+        lambda linha: any(str(v).strip() for v in linha), axis=1
+    )].copy()
+    return out
 
-    registro_ws, _ = (
-        obter_planilhas()
-    )
 
-    linha = localizar_linha(
-        registro_ws,
-        registro_id,
-    )
+def chave_ponto(row):
+    os_num = normalizar_texto(row.get("Nº da O.S", ""))
+    if os_num:
+        return f"OS:{os_num}"
+    return "HASH:" + slug_hash(*[row.get(c, "") for c in CABECALHO_PONTOS])
 
-    if linha is None:
-        raise ValueError(
-            "Registro não encontrado."
-        )
 
-    registro_ws.update(
-        f"A{linha}:N{linha}",
-        [
-            registro_para_lista(
-                dados
+def preparar_eventos(df):
+    out = mapear_colunas(df, CABECALHO_EVENTOS)
+    out = out.loc[~out.apply(lambda r: all(not str(x).strip() for x in r), axis=1)].copy()
+    return out
+
+
+def chave_evento(row):
+    """Protocolo identifica o evento mesmo após alterações de status e horários.
+
+    Na ausência de protocolo, usa campos de identificação relativamente estáveis.
+    """
+    protocolo = normalizar_texto(row.get("Protocolo", ""))
+    if protocolo:
+        return "PROTOCOLO:" + protocolo
+    campos = ["Data", "Código do Ativo", "Serviço", "Início", "Cidade", "Unidade"]
+    return "SEM_PROTOCOLO:" + slug_hash(*[row.get(c, "") for c in campos])
+
+
+def upsert_pontos(df_novo):
+    exigir_edicao_farol()
+    atual = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
+    # Preserva colunas extras já existentes na aba PONTOS.
+    colunas = list(dict.fromkeys(list(atual.columns) + list(CABECALHO_PONTOS)))
+    atual = atual.reindex(columns=colunas).fillna("")
+    novo = df_novo.reindex(columns=colunas).fillna("")
+
+    if atual.empty:
+        final = novo.copy()
+    else:
+        mapa = {}
+        for _, r in atual.iterrows():
+            mapa[chave_ponto(r)] = r.to_dict()
+        for _, r in novo.iterrows():
+            mapa[chave_ponto(r)] = r.to_dict()
+        final = pd.DataFrame(list(mapa.values()), columns=colunas)
+
+    # Padroniza as coordenadas de O.S. para texto decimal com ponto antes
+    # de enviar ao Sheets em modo RAW, sem depender da região da planilha.
+    # Valores inválidos permanecem vazios; a O.S. continua armazenada.
+    for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
+        final[coluna] = final[coluna].map(
+            lambda valor: (
+                format(n, ".6f") if (n := normalizar_coordenada(valor, tipo)) is not None else ""
             )
-        ],
-        value_input_option="USER_ENTERED",
-    )
-
-
-def excluir_registro(
-    registro_id,
-):
-
-    registro_ws, _ = (
-        obter_planilhas()
-    )
-
-    linha = localizar_linha(
-        registro_ws,
-        registro_id,
-    )
-
-    if linha is None:
-        raise ValueError(
-            "Registro não encontrado."
         )
 
-    registro_ws.delete_rows(
-        linha
-    )
+    # Mantém ordem cronológica aproximada, sem exigir datas válidas.
+    if not final.empty:
+        final["_ord"] = pd.to_datetime(final["Dt. Emissão"], dayfirst=True, errors="coerce")
+        final = final.sort_values("_ord", na_position="last").drop(columns="_ord")
+    substituir_aba(NOME_ABA_PONTOS, colunas, final)
+    return len(novo), len(final)
 
 
-# ============================================================
-# CRUD O.S.
-# ============================================================
+def carregar_areas_editadas():
+    """Correções explícitas sobrevivem à reimportação de EVENTOS.
 
-def os_para_lista(
-    dados,
-):
-    return [
-        dados.get(
-            coluna,
-            "",
-        )
-        for coluna in HISTORICO_HEADERS
-    ]
-
-
-def adicionar_os(
-    dados,
-):
-
-    _, historico_ws = (
-        obter_planilhas()
-    )
-
-    historico_ws.append_row(
-        os_para_lista(
-            dados
-        ),
-        value_input_option="USER_ENTERED",
-    )
-
-
-def adicionar_registro_com_os(
-    dados_registro,
-    dados_os,
-):
+    Aba separada também permite proteger uma correção para campo vazio.
     """
-    Salva o registro principal e sua O.S. inicial juntos.
-
-    Se a gravação da O.S. falhar depois de o registro principal
-    ter sido salvo, tenta remover o registro principal para evitar
-    que a base fique com uma melhoria sem a O.S. inicial.
-    """
-
-    registro_ws, _ = obter_planilhas()
-
-    adicionar_registro(
-        dados_registro
-    )
-
     try:
-        adicionar_os(
-            dados_os
-        )
-    except Exception:
+        aba = obter_planilha().worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+    except gspread.WorksheetNotFound:
+        return {}
+    linhas = aba.get_all_values()
+    if not linhas:
+        return {}
+    cab = linhas[0]
+    if "CHAVE_EVENTO" not in cab or "AREAS_IMPACTADAS" not in cab:
+        raise ValueError("Cabeçalho inválido em FAROL_AREAS_EDITADAS.")
+    i_chave, i_area = cab.index("CHAVE_EVENTO"), cab.index("AREAS_IMPACTADAS")
+    return {linha[i_chave]: linha[i_area] if i_area < len(linha) else ""
+            for linha in linhas[1:] if i_chave < len(linha) and linha[i_chave]}
+
+
+def registrar_area_editada(chave, area):
+    """Registra correção humana com chave estável do evento, mesmo quando vazia."""
+    exigir_edicao_farol()
+    if not chave:
+        raise ValueError("Não foi possível identificar o evento para proteger a área.")
+    planilha = obter_planilha()
+    try:
+        aba = planilha.worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_AREAS_PROTEGIDAS, rows=1000, cols=4)
+        aba.update(range_name="A1:D1", values=[["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]], value_input_option="RAW")
+    linhas = aba.get_all_values()
+    cab = linhas[0] if linhas else ["CHAVE_EVENTO", "AREAS_IMPACTADAS", "ATUALIZADO_EM", "AUTOR"]
+    if "CHAVE_EVENTO" not in cab or "AREAS_IMPACTADAS" not in cab:
+        raise ValueError("Cabeçalho inválido em FAROL_AREAS_EDITADAS.")
+    dados = {"CHAVE_EVENTO": chave, "AREAS_IMPACTADAS": str(area),
+             "ATUALIZADO_EM": datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M"),
+             "AUTOR": str(st.session_state.get("usuario_logado", ""))}
+    valores = [dados.get(c, "") for c in cab]
+    col_chave = cab.index("CHAVE_EVENTO")
+    for n, linha in enumerate(linhas[1:], start=2):
+        if col_chave < len(linha) and linha[col_chave] == chave:
+            from gspread.utils import rowcol_to_a1
+            aba.update(range_name=f"A{n}:{rowcol_to_a1(n, len(cab))}", values=[valores], value_input_option="RAW")
+            return
+    aba.append_row(valores, value_input_option="RAW")
+
+
+def upsert_eventos(df_novo):
+    exigir_edicao_farol()
+    atual = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
+    atual = atual.reindex(columns=CABECALHO_EVENTOS).fillna("")
+    novo = df_novo.reindex(columns=CABECALHO_EVENTOS).fillna("")
+    areas_protegidas = carregar_areas_editadas()
+
+    mapa = {}
+    for _, registro in atual.iterrows():
+        mapa[chave_evento(registro)] = registro.to_dict()
+    for _, registro in novo.iterrows():
+        chave = chave_evento(registro)
+        dados_novos = registro.to_dict()
+        if chave in mapa:
+            # Atualizações parciais não apagam campos antigos preenchidos.
+            anterior = mapa[chave]
+            mapa[chave] = {
+                campo: dados_novos[campo] if str(dados_novos[campo]).strip() else anterior.get(campo, "")
+                for campo in CABECALHO_EVENTOS
+            }
+        else:
+            mapa[chave] = dados_novos
+    # Reaplica a correção humana APÓS a mesclagem de dados da importação.
+    for chave, evento in mapa.items():
+        if chave in areas_protegidas:
+            evento["Áreas Impactadas"] = areas_protegidas[chave]
+    final = pd.DataFrame(list(mapa.values()), columns=CABECALHO_EVENTOS)
+    substituir_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS, final)
+    return len(novo), len(final)
+
+
+# ============================================================
+# KMZ / POLÍGONOS DOS BAIRROS
+# ============================================================
+
+@st.cache_data(show_spinner=False)
+def carregar_kmz_bytes(kmz_bytes):
+    with zipfile.ZipFile(io.BytesIO(kmz_bytes)) as z:
+        nomes_kml = [n for n in z.namelist() if n.lower().endswith(".kml")]
+        if not nomes_kml:
+            raise ValueError("O KMZ não contém arquivo KML.")
+        data = z.read(nomes_kml[0])
+    return carregar_kml_bytes(data)
+
+
+@st.cache_data(show_spinner=False)
+def carregar_kml_bytes(kml_bytes):
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    raiz = ET.fromstring(kml_bytes)
+    bairros = []
+
+    for placemark in raiz.findall(".//k:Placemark", ns):
+        nome_el = placemark.find("k:name", ns)
+        nome = nome_el.text.strip() if nome_el is not None and nome_el.text else ""
+        if not nome:
+            continue
+
+        poligonos = []
+        for poly in placemark.findall(".//k:Polygon", ns):
+            outer = poly.find("k:outerBoundaryIs/k:LinearRing/k:coordinates", ns)
+            if outer is None or not outer.text:
+                continue
+            coords = []
+            for item in outer.text.strip().split():
+                partes = item.split(",")
+                if len(partes) >= 2:
+                    try:
+                        lon = float(partes[0])
+                        lat = float(partes[1])
+                        coords.append((lat, lon))
+                    except ValueError:
+                        pass
+            if len(coords) >= 3:
+                poligonos.append(coords)
+
+        if poligonos:
+            bairros.append({
+                "nome": nome,
+                "nome_normalizado": limpar_nome_bairro(nome),
+                "poligonos": poligonos,
+            })
+
+    return bairros
+
+
+
+def normalizar_municipio(valor):
+    """Usa a mesma chave para Cidade da planilha e nome do arquivo KMZ."""
+    return re.sub(r"[^A-Z0-9]", "", normalizar_texto(valor))
+
+
+def carregar_gpkg(caminho):
+    """Lê os polígonos do GeoPackage sem geopandas/GDAL.
+
+    Identifica bairro e município pelos atributos do QGIS; converte o SRC
+    original para WGS84 antes de entregar coordenadas ao Folium.
+    """
+    registros = []
+    with sqlite3.connect(f"file:{caminho}?mode=ro", uri=True) as conexao:
+        camadas = conexao.execute(
+            "SELECT table_name, srs_id FROM gpkg_contents WHERE data_type='features'"
+        ).fetchall()
+        for tabela, srs_id in camadas:
+            info = conexao.execute(
+                "SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",
+                (tabela,),
+            ).fetchone()
+            if not info:
+                continue
+            campo_geometria, srs_geom = info
+            nomes = [r[1] for r in conexao.execute(f'PRAGMA table_info("{tabela.replace(chr(34), chr(34)*2)}")')]
+            campos = {normalizar_cabecalho(c): c for c in nomes}
+            # Compatibilidade automática com as duas origens de bairros:
+            # IBGE: NM_BAIRRO + NM_RGI/NM_MUN
+            # Municípios (ArcGIS): NOME + MUNICIPIO
+            campo_bairro = next(
+                (campos[k] for k in ("NMBAIRRO", "NOMEBAIRRO", "BAIRRO", "NOME") if k in campos),
+                None,
+            )
+            campo_mun = next(
+                (campos[k] for k in ("NMMUN", "MUNICIPIO", "NOMEMUNICIPIO", "CIDADE", "NMRGI") if k in campos),
+                None,
+            )
+            if not campo_bairro:
+                continue
+            # GeoPackage usa WKB com cabeçalho GP de 8+ bytes, definido pelos flags.
+            src_id = srs_geom or srs_id
+            linha_srs = conexao.execute(
+                "SELECT organization, organization_coordsys_id, definition FROM gpkg_spatial_ref_sys WHERE srs_id=?",
+                (src_id,),
+            ).fetchone()
+            if not linha_srs:
+                continue
+            org, cod, definicao = linha_srs
+            try:
+                origem = CRS.from_user_input(f"{org}:{cod}") if org and cod else CRS.from_wkt(definicao)
+            except Exception:
+                origem = CRS.from_wkt(definicao)
+            conversor = None if origem.equals(CRS.from_epsg(4326)) else Transformer.from_crs(origem, 4326, always_xy=True)
+            quoted = lambda x: '"' + x.replace('"', '""') + '"'
+            colunas = [campo_geometria, campo_bairro] + ([campo_mun] if campo_mun else [])
+            consulta = f'SELECT {", ".join(quoted(c) for c in colunas)} FROM {quoted(tabela)}'
+            for row in conexao.execute(consulta):
+                bruto, nome, *municipio_atributo = row
+                if not bruto or not nome:
+                    continue
+                bruto = bytes(bruto)
+                if len(bruto) < 8 or bruto[:2] != b"GP":
+                    continue
+                flags = bruto[3]
+                envelope = (flags >> 1) & 7
+                tamanhos = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}
+                if envelope not in tamanhos:
+                    continue
+                geometria = wkb.loads(bruto[8 + tamanhos[envelope]:])
+                if conversor:
+                    geometria = transformar_geometria(conversor.transform, geometria)
+                if geometria.geom_type == "Polygon":
+                    partes = [geometria]
+                elif geometria.geom_type == "MultiPolygon":
+                    partes = list(geometria.geoms)
+                else:
+                    continue
+                poligonos = []
+                for parte in partes:
+                    coords = [(float(y), float(x)) for x, y in parte.exterior.coords]
+                    if len(coords) >= 4 and all(-90 <= lat <= 90 and -180 <= lon <= 180 for lat, lon in coords):
+                        poligonos.append(coords)
+                if poligonos:
+                    municipio = (municipio_atributo[0] if municipio_atributo else "") or nome_municipio_arquivo(caminho)
+                    registros.append({
+                        "nome": str(nome).strip(),
+                        "nome_normalizado": limpar_nome_bairro(nome),
+                        "municipio": normalizar_municipio(municipio),
+                        "poligonos": poligonos,
+                    })
+    return registros
+
+
+def nome_municipio_arquivo(caminho):
+    nome = os.path.splitext(os.path.basename(caminho))[0]
+    return re.sub(r"^(?:NM_MUN|NM_RGI)[_\s-]*", "", nome, flags=re.I)
+
+
+def preparar_poligonos_para_mapa(registros, tolerancia=0.00007):
+    """Reduz vértices SOMENTE no desenho. Preserva 'poligonos' originais para análise.
+
+    0.00007 grau corresponde aproximadamente a alguns metros na região de operação.
+    A geometria simplificada é calculada apenas quando os arquivos mudam (cache).
+    """
+    from shapely.geometry import Polygon
+    for bairro in registros:
+        visuais = []
+        for coords in bairro.get("poligonos", []):
+            if len(coords) < 25:
+                visuais.append(coords)
+                continue
+            try:
+                # shapely usa longitude,latitude; Folium usa latitude,longitude.
+                geom = Polygon([(lon, lat) for lat, lon in coords])
+                simplificado = geom.simplify(tolerancia, preserve_topology=True)
+                if simplificado.is_empty or simplificado.geom_type != "Polygon":
+                    visuais.append(coords)
+                else:
+                    novo = [(float(lat), float(lon)) for lon, lat in simplificado.exterior.coords]
+                    visuais.append(novo if len(novo) >= 4 else coords)
+            except (ValueError, TypeError):
+                visuais.append(coords)
+        bairro["poligonos_mapa"] = visuais
+    return registros
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def carregar_geometrias_municipais(arquivos_assinados):
+    """Carrega GeoPackage, KMZ e KML por município, sem impedir uso do mapa em caso de erro."""
+    todos = []
+    for caminho, _tamanho, _mtime in arquivos_assinados:
+        extensao = os.path.splitext(caminho)[1].lower()
+        municipio = normalizar_municipio(nome_municipio_arquivo(caminho))
         try:
-            linha = localizar_linha(
-                registro_ws,
-                dados_registro["ID"],
-            )
-
-            if linha is not None:
-                registro_ws.delete_rows(
-                    linha
-                )
-        except Exception as rollback_exc:
-            raise RuntimeError(
-                "A O.S. inicial não foi gravada e "
-                "também não foi possível desfazer o "
-                "cadastro principal. Verifique a planilha."
-            ) from rollback_exc
-
-        raise
+            if extensao == ".gpkg":
+                registros = carregar_gpkg(caminho)
+            elif extensao in (".kmz", ".kml"):
+                with open(caminho, "rb") as arquivo:
+                    dados = arquivo.read()
+                registros = carregar_kmz_bytes(dados) if extensao == ".kmz" else carregar_kml_bytes(dados)
+                registros = [{**bairro, "municipio": municipio} for bairro in registros]
+            else:
+                continue
+            todos.extend(preparar_poligonos_para_mapa(registros))
+        except Exception:
+            # Não exibe avisos de arquivos sem cobertura, mantendo os eventos na planilha.
+            continue
+    return todos
 
 
-def atualizar_os(
-    os_id,
-    dados,
-):
+@st.cache_data(ttl=60, show_spinner=False)
+def descobrir_kmz():
+    """Compatibilidade com nome antigo; descobre KMZ, KML e GPKG da pasta."""
+    arquivos = []
+    if os.path.isdir(DIRETORIO_KMZ):
+        for nome in sorted(os.listdir(DIRETORIO_KMZ)):
+            if nome.lower().endswith((".gpkg", ".kmz", ".kml")):
+                caminho = os.path.join(DIRETORIO_KMZ, nome)
+                if os.path.isfile(caminho):
+                    arquivos.append(caminho)
+    # Para municípios com dois formatos, prefere o GPKG por conter NM_BAIRRO/NM_MUN.
+    prioridades = {".gpkg": 0, ".kmz": 1, ".kml": 2}
+    escolhidos = {}
+    for caminho in arquivos:
+        municipio = normalizar_municipio(nome_municipio_arquivo(caminho))
+        if municipio and (municipio not in escolhidos or
+                          prioridades[os.path.splitext(caminho)[1].lower()] < prioridades[os.path.splitext(escolhidos[municipio])[1].lower()]):
+            escolhidos[municipio] = caminho
+    if os.path.isfile(ARQUIVO_KMZ_PADRAO) and "TERESINA" not in escolhidos:
+        escolhidos["TERESINA"] = ARQUIVO_KMZ_PADRAO
+    assinaturas = []
+    for caminho in escolhidos.values():
+        try:
+            info = os.stat(caminho)
+            assinaturas.append((caminho, info.st_size, info.st_mtime_ns))
+        except OSError:
+            continue
+    return carregar_geometrias_municipais(tuple(assinaturas))
 
-    _, historico_ws = (
-        obter_planilhas()
-    )
 
-    linha = localizar_linha(
-        historico_ws,
-        os_id,
-    )
-
-    if linha is None:
-        raise ValueError(
-            "O.S. não encontrada."
-        )
-
-    historico_ws.update(
-        f"A{linha}:F{linha}",
-        [
-            os_para_lista(
-                dados
-            )
-        ],
-        value_input_option="USER_ENTERED",
-    )
+def ponto_em_poligono(lat, lon, poligono):
+    # Ray casting. poligono: [(lat, lon), ...]
+    dentro = False
+    x = lon
+    y = lat
+    n = len(poligono)
+    j = n - 1
+    for i in range(n):
+        yi, xi = poligono[i]
+        yj, xj = poligono[j]
+        cruza = ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-15) + xi)
+        if cruza:
+            dentro = not dentro
+        j = i
+    return dentro
 
 
-def excluir_os(
-    os_id,
-):
+def ponto_em_bairro(lat, lon, bairro):
+    for poligono in bairro["poligonos"]:
+        if ponto_em_poligono(lat, lon, poligono):
+            return True
+    return False
 
-    _, historico_ws = (
-        obter_planilhas()
-    )
 
-    linha = localizar_linha(
-        historico_ws,
-        os_id,
-    )
-
-    if linha is None:
-        raise ValueError(
-            "O.S. não encontrada."
-        )
-
-    historico_ws.delete_rows(
-        linha
-    )
+def identificar_bairro_por_ponto(lat, lon, bairros):
+    if lat is None or lon is None:
+        return ""
+    for bairro in bairros:
+        if ponto_em_bairro(lat, lon, bairro):
+            return bairro["nome_normalizado"]
+    return ""
 
 
 # ============================================================
-# CONSULTAS
+# CONCENTRAÇÕES / ANÁLISE ESPACIAL
 # ============================================================
 
-def historico_da_matricula(
-    df,
-    matricula,
-):
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
+def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
+    df = df_pontos.copy()
+    df["_lat"] = df["Latitude"].map(parse_float)
+    df["_lon"] = df["Longitude"].map(parse_float)
+    df = df.dropna(subset=["_lat", "_lon"]).reset_index(drop=True)
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Grade geográfica para evitar comparação de todos contra todos.
+    lat_step = raio_m / 111320.0
+    lon_step = raio_m / (111320.0 * max(0.2, math.cos(math.radians(float(df["_lat"].mean())))))
+
+    buckets = {}
+    for idx, r in df.iterrows():
+        cell = (int(math.floor(r["_lat"] / lat_step)), int(math.floor(r["_lon"] / lon_step)))
+        buckets.setdefault(cell, []).append(idx)
+
+    parent = list(range(len(df)))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for cell, indices in buckets.items():
+        cx, cy = cell
+        candidatos = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                candidatos.extend(buckets.get((cx + dx, cy + dy), []))
+        for i in indices:
+            for j in candidatos:
+                if j <= i:
+                    continue
+                d = distancia_metros(df.at[i, "_lat"], df.at[i, "_lon"], df.at[j, "_lat"], df.at[j, "_lon"])
+                if d is not None and d <= raio_m:
+                    union(i, j)
+
+    df["_grupo"] = [find(i) for i in range(len(df))]
+    contagens = df.groupby("_grupo").size()
+    grupos_validos = contagens[contagens >= minimo_os].index.tolist()
+    df = df[df["_grupo"].isin(grupos_validos)].copy()
 
     if df.empty:
-        return df.copy()
+        return pd.DataFrame(), df
 
-    return df[
-        df["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        ==
-        texto(matricula).upper()
-    ].copy()
+    concentracoes = []
+    for grupo, bloco in df.groupby("_grupo"):
+        lat = bloco["_lat"].mean()
+        lon = bloco["_lon"].mean()
+        os_count = len(bloco)
+        matriculas = bloco["Matrícula"].replace("", pd.NA).dropna().nunique()
+        bairros = sorted({limpar_nome_bairro(x) for x in bloco["Bairro"] if str(x).strip()})
+        concentracoes.append({
+            "ID_CONCENTRACAO": f"C{len(concentracoes) + 1:03d}",
+            "GRUPO": grupo,
+            "LATITUDE": lat,
+            "LONGITUDE": lon,
+            "QTD_OS": os_count,
+            "QTD_MATRICULAS": matriculas,
+            "BAIRROS": ", ".join(bairros),
+        })
 
-
-def registro_da_matricula(
-    df,
-    matricula,
-):
-
-    if df.empty:
-        return df.copy()
-
-    return df[
-        df["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        ==
-        texto(matricula).upper()
-    ].copy()
+    cdf = pd.DataFrame(concentracoes).sort_values(["QTD_OS", "QTD_MATRICULAS"], ascending=False).reset_index(drop=True)
+    cdf["ID_CONCENTRACAO"] = [f"C{i:03d}" for i in range(1, len(cdf) + 1)]
+    return cdf, df
 
 
-def matricula_possui_registro(
-    df,
-    matricula,
-    ignorar_id=None,
-):
+def _indice_espacial_ativos(df, tamanho_celula=0.01):
+    """Grade espacial simples, sem dependências adicionais.
 
-    if df.empty:
-        return False
+    Retém posições por índice posicional para preservar a ordem e índices repetidos.
+    """
+    grade = {}
+    registros = list(df.to_dict("records"))
+    for pos, r in enumerate(registros):
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
+            continue
+        celula = (math.floor(lat / tamanho_celula), math.floor(lon / tamanho_celula))
+        grade.setdefault(celula, []).append((pos, lat, lon))
+    return grade, registros
 
-    mascara = (
-        df["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        ==
-        texto(matricula).upper()
-    )
 
-    if ignorar_id is not None:
-        mascara &= (
-            df["ID"].astype(str)
-            != str(ignorar_id)
+def _candidatos_no_raio(grade, lat, lon, raio_m, tamanho_celula=0.01):
+    """Busca por caixa conservadora; a decisão final usa Haversine original."""
+    if lat is None or lon is None or raio_m < 0:
+        return []
+    # A margem é deliberadamente conservadora para evitar falsos negativos.
+    delta_lat = raio_m / 110000.0 + 1e-9
+    limite_lat = min(89.999999, abs(lat) + delta_lat)
+    cos_min = max(0.000001, math.cos(math.radians(limite_lat)))
+    delta_lon = raio_m / (110000.0 * cos_min) + 1e-9
+    x0 = math.floor((lat - delta_lat) / tamanho_celula)
+    x1 = math.floor((lat + delta_lat) / tamanho_celula)
+    y0 = math.floor((lon - delta_lon) / tamanho_celula)
+    y1 = math.floor((lon + delta_lon) / tamanho_celula)
+    candidatos = []
+    for x in range(x0, x1 + 1):
+        for y in range(y0, y1 + 1):
+            for pos, alat, alon in grade.get((x, y), ()):
+                d = distancia_metros(lat, lon, alat, alon)
+                if d is not None and d <= raio_m:
+                    candidatos.append((pos, d))
+    candidatos.sort(key=lambda item: item[0])
+    return candidatos
+
+
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
+def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=500):
+    registros = []
+    grade_pocos, pocos = _indice_espacial_ativos(df_pocos)
+    grade_loggers, loggers = _indice_espacial_ativos(df_loggers)
+    for _, c in concentracoes.iterrows():
+        lat = normalizar_coordenada(c.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(c.get("LONGITUDE"), "lon")
+        for grade, ativos, tipo, nome_coluna in (
+            (grade_pocos, pocos, "Poço / Ativo", "NOME_POCO"),
+            (grade_loggers, loggers, "Logger", "ENDERECO"),
+        ):
+            for pos, d in _candidatos_no_raio(grade, lat, lon, raio):
+                p = ativos[pos]
+                registros.append({
+                    "Concentração": c["ID_CONCENTRACAO"],
+                    "Tipo": tipo,
+                    "Identificação": p.get("IDENTIFICACAO_ATIVO", ""),
+                    "Nome": p.get(nome_coluna, ""),
+                    "Município": p.get("MUNICIPIO", ""),
+                    "Distância (m)": round(d, 1),
+                    "Distância": distancia_formatada(d),
+                })
+    return pd.DataFrame(registros)
+
+
+def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
+    if df_eventos.empty or df_pontos.empty:
+        return pd.DataFrame()
+
+    pontos = df_pontos.copy()
+    pontos["_bairro_base"] = pontos["Bairro"].map(limpar_nome_bairro)
+
+    # Quando o bairro textual da O.S. não for confiável, usa a geometria do KMZ.
+    if bairros:
+        pontos["_bairro_poligono"] = pontos.apply(
+            lambda r: identificar_bairro_por_ponto(parse_float(r["Latitude"]), parse_float(r["Longitude"]), bairros),
+            axis=1,
         )
-
-    return mascara.any()
-
-
-def os_duplicada(
-    df,
-    matricula,
-    numero_os,
-    ignorar_id=None,
-):
-
-    if df.empty:
-        return False
-
-    mascara = (
-        df["Matrícula"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        ==
-        texto(matricula).upper()
-    ) & (
-        df["N. O.S"]
-        .astype(str)
-        .str.strip()
-        ==
-        texto(numero_os)
-    )
-
-    if ignorar_id is not None:
-        mascara &= (
-            df["ID"].astype(str)
-            != str(ignorar_id)
+        pontos["_bairro_cruzamento"] = pontos["_bairro_poligono"].where(
+            pontos["_bairro_poligono"].astype(bool), pontos["_bairro_base"]
         )
-
-    return mascara.any()
-
-
-# ============================================================
-# EXPORTAÇÃO
-# ============================================================
-
-def gerar_excel(
-    df_registro,
-    df_historico,
-):
-
-    buffer = io.BytesIO()
-
-    with pd.ExcelWriter(
-        buffer,
-        engine="openpyxl",
-    ) as writer:
-
-        df_registro.to_excel(
-            writer,
-            sheet_name="Registro",
-            index=False,
-        )
-
-        df_historico.to_excel(
-            writer,
-            sheet_name="Historico",
-            index=False,
-        )
-
-    buffer.seek(0)
-
-    return buffer
-
-
-def gerar_excel_cliente(
-    registro,
-    historico,
-):
-
-    buffer = io.BytesIO()
-
-    with pd.ExcelWriter(
-        buffer,
-        engine="openpyxl",
-    ) as writer:
-
-        registro.to_excel(
-            writer,
-            sheet_name="Resumo",
-            index=False,
-        )
-
-        historico.to_excel(
-            writer,
-            sheet_name="Histórico",
-            index=False,
-        )
-
-    buffer.seek(0)
-
-    return buffer
-
-
-# ============================================================
-# FILTROS
-# ============================================================
-
-def aplicar_filtros(
-    df_registro,
-    df_historico,
-):
-
-    registro = df_registro.copy()
-    historico = df_historico.copy()
-
-    # --------------------------------------------------------
-    # DATA DE ABERTURA
-    # --------------------------------------------------------
-
-    if not historico.empty:
-
-        historico["_data_abertura"] = (
-            pd.to_datetime(
-                historico["Data de Abertura"],
-                errors="coerce",
-            )
-        )
-
-        datas = (
-            historico["_data_abertura"]
-            .dropna()
-        )
-
-        if not datas.empty:
-
-            data_min = datas.min().date()
-            data_max = datas.max().date()
-
-            periodo = st.sidebar.date_input(
-                "Data de Abertura",
-                value=(
-                    data_min,
-                    data_max,
-                ),
-                min_value=data_min,
-                max_value=data_max,
-            )
-
-            if (
-                isinstance(periodo, tuple)
-                and len(periodo) == 2
-            ):
-
-                inicio, fim = periodo
-
-                historico = historico[
-                    (
-                        historico[
-                            "_data_abertura"
-                        ].dt.date
-                        >= inicio
-                    )
-                    &
-                    (
-                        historico[
-                            "_data_abertura"
-                        ].dt.date
-                        <= fim
-                    )
-                ]
-
-                # Mantém no mapa/lista as melhorias que ainda não
-                # possuem histórico. Elas podem ser registros novos
-                # e já possuem latitude/longitude válidas.
-                matriculas_periodo = set(
-                    historico["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                )
-
-                matriculas_com_historico = set(
-                    df_historico["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                )
-
-                matriculas_sem_historico = (
-                    set(
-                        registro["Matrícula"]
-                        .astype(str)
-                        .str.strip()
-                        .str.upper()
-                    )
-                    - matriculas_com_historico
-                )
-
-                matriculas_permitidas = (
-                    matriculas_periodo
-                    | matriculas_sem_historico
-                )
-
-                registro = registro[
-                    registro["Matrícula"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper()
-                    .isin(matriculas_permitidas)
-                ]
-
-    # --------------------------------------------------------
-    # BAIRRO
-    # --------------------------------------------------------
-
-    bairros = sorted(
-        [
-            x
-            for x in (
-                registro["Bairro"]
-                .astype(str)
-                .str.strip()
-                .unique()
-            )
-            if x
-        ]
-    )
-
-    bairro = st.sidebar.multiselect(
-        "Bairro",
-        bairros,
-    )
-
-    if bairro:
-        registro = registro[
-            registro["Bairro"]
-            .astype(str)
-            .str.strip()
-            .isin(bairro)
-        ]
-
-    # --------------------------------------------------------
-    # MATRÍCULA
-    # --------------------------------------------------------
-
-    matriculas = sorted(
-        [
-            x
-            for x in (
-                registro["Matrícula"]
-                .astype(str)
-                .str.strip()
-                .unique()
-            )
-            if x
-        ]
-    )
-
-    matricula = st.sidebar.multiselect(
-        "Matrícula",
-        matriculas,
-    )
-
-    if matricula:
-        registro = registro[
-            registro["Matrícula"]
-            .astype(str)
-            .str.strip()
-            .isin(matricula)
-        ]
-
-    # --------------------------------------------------------
-    # GRAU DE IMPACTO
-    # --------------------------------------------------------
-
-    impactos = sorted(
-        [
-            x
-            for x in (
-                registro["Grau de Impacto"]
-                .astype(str)
-                .str.strip()
-                .unique()
-            )
-            if x
-        ]
-    )
-
-    impacto = st.sidebar.multiselect(
-        "Grau de Impacto",
-        impactos,
-    )
-
-    if impacto:
-        registro = registro[
-            registro["Grau de Impacto"]
-            .astype(str)
-            .str.strip()
-            .isin(impacto)
-        ]
-
-    # --------------------------------------------------------
-    # RESOLVIDO
-    # --------------------------------------------------------
-
-    resolvidos = sorted(
-        [
-            x
-            for x in (
-                registro["Resolvido"]
-                .astype(str)
-                .str.strip()
-                .unique()
-            )
-            if x
-        ]
-    )
-
-    resolvido = st.sidebar.multiselect(
-        "Resolvido",
-        resolvidos,
-    )
-
-    if resolvido:
-        registro = registro[
-            registro["Resolvido"]
-            .astype(str)
-            .str.strip()
-            .isin(resolvido)
-        ]
-
-    # --------------------------------------------------------
-    # EXECUTADO
-    # --------------------------------------------------------
-
-    executados = sorted(
-        [
-            x
-            for x in (
-                registro["Executado?"]
-                .astype(str)
-                .str.strip()
-                .unique()
-            )
-            if x
-        ]
-    )
-
-    executado = st.sidebar.multiselect(
-        "Executado",
-        executados,
-    )
-
-    if executado:
-        registro = registro[
-            registro["Executado?"]
-            .astype(str)
-            .str.strip()
-            .isin(executado)
-        ]
-
-    # --------------------------------------------------------
-    # BUSCA RÁPIDA
-    # --------------------------------------------------------
-
-    busca = st.sidebar.text_input(
-        "🔎 Busca rápida",
-        placeholder="Matrícula, endereço ou O.S.",
-    )
-
-    if busca.strip():
-
-        termo = busca.strip().lower()
-
-        matriculas_busca = set()
-
-        mascara_matricula = (
-            registro["Matrícula"]
-            .astype(str)
-            .str.lower()
-            .str.contains(
-                termo,
-                na=False,
-                regex=False,
-            )
-        )
-
-        mascara_endereco = (
-            registro["Endereço"]
-            .astype(str)
-            .str.lower()
-            .str.contains(
-                termo,
-                na=False,
-                regex=False,
-            )
-        )
-
-        matriculas_busca.update(
-            registro.loc[
-                mascara_matricula,
-                "Matrícula",
-            ].astype(str)
-        )
-
-        matriculas_busca.update(
-            registro.loc[
-                mascara_endereco,
-                "Matrícula",
-            ].astype(str)
-        )
-
-        if not historico.empty:
-
-            mascara_os = (
-                historico["N. O.S"]
-                .astype(str)
-                .str.lower()
-                .str.contains(
-                    termo,
-                    na=False,
-                    regex=False,
-                )
-            )
-
-            matriculas_busca.update(
-                historico.loc[
-                    mascara_os,
-                    "Matrícula",
-                ].astype(str)
-            )
-
-        registro = registro[
-            registro["Matrícula"]
-            .astype(str)
-            .isin(matriculas_busca)
-        ]
-
-    # --------------------------------------------------------
-    # INTERSEÇÃO FINAL
-    # --------------------------------------------------------
-
-    if not registro.empty:
-
-        matriculas_finais = set(
-            registro["Matrícula"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
-
-        historico = historico[
-            historico["Matrícula"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .isin(matriculas_finais)
-        ]
-
-    if "_data_abertura" in historico.columns:
-        historico = historico.drop(
-            columns=["_data_abertura"]
-        )
-
-    return (
-        registro,
-        historico,
-    )
-
-
-# ============================================================
-# LIMPAR FILTROS
-# ============================================================
-
-def limpar_filtros():
-
-    chaves = [
-        "filtro_bairro",
-        "filtro_matricula",
-        "filtro_impacto",
-        "filtro_resolvido",
-        "filtro_executado",
-        "filtro_busca",
-        "Data de Abertura",
-    ]
-
-    for chave in chaves:
-        if chave in st.session_state:
-            del st.session_state[chave]
-
-
-# ============================================================
-# ORDENAÇÃO
-# ============================================================
-
-def ordenar_registros(
-    df_registro,
-    df_historico,
-):
-
-    if df_registro.empty:
-        return df_registro.copy()
-
-    resultado = df_registro.copy()
-
-    if df_historico.empty:
-
-        resultado["_qtd_os"] = 0
-        resultado["_ultima_data"] = pd.NaT
-        resultado["_ultima_os"] = ""
-
     else:
+        pontos["_bairro_cruzamento"] = pontos["_bairro_base"]
 
-        historico = df_historico.copy()
-
-        historico["_data"] = pd.to_datetime(
-            historico["Data de Abertura"],
-            errors="coerce",
-        )
-
-        quantidade = (
-            historico.groupby(
-                "Matrícula"
-            )
-            .size()
-            .rename("_qtd_os")
-        )
-
-        ultima = (
-            historico
-            .sort_values("_data")
-            .groupby("Matrícula")
-            .tail(1)
-        )
-
-        ultima = ultima[
-            [
-                "Matrícula",
-                "_data",
-                "N. O.S",
-            ]
-        ].rename(
-            columns={
-                "_data": "_ultima_data",
-                "N. O.S": "_ultima_os",
-            }
-        )
-
-        resultado = resultado.merge(
-            quantidade,
-            left_on="Matrícula",
-            right_index=True,
-            how="left",
-        )
-
-        resultado = resultado.merge(
-            ultima,
-            on="Matrícula",
-            how="left",
-        )
-
-        resultado["_qtd_os"] = (
-            resultado["_qtd_os"]
-            .fillna(0)
-            .astype(int)
-        )
-
-    return resultado.sort_values(
-        by=[
-            "_qtd_os",
-            "_ultima_data",
-            "Matrícula",
-        ],
-        ascending=[
-            False,
-            False,
-            True,
-        ],
-        na_position="last",
-    )
+    registros = []
+    for _, evento in df_eventos.iterrows():
+        municipal = evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
+        if municipal:
+            cidade = normalizar_municipio(evento.get("Cidade", ""))
+            bloco = pontos[pontos["Cidade"].map(normalizar_municipio) == cidade]
+            if not bloco.empty:
+                registros.append({
+                    "Evento": evento.get("Descrição do Serviço", "") or evento.get("Serviço", ""),
+                    "Protocolo": evento.get("Protocolo", ""),
+                    "Status": evento.get("Status", ""),
+                    "Bairro": "Todo o município", "Parcial": "Não",
+                    "O.S. encontradas": len(bloco),
+                    "Matrículas": bloco["Matrícula"].replace("", pd.NA).dropna().nunique(),
+                    "Data": evento.get("Data", ""),
+                })
+            continue
+        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros)
+        for area in areas:
+            bloco = pontos[
+                (pontos["_bairro_cruzamento"] == area["bairro"])
+                & (pontos["Cidade"].map(normalizar_municipio) == normalizar_municipio(evento.get("Cidade", "")))
+            ].copy()
+            if bloco.empty:
+                continue
+            registros.append({
+                "Evento": evento.get("Descrição do Serviço", "") or evento.get("Serviço", ""),
+                "Protocolo": evento.get("Protocolo", ""),
+                "Status": evento.get("Status", ""),
+                "Bairro": area["bairro"],
+                "Parcial": "Sim" if area["parcial"] else "Não",
+                "O.S. encontradas": len(bloco),
+                "Matrículas": bloco["Matrícula"].replace("", pd.NA).dropna().nunique(),
+                "Data": evento.get("Data", ""),
+            })
+    return pd.DataFrame(registros)
 
 
 # ============================================================
-# KPIs
+# EVENTOS GEORREFERENCIADOS — SOMENTE ONDE HÁ POLÍGONOS
 # ============================================================
 
-def calcular_kpis(
-    df_registro,
-    df_historico,
-):
+def classificar_status_evento(valor):
+    status = normalizar_texto(valor)
+    if any(p in status for p in ("FINALIZ", "ENCERR", "CONCLUI", "CONCLUID", "NORMALIZ", "RESOLVID", "CANCELAD")):
+        return "Finalizado", "#2eaa59"
+    if any(p in status for p in ("PROGRAM", "AGEND", "PREVIST", "PLANEJ")):
+        return "Programado", "#f2b233"
+    if any(p in status for p in ("ANDAMENTO", "EXECU", "INICIAD", "ATIVO", "ABERTO", "OCORRENCIA", "EM CURSO")):
+        return "Em andamento", "#e04747"
+    return "Status não classificado", "#8b95a7"
 
-    if df_historico.empty:
-        return {
-            "cliente": "—",
-            "qtd_os": 0,
-            "tempo_medio": "—",
-            "media_pressao": "—",
-        }
 
-    historico = df_historico.copy()
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
+def eventos_georreferenciados(eventos, bairros_kmz):
+    """Relaciona polígonos por município + bairro, sem misturar cidades."""
+    saida = []
+    sem_geometria = 0
+    if eventos is None or eventos.empty:
+        return saida, 0
+    indice = {}
+    for bairro in bairros_kmz:
+        chave = (bairro.get("municipio", "TERESINA"), bairro["nome_normalizado"])
+        indice.setdefault(chave, []).append(bairro)
+    for _, evento in eventos.iterrows():
+        cidade = normalizar_municipio(evento.get("Cidade", ""))
+        areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_kmz)
+        if not cidade or not areas:
+            sem_geometria += 1
+            continue
+        identificados = set()
+        encontrou = False
+        faltou = False
+        for area in areas:
+            nome = area["bairro"]
+            if nome in identificados:
+                continue
+            identificados.add(nome)
+            correspondencias = indice.get((cidade, nome), [])
+            if not correspondencias:
+                faltou = True
+                continue
+            encontrou = True
+            categoria, cor = classificar_status_evento(evento.get("Status", ""))
+            for bairro in correspondencias:
+                saida.append({
+                    "bairro": bairro,
+                    "evento": evento.to_dict(),
+                    "parcial": area["parcial"],
+                    "categoria": categoria,
+                    "cor": cor,
+                })
+        if not encontrou or faltou:
+            sem_geometria += 1
+    return saida, sem_geometria
 
-    historico["_data"] = pd.to_datetime(
-        historico["Data de Abertura"],
-        errors="coerce",
-    )
 
-    contagem = (
-        historico.groupby(
-            "Matrícula"
+def adicionar_camada_eventos(mapa, eventos_mapeados):
+    fg = folium.FeatureGroup(name="Eventos de desabastecimento", show=True)
+    for item in eventos_mapeados:
+        evento = item["evento"]
+        bairro = item["bairro"]
+        categoria = item["categoria"]
+        parcial = item["parcial"]
+        def esc(campo):
+            return html_escape(str(evento.get(campo, "") or "—"))
+        abrangencia = ("Parcial (polígono do bairro inteiro como referência)" if parcial
+                       else "Todo o município" if evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
+                       else "Bairro informado como impactado")
+        html = (
+            f"<div style='min-width:250px;max-width:400px'>"
+            f"<b>Evento — {html_escape(bairro['nome'])}</b><br>"
+            f"<b>Situação no mapa:</b> {html_escape(categoria)}<br>"
+            f"<b>Status original:</b> {esc('Status')}<br>"
+            f"<b>Protocolo:</b> {esc('Protocolo')}<br>"
+            f"<b>Serviço:</b> {esc('Serviço')}<br>"
+            f"<b>Início:</b> {esc('Início')}<br>"
+            f"<b>Previsão de término:</b> {esc('Prev. Término')}<br>"
+            f"<b>Término real:</b> {esc('Término Real')}<br>"
+            f"<b>Descrição:</b> {esc('Descrição do Serviço')}<br>"
+            f"<b>Abrangência:</b> {html_escape(abrangencia)}"
+            f"</div>"
         )
-        .size()
-        .reset_index(
-            name="qtd_os"
-        )
-    )
-
-    ultima = (
-        historico
-        .sort_values("_data")
-        .groupby("Matrícula")
-        .tail(1)
-        [
-            [
-                "Matrícula",
-                "_data",
-            ]
-        ]
-        .rename(
-            columns={
-                "_data": "_ultima_data"
-            }
-        )
-    )
-
-    ranking = contagem.merge(
-        ultima,
-        on="Matrícula",
-        how="left",
-    )
-
-    ranking = ranking.sort_values(
-        by=[
-            "qtd_os",
-            "_ultima_data",
-            "Matrícula",
-        ],
-        ascending=[
-            False,
-            False,
-            True,
-        ],
-        na_position="last",
-    )
-
-    cliente = texto(
-        ranking.iloc[0]["Matrícula"]
-    )
-
-    qtd_os = int(
-        ranking.iloc[0]["qtd_os"]
-    )
-
-    historico_cliente = (
-        historico_da_matricula(
-            historico,
-            cliente,
-        )
-    )
-
-    historico_cliente["_data"] = (
-        pd.to_datetime(
-            historico_cliente[
-                "Data de Abertura"
-            ],
-            errors="coerce",
-        )
-    )
-
-    historico_cliente = (
-        historico_cliente
-        .sort_values("_data")
-    )
-
-    datas = (
-        historico_cliente["_data"]
-        .dropna()
-        .dt.date
-        .tolist()
-    )
-
-    if len(datas) >= 2:
-
-        diferencas = [
-            (
-                datas[i]
-                - datas[i - 1]
-            ).days
-            for i in range(
-                1,
-                len(datas),
-            )
-        ]
-
-        tempo_medio = (
-            sum(diferencas)
-            / len(diferencas)
-        )
-
-        tempo_medio_texto = (
-            f"{tempo_medio:.1f} dias"
-        )
-
-    else:
-        tempo_medio_texto = "—"
-
-    pressoes = pd.to_numeric(
-        historico_cliente["Pressão"],
-        errors="coerce",
-    ).dropna()
-
-    if pressoes.empty:
-        media_pressao_texto = "—"
-    else:
-        media_pressao_texto = (
-            f"{pressoes.mean():.2f} MCA"
-        )
-
-    return {
-        "cliente": cliente,
-        "qtd_os": qtd_os,
-        "tempo_medio": tempo_medio_texto,
-        "media_pressao": media_pressao_texto,
-    }
-
-
-def exibir_kpis(
-    kpis,
-):
-
-    col1, col2, col3, col4 = (
-        st.columns(4)
-    )
-
-    cards = [
-        (
-            col1,
-            "Cliente com mais registros",
-            kpis["cliente"],
-        ),
-        (
-            col2,
-            "Quant. de O.S",
-            str(kpis["qtd_os"]),
-        ),
-        (
-            col3,
-            "Tempo Médio de Reclamação",
-            kpis["tempo_medio"],
-        ),
-        (
-            col4,
-            "Média de Pressão",
-            kpis["media_pressao"],
-        ),
-    ]
-
-    for coluna, titulo, valor in cards:
-
-        with coluna:
-
-            st.markdown(
-                f"""
-                <div class="kpi-card">
-                    <div class="kpi-title">
-                        {html.escape(titulo)}
-                    </div>
-                    <div class="kpi-value">
-                        {html.escape(str(valor))}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        for poligono in bairro.get("poligonos_mapa", bairro["poligonos"]):
+            folium.Polygon(
+                locations=poligono,
+                color=item["cor"], weight=2.5, opacity=0.9,
+                fill=True, fill_color=item["cor"], fill_opacity=0.23,
+                tooltip=f"Evento: {bairro['nome']} — {categoria}",
+                popup=folium.Popup(html, max_width=430),
+            ).add_to(fg)
+    fg.add_to(mapa)
 
 
 # ============================================================
 # MAPA
 # ============================================================
 
-def construir_mapa(
-    df_registro,
-    df_historico,
-):
+@st.cache_data(ttl=180, show_spinner=False, max_entries=12)
+def filtrar_ativos_proximos(concentracoes, df_pocos, df_loggers, raio_m):
+    """Exibe ativos perto de qualquer concentração, sem duplicatas, na ordem original."""
+    if concentracoes.empty:
+        return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
+    centros = [
+        (normalizar_coordenada(r.get("LATITUDE"), "lat"), normalizar_coordenada(r.get("LONGITUDE"), "lon"))
+        for _, r in concentracoes.iterrows()
+    ]
+    centros = [(lat, lon) for lat, lon in centros if lat is not None and lon is not None]
+    if not centros:
+        return df_pocos.iloc[0:0].copy(), df_loggers.iloc[0:0].copy()
 
-    mapa = folium.Map(
-        location=[
-            -5.0892,
-            -42.8019,
-        ],
-        zoom_start=12,
-        tiles=None,
-        control_scale=True,
-    )
+    def filtrar(df):
+        grade, _ = _indice_espacial_ativos(df)
+        posicoes = set()
+        for lat, lon in centros:
+            posicoes.update(pos for pos, _ in _candidatos_no_raio(grade, lat, lon, raio_m))
+        return df.iloc[sorted(posicoes)].copy()
 
-    folium.TileLayer(
-        "OpenStreetMap",
-        name="Mapa",
-    ).add_to(mapa)
+    return filtrar(df_pocos), filtrar(df_loggers)
 
-    folium.TileLayer(
-        tiles=(
-            "https://server.arcgisonline.com/"
-            "ArcGIS/rest/services/"
-            "World_Imagery/MapServer/"
-            "tile/{z}/{y}/{x}"
-        ),
-        attr="Esri",
-        name="Satélite",
-    ).add_to(mapa)
 
-    folium.TileLayer(
-        tiles=(
-            "https://{s}.tile.opentopomap.org/"
-            "{z}/{x}/{y}.png"
-        ),
-        attr="OpenTopoMap",
-        name="Topográfico",
-    ).add_to(mapa)
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None):
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
+    folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
-    bounds = []
+    if mostrar_bairros:
+        fg_bairros = folium.FeatureGroup(name="Bairros", show=True)
+        for bairro in bairros:
+            for poly in bairro.get("poligonos_mapa", bairro["poligonos"]):
+                folium.Polygon(
+                    locations=poly,
+                    color="#666666",
+                    weight=1,
+                    fill=False,
+                    tooltip=bairro["nome"],
+                ).add_to(fg_bairros)
+        fg_bairros.add_to(mapa)
 
-    for _, registro in df_registro.iterrows():
+    adicionar_camada_eventos(mapa, eventos_mapeados or [])
 
-        latitude = normalizar_coordenada(
-            registro["Latitude"],
-            "lat",
-        )
+    fg_os = folium.FeatureGroup(name="O.S.", show=True)
+    if not df_pontos.empty:
+        for r in df_pontos.to_dict("records"):
+            lat = normalizar_coordenada(r.get("Latitude"), "lat")
+            lon = normalizar_coordenada(r.get("Longitude"), "lon")
+            if lat is None or lon is None:
+                continue
+            # Cor definida pelo serviço executado, independentemente do status da O.S.
+            servico_os = str(r.get("Serviço Executado", "") or "")
+            eh_informacao = bool(re.search(r"(?<!\d)146005(?!\d)", servico_os))
+            cor = "#F28C28" if eh_informacao else "#1677D2"
+            classificacao = ("Informação de Falta de água (146005)" if eh_informacao
+                             else "Reclamação de Falta de água")
+            popup = folium.Popup(
+                f"O.S.: {r.get('Nº da O.S','')}<br>"
+                f"<b>Matrícula:</b> {r.get('Matrícula','')}<br>"
+                f"<b>Bairro:</b> {r.get('Bairro','')}<br>"
+                f"<b>Status:</b> {r.get('Status OS','')}<br>"
+                f"<b>Serviço:</b> {r.get('Serviço Executado','')}<br>"
+                f"<b>Classificação:</b> {classificacao}",
+                max_width=350,
+            )
+            folium.CircleMarker(
+                [lat, lon], radius=4, color=cor, fill=True, fill_opacity=0.75, popup=popup
+            ).add_to(fg_os)
+    fg_os.add_to(mapa)
 
-        longitude = normalizar_coordenada(
-            registro["Longitude"],
-            "lon",
-        )
+    # Rótulos só ficam visíveis em aproximações de detalhe (~200 m na escala).
+    # A lógica é executada no Leaflet, sem provocar rerun do Streamlit.
+    mapa.get_root().header.add_child(Element("""
+    <style>
+      .leaflet-tooltip.farol-rotulo-equipamento {
+        display: none;
+        background: rgba(255,255,255,.95);
+        color: #1e293b;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        padding: 2px 5px;
+        font: 600 11px/1.25 Arial, sans-serif;
+        box-shadow: 0 1px 3px rgba(0,0,0,.18);
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .farol-zoom-detalhe .leaflet-tooltip.farol-rotulo-equipamento { display: block; }
+    </style>
+    """))
+    mapa.get_root().script.add_child(Element(f"""
+    (function() {{
+      var mapaFarol = {mapa.get_name()};
+      var limiarZoom = 16.5;
+      function atualizarRotulosFarol() {{
+        var container = mapaFarol.getContainer();
+        if (mapaFarol.getZoom() >= limiarZoom) {{
+          container.classList.add('farol-zoom-detalhe');
+        }} else {{
+          container.classList.remove('farol-zoom-detalhe');
+        }}
+      }}
+      mapaFarol.on('zoomend', atualizarRotulosFarol);
+      mapaFarol.whenReady(atualizarRotulosFarol);
+    }})();
+    """))
 
-        # As coordenadas já chegam normalizadas de carregar_worksheet(),
-        # mas fazemos uma segunda validação no ponto de desenho para
-        # garantir que o Folium receba somente floats válidos.
-        if latitude is None or longitude is None:
+    fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
+    for _, r in df_loggers.iterrows():
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
             continue
-
-        if not coordenadas_validas(
-            latitude,
-            longitude,
-        ):
-            continue
-
-        matricula = texto(
-            registro["Matrícula"]
-        )
-
-        historico_cliente = (
-            historico_da_matricula(
-                df_historico,
-                matricula,
-            )
-        )
-
-        qtd_os = len(
-            historico_cliente
-        )
-
-        ultima_os = "—"
-
-        if not historico_cliente.empty:
-
-            aux = historico_cliente.copy()
-
-            aux["_data"] = pd.to_datetime(
-                aux["Data de Abertura"],
-                errors="coerce",
-            )
-
-            aux = aux.sort_values(
-                "_data"
-            )
-
-            ultima_os = texto(
-                aux.iloc[-1]["N. O.S"]
-            )
-
-        resolvido = texto(
-            registro["Resolvido"]
-        ).upper()
-
-        if resolvido in [
-            "SIM",
-            "S",
-        ]:
-            cor = "green"
-
-        elif resolvido in [
-            "NAO",
-            "NÃO",
-            "N",
-        ]:
-            cor = "red"
-
-        else:
-            cor = "blue"
-
-        popup = f"""
-        <div style="width:320px">
-
-            <h4>
-                {escape(matricula)}
-            </h4>
-
-            <b>Endereço:</b>
-            {escape(registro["Endereço"])}
-            <br>
-
-            <b>Bairro:</b>
-            {escape(registro["Bairro"])}
-            <br>
-
-            <b>Grau de Impacto:</b>
-            {escape(registro["Grau de Impacto"])}
-            <br>
-
-            <b>Resolvido:</b>
-            {escape(registro["Resolvido"])}
-            <br>
-
-            <b>Qtd. de O.S.:</b>
-            {qtd_os}
-            <br>
-
-            <b>Última O.S.:</b>
-            {escape(ultima_os)}
-            <br>
-
-            <b>Data de Registro:</b>
-            {escape(
-                formatar_data(
-                    registro["Data de Registro"]
-                )
-            )}
-            <br>
-
-            <b>Responsável:</b>
-            {escape(
-                registro["Responsável"]
-            )}
-            <br>
-
-            <b>Parecer:</b>
-            {escape(
-                registro["Parecer"]
-            )}
-            <br>
-
-            <b>Tratativa 1:</b>
-            {escape(
-                registro["Tratativa 1"]
-            )}
-            <br>
-
-            <b>Retorno:</b>
-            {escape(
-                registro["Retorno"]
-            )}
-
-        </div>
-        """
-
         folium.Marker(
-            location=[
-                latitude,
-                longitude,
-            ],
-            tooltip=matricula,
+            [lat, lon],
+            tooltip=folium.Tooltip(
+                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or "Logger")),
+                permanent=True, direction="top", offset=(0, -12),
+                class_name="farol-rotulo-equipamento",
+            ),
             popup=folium.Popup(
-                popup,
-                max_width=360,
+                f"<b>Logger:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
+                f"<b>Endereço:</b> {r.get('ENDERECO','')}", max_width=300
             ),
-            icon=folium.Icon(
-                color=cor,
-                icon="wrench",
-                prefix="fa",
-            ),
-        ).add_to(mapa)
+            icon=folium.Icon(icon="signal", prefix="fa", color="orange"),
+        ).add_to(fg_loggers)
+    fg_loggers.add_to(mapa)
 
-        bounds.append(
-            [
-                latitude,
-                longitude,
-            ]
+    fg_pocos = folium.FeatureGroup(name="Poços / Ativos", show=True)
+    for _, r in df_pocos.iterrows():
+        lat = normalizar_coordenada(r.get("LATITUDE"), "lat")
+        lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
+            continue
+        folium.Marker(
+            [lat, lon],
+            tooltip=folium.Tooltip(
+                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")),
+                permanent=True, direction="top", offset=(0, -12),
+                class_name="farol-rotulo-equipamento",
+            ),
+            popup=folium.Popup(
+                f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
+                f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
+                f"Município: {r.get('MUNICIPIO','')}", max_width=300
+            ),
+            icon=folium.Icon(icon="tint", prefix="fa", color="blue"),
+            z_index_offset=1000,  # Mantém ativos acima dos loggers coincidentes.
+        ).add_to(fg_pocos)
+    fg_pocos.add_to(mapa)
+
+    fg_conc = folium.FeatureGroup(name="Concentrações", show=True)
+    for _, c in concentracoes.iterrows():
+        lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+        codigo = html_escape(str(c["ID_CONCENTRACAO"]))
+        bairros_html = html_escape(str(c.get("BAIRROS", "") or "Não informados"))
+        # Sem rótulos permanentes: os dados aparecem somente ao clicar na concentração.
+        conteudo_popup = (
+            "<div style='min-width:230px;max-width:340px;font-size:13px'>"
+            f"<b>Concentração {codigo}</b>"
+            "<details open style='margin-top:7px'>"
+            "<summary style='cursor:pointer;font-weight:600'>Informações da concentração</summary>"
+            f"<div style='padding-top:7px'>O.S.: {int(c['QTD_OS'])}<br>"
+            f"<b>Matrículas:</b> {int(c['QTD_MATRICULAS'])}<br>"
+            f"Bairros: {bairros_html}</div>"
+            "</details>"
+            "<small style='display:block;margin-top:8px'>O painel completo da concentração também será expandido abaixo do mapa.</small>"
+            "</div>"
         )
+        popup_concentracao = folium.Popup(conteudo_popup, max_width=370)
+        folium.Circle(
+            [lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
+            color="purple", fill=True, fill_opacity=0.08,
+            popup=popup_concentracao,
+        ).add_to(fg_conc)
+        # Ponto central discreto e clicável; sem código, contagens ou texto sobre o mapa.
+        folium.CircleMarker(
+            [lat, lon], radius=7, color="#7135A8", weight=2,
+            fill=True, fill_color="#7135A8", fill_opacity=0.9,
+            tooltip="Clique para consultar a concentração",
+            popup=folium.Popup(conteudo_popup, max_width=370),
+        ).add_to(fg_conc)
+    fg_conc.add_to(mapa)
 
-    if bounds:
-
-        if len(bounds) == 1:
-
-            mapa.location = bounds[0]
-            mapa.zoom_start = 15
-
+    # Centraliza o mapa nos registros efetivamente desenhados, como no Módulo 1.
+    coordenadas_visiveis = []
+    for quadro, lat_col, lon_col in (
+        (df_pontos, "Latitude", "Longitude"),
+        (df_pocos, "LATITUDE", "LONGITUDE"),
+        (df_loggers, "LATITUDE", "LONGITUDE"),
+    ):
+        if quadro is not None and not quadro.empty:
+            for _, registro in quadro.iterrows():
+                lat = normalizar_coordenada(registro.get(lat_col), "lat")
+                lon = normalizar_coordenada(registro.get(lon_col), "lon")
+                if lat is not None and lon is not None:
+                    coordenadas_visiveis.append([lat, lon])
+    if coordenadas_visiveis:
+        if len(coordenadas_visiveis) == 1:
+            mapa.location = coordenadas_visiveis[0]
+            mapa.options["zoom"] = 15
         else:
-            mapa.fit_bounds(
-                bounds
-            )
-
-    folium.LayerControl().add_to(
-        mapa
-    )
-
+            mapa.fit_bounds(coordenadas_visiveis, padding=(25, 25), max_zoom=15)
+    folium.LayerControl(collapsed=False).add_to(mapa)
     return mapa
 
 
-# ============================================================
-# ESTADO DOS DIÁLOGOS
-# ============================================================
+def normalizar_texto_series(serie):
+    return serie.fillna("").astype(str).map(normalizar_texto)
 
-if "dialogo_melhorias" not in st.session_state:
-    st.session_state.dialogo_melhorias = None
-
-if "pagina_mapeamento" not in st.session_state:
-    st.session_state.pagina_mapeamento = 1
-
-
-def abrir_dialogo(
-    nome,
-    **dados,
-):
-
-    st.session_state.dialogo_melhorias = nome
-
-    for chave, valor in dados.items():
-        st.session_state[
-            f"dialogo_{chave}"
-        ] = valor
-
-
-def fechar_dialogo():
-
-    st.session_state.dialogo_melhorias = None
-
-    for chave in list(
-        st.session_state.keys()
-    ):
-
-        if (
-            str(chave).startswith(
-                "dialogo_"
-            )
-            and chave != "dialogo_melhorias"
-        ):
-
-            del st.session_state[
-                chave
-            ]
 
 
 # ============================================================
-# DIÁLOGO — NOVO REGISTRO
+# CADASTRO DE POÇOS — OPERAÇÕES PRESERVADAS DO MÓDULO ORIGINAL
+# ============================================================
+def normalizar_coordenada(valor, tipo="lat"):
+    n = parse_float(valor)
+    if n is None or not math.isfinite(n) or n == 0:
+        return None
+    if tipo == "lat" and not (-90 <= n <= 90):
+        return None
+    if tipo == "lon" and not (-180 <= n <= 180):
+        return None
+    return round(float(n), 6)
+
+
+def identificacao_exibicao(row):
+    nome = str(row.get("NOME_POCO", "")).strip()
+    ativo = str(row.get("IDENTIFICACAO_ATIVO", "")).strip()
+    return f"{nome} — {ativo}" if nome and ativo else nome or ativo or str(row.get("ID_POCO", ""))
+
+
+def carregar_pocos():
+    return carregar_cadastro_github(ARQUIVO_POCOS_CSV, CABECALHO_POCOS)
+
+
+def preparar_pocos(df):
+    df = df.copy()
+    for col in ("LATITUDE", "LONGITUDE"):
+        if col in df:
+            df[col] = df[col].map(lambda v: normalizar_coordenada(v, "lat" if col == "LATITUDE" else "lon"))
+    return df
+
+
+def invalidar_cache_dados():
+    invalidar_cache()
+
+
+# Os cadastros de poços e loggers são arquivos fixos no GitHub.
+# Não há rotinas de cadastro, edição ou exclusão pelo Farol.
+
+
+# ============================================================
+# RELATÓRIOS INDIVIDUAIS DAS CONCENTRAÇÕES
 # ============================================================
 
-@st.dialog(
-    "Adicionar melhoria",
-    width="large",
-)
-def dialogo_novo_registro(
-    df_registro,
-    df_historico,
-):
-
-    st.subheader(
-        "Cadastro da melhoria"
+def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos=None):
+    """Associa O.S. pelo identificador real do grupo, não pelo ID reordenado."""
+    grupo = concentracao["GRUPO"]
+    os_grupo = pontos_cluster[pontos_cluster["_grupo"] == grupo].copy()
+    codigo = concentracao["ID_CONCENTRACAO"]
+    ativos = (
+        proximidades[proximidades["Concentração"] == codigo].copy()
+        if not proximidades.empty else pd.DataFrame()
     )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        matricula = st.text_input(
-            "Matrícula *",
-            key="novo_matricula",
-        )
-
-        endereco = st.text_input(
-            "Endereço *",
-            key="novo_endereco",
-        )
-
-        bairro = st.text_input(
-            "Bairro *",
-            key="novo_bairro",
-        )
-
-    with col2:
-
-        latitude = st.text_input(
-            "Latitude *",
-            key="novo_latitude",
-        )
-
-        longitude = st.text_input(
-            "Longitude *",
-            key="novo_longitude",
-        )
-
-    st.divider()
-
-    st.subheader(
-        "Mapeamento"
-    )
-
-    parecer = st.text_area(
-        "Parecer",
-        key="novo_parecer",
-    )
-
-    data_registro = st.date_input(
-        "Data de Registro *",
-        value=date.today(),
-        key="novo_data_registro",
-    )
-
-    tratativa_1 = st.text_area(
-        "Tratativa 1",
-        key="novo_tratativa_1",
-    )
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-
-        executado = st.text_input(
-            "Executado?",
-            key="novo_executado",
-        )
-
-    with col4:
-
-        retorno = st.text_area(
-            "Retorno",
-            key="novo_retorno",
-        )
-
-    responsavel = st.text_input(
-        "Responsável",
-        key="novo_responsavel",
-    )
-
-    grau_impacto = st.text_input(
-        "Grau de Impacto",
-        key="novo_grau_impacto",
-    )
-
-    # --------------------------------------------------------
-    # RESOLVIDO É O ÚLTIMO CAMPO DA MELHORIA
-    # --------------------------------------------------------
-
-    resolvido = st.text_input(
-        "Resolvido",
-        key="novo_resolvido",
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # O.S. INICIAL
-    # --------------------------------------------------------
-
-    st.subheader(
-        "O.S. inicial"
-    )
-
-    matricula = texto(
-        matricula
-    )
-
-    historico_existente = (
-        historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-        if matricula
-        else pd.DataFrame()
-    )
-
-    existe_registro = (
-        matricula_possui_registro(
-            df_registro,
-            matricula,
-        )
-        if matricula
-        else False
-    )
-
-    if existe_registro:
-
-        st.error(
-            "Já existe um registro para esta matrícula."
-        )
-
-        return
-
-    # IMPORTANTE:
-    # Não usar o nome "adicionar_os" aqui.
-    # "adicionar_os" é a função responsável pelo CRUD da O.S.
-    deve_adicionar_os = True
-
-    if not historico_existente.empty:
-
-        st.info(
-            "Esta matrícula já possui histórico de O.S."
-        )
-
-        deve_adicionar_os = st.checkbox(
-            "Adicionar uma nova O.S.",
-            value=False,
-            key="novo_adicionar_os",
-        )
-
-    numero_os = ""
-    data_abertura = datetime.now()
-    pressao = 0.0
-    pontual = "SIM"
-
-    if (
-        historico_existente.empty
-        or deve_adicionar_os
-    ):
-
-        col7, col8 = st.columns(2)
-
-        with col7:
-
-            numero_os = st.text_input(
-                "N. O.S *",
-                placeholder="Digite a identificação da O.S.",
-                key="novo_numero_os",
-            )
-
-        with col8:
-
-            data_abertura = st.datetime_input(
-                "Data de Abertura *",
-                value=datetime.now(),
-                key="novo_data_abertura",
-            )
-
-        col9, col10 = st.columns(2)
-
-        with col9:
-
-            pressao = st.number_input(
-                "Pressão (MCA) *",
-                min_value=0.0,
-                step=0.01,
-                format="%.2f",
-                key="novo_pressao",
-            )
-
-        with col10:
-
-            pontual = st.selectbox(
-                "Pontual",
-                [
-                    "SIM",
-                    "NÃO",
-                ],
-                key="novo_pontual",
-            )
-
-    salvar = st.button(
-        "💾 Salvar",
-        type="primary",
-        use_container_width=True,
-    )
-
-    if not salvar:
-        return
-
-    # --------------------------------------------------------
-    # VALIDAÇÕES DO CADASTRO
-    # --------------------------------------------------------
-
-    if not matricula:
-        st.error(
-            "Informe a matrícula."
-        )
-        return
-
-    if not endereco.strip():
-        st.error(
-            "Informe o endereço."
-        )
-        return
-
-    if not bairro.strip():
-        st.error(
-            "Informe o bairro."
-        )
-        return
-
-    if not coordenadas_validas(
-        latitude,
-        longitude,
-    ):
-        st.error(
-            "Latitude e longitude são obrigatórias "
-            "e devem ser válidas."
-        )
-        return
-
-    # --------------------------------------------------------
-    # VALIDAÇÃO DA O.S.
-    # N. O.S. É TEXTO LIVRE
-    # --------------------------------------------------------
-
-    if (
-        historico_existente.empty
-        or deve_adicionar_os
-    ):
-
-        numero_os = texto(
-            numero_os
-        )
-
-        if not numero_os:
-
-            st.error(
-                "Informe a N. O.S."
-            )
-
-            return
-
-        if os_duplicada(
-            df_historico,
-            matricula,
-            numero_os,
-        ):
-
-            st.error(
-                "Esta O.S. já está cadastrada."
-            )
-
-            return
-
-    # --------------------------------------------------------
-    # DADOS DO REGISTRO
-    # --------------------------------------------------------
-
-    registro_id = gerar_id()
-
-    dados = {
-        "ID": registro_id,
-        "Matrícula": matricula,
-        "Endereço": endereco.strip(),
-        "Bairro": bairro.strip(),
-        "Latitude": normalizar_coordenada(
-            latitude,
-            "lat",
-        ),
-        "Longitude": normalizar_coordenada(
-            longitude,
-            "lon",
-        ),
-        "Parecer": parecer,
-        "Data de Registro": (
-            data_registro.strftime(
-                "%Y-%m-%d"
-            )
-        ),
-        "Tratativa 1": tratativa_1,
-        "Executado?": executado,
-        "Retorno": retorno,
-        "Responsável": responsavel,
-        "Grau de Impacto": grau_impacto,
-        "Resolvido": resolvido,
+    pares_grupo = {
+        (normalizar_municipio(r.get("Cidade", "")), limpar_nome_bairro(r.get("Bairro", "")))
+        for _, r in os_grupo.iterrows()
+        if str(r.get("Cidade", "")).strip() and str(r.get("Bairro", "")).strip()
     }
-
-    try:
-
-        # ----------------------------------------------------
-        # NOVO REGISTRO + O.S. INICIAL
-        # ----------------------------------------------------
-
-        if (
-            historico_existente.empty
-            or deve_adicionar_os
-        ):
-
-            dados_os = {
-                "ID": gerar_id(),
-                "Matrícula": matricula,
-                "N. O.S": texto(
-                    numero_os
-                ),
-                "Data de Abertura": (
-                    data_abertura.strftime(
-                        "%Y-%m-%d %H:%M:%S"
-                    )
-                ),
-                "Pressão": pressao,
-                "Pontual": pontual,
-            }
-
-            # O cadastro inicial e sua O.S. são gravados juntos.
-            # Se a O.S. falhar, o registro principal é desfeito.
-            adicionar_registro_com_os(
-                dados,
-                dados_os,
-            )
-
-        else:
-            # Este caminho não é esperado para um novo cadastro,
-            # mas preserva a lógica caso a rotina seja reutilizada.
-            adicionar_registro(
-                dados
-            )
-
-        fechar_dialogo()
-
-        st.cache_data.clear()
-
-        st.rerun()
-
-    except Exception as exc:
-
-        st.error(
-            "Não foi possível salvar o registro."
-        )
-
-        st.exception(exc)
-
-
-# ============================================================
-# DIÁLOGO — EDITAR REGISTRO
-# ============================================================
-
-@st.dialog(
-    "Editar melhoria",
-    width="large",
-)
-def dialogo_editar_registro(
-    registro,
-    df_registro,
-    df_historico,
-):
-
-    registro_id = texto(
-        registro["ID"]
-    )
-
-    matricula_original = texto(
-        registro["Matrícula"]
-    )
-
-    matricula = st.text_input(
-        "Matrícula *",
-        value=matricula_original,
-        key=f"edit_matricula_{registro_id}",
-    )
-
-    endereco = st.text_input(
-        "Endereço *",
-        value=texto(
-            registro["Endereço"]
-        ),
-        key=f"edit_endereco_{registro_id}",
-    )
-
-    bairro = st.text_input(
-        "Bairro *",
-        value=texto(
-            registro["Bairro"]
-        ),
-        key=f"edit_bairro_{registro_id}",
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        latitude = st.text_input(
-            "Latitude *",
-            value=texto(
-                registro["Latitude"]
-            ),
-            key=f"edit_latitude_{registro_id}",
-        )
-
-    with col2:
-
-        longitude = st.text_input(
-            "Longitude *",
-            value=texto(
-                registro["Longitude"]
-            ),
-            key=f"edit_longitude_{registro_id}",
-        )
-
-    st.divider()
-
-    st.subheader(
-        "Mapeamento"
-    )
-
-    parecer = st.text_area(
-        "Parecer",
-        value=texto(
-            registro["Parecer"]
-        ),
-        key=f"edit_parecer_{registro_id}",
-    )
-
-    data_registro = st.date_input(
-        "Data de Registro *",
-        value=valor_data(
-            registro["Data de Registro"]
-        ),
-        key=f"edit_data_registro_{registro_id}",
-    )
-
-    tratativa_1 = st.text_area(
-        "Tratativa 1",
-        value=texto(
-            registro["Tratativa 1"]
-        ),
-        key=f"edit_tratativa_{registro_id}",
-    )
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-
-        executado = st.text_input(
-            "Executado?",
-            value=texto(
-                registro["Executado?"]
-            ),
-            key=f"edit_executado_{registro_id}",
-        )
-
-    with col4:
-
-        retorno = st.text_area(
-            "Retorno",
-            value=texto(
-                registro["Retorno"]
-            ),
-            key=f"edit_retorno_{registro_id}",
-        )
-
-    responsavel = st.text_input(
-        "Responsável",
-        value=texto(
-            registro["Responsável"]
-        ),
-        key=f"edit_responsavel_{registro_id}",
-    )
-
-    grau_impacto = st.text_input(
-        "Grau de Impacto",
-        value=texto(
-            registro["Grau de Impacto"]
-        ),
-        key=f"edit_impacto_{registro_id}",
-    )
-
-    # --------------------------------------------------------
-    # RESOLVIDO — ÚLTIMO CAMPO DA MELHORIA
-    # --------------------------------------------------------
-
-    resolvido = st.text_input(
-        "Resolvido",
-        value=texto(
-            registro["Resolvido"]
-        ),
-        key=f"edit_resolvido_{registro_id}",
-    )
-
-    st.divider()
-
-    st.subheader(
-        "O.S. inicial"
-    )
-
-    st.caption(
-        "A O.S. existente pode ser consultada e editada no histórico da matrícula."
-    )
-
-    st.divider()
-
-    salvar = st.button(
-        "💾 Salvar alterações",
-        type="primary",
-        use_container_width=True,
-    )
-
-    if not salvar:
-        return
-
-    matricula = texto(
-        matricula
-    )
-
-    if not matricula:
-        st.error(
-            "Informe a matrícula."
-        )
-        return
-
-    if matricula_possui_registro(
-        df_registro,
-        matricula,
-        ignorar_id=registro_id,
-    ):
-        st.error(
-            "Já existe outro registro para esta matrícula."
-        )
-        return
-
-    if not endereco.strip():
-        st.error(
-            "Informe o endereço."
-        )
-        return
-
-    if not bairro.strip():
-        st.error(
-            "Informe o bairro."
-        )
-        return
-
-    if not coordenadas_validas(
-        latitude,
-        longitude,
-    ):
-        st.error(
-            "Latitude e longitude são obrigatórias "
-            "e devem ser válidas."
-        )
-        return
-
-    dados = {
-        "ID": registro_id,
-        "Matrícula": matricula,
-        "Endereço": endereco.strip(),
-        "Bairro": bairro.strip(),
-        "Latitude": normalizar_coordenada(
-            latitude,
-            "lat",
-        ),
-        "Longitude": normalizar_coordenada(
-            longitude,
-            "lon",
-        ),
-        "Parecer": parecer,
-        "Data de Registro": (
-            data_registro.strftime(
-                "%Y-%m-%d"
-            )
-        ),
-        "Tratativa 1": tratativa_1,
-        "Executado?": executado,
-        "Retorno": retorno,
-        "Responsável": responsavel,
-        "Grau de Impacto": grau_impacto,
-        "Resolvido": resolvido,
-    }
-
-    try:
-
-        atualizar_registro(
-            registro_id,
-            dados,
-        )
-
-        # Se a matrícula foi alterada,
-        # atualiza também o histórico.
-        if (
-            matricula.upper()
-            != matricula_original.upper()
-        ):
-
-            historico_antigo = (
-                historico_da_matricula(
-                    df_historico,
-                    matricula_original,
-                )
-            )
-
-            for _, linha in (
-                historico_antigo.iterrows()
+    eventos_relacionados = []
+    if not eventos.empty:
+        for _, evento in eventos.iterrows():
+            cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
+            if not cidade_evento:
+                continue
+            municipal = evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
+            bairros_evento = {a["bairro"] for a in extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_geograficos)}
+            intersecao = sorted({bairro for cidade, bairro in pares_grupo
+                                  if cidade == cidade_evento and (municipal or bairro in bairros_evento)})
+            # Uma concentração pode não ter bairro preenchido, mas ainda pertence ao município.
+            if municipal and not intersecao and any(
+                normalizar_municipio(c) == cidade_evento for c in os_grupo.get("Cidade", [])
             ):
-
-                os_id = texto(
-                    linha["ID"]
-                )
-
-                dados_os = {
-                    "ID": os_id,
-                    "Matrícula": matricula,
-                    "N. O.S": texto(
-                        linha["N. O.S"]
-                    ),
-                    "Data de Abertura": texto(
-                        linha["Data de Abertura"]
-                    ),
-                    "Pressão": texto(
-                        linha["Pressão"]
-                    ),
-                    "Pontual": texto(
-                        linha["Pontual"]
-                    ),
-                }
-
-                atualizar_os(
-                    os_id,
-                    dados_os,
-                )
-
-        fechar_dialogo()
-
-        st.cache_data.clear()
-
-        st.rerun()
-
-    except Exception as exc:
-
-        st.error(
-            "Não foi possível atualizar o registro."
-        )
-
-        st.exception(exc)
+                intersecao = ["Todo o município"]
+            if intersecao:
+                item = evento.to_dict()
+                item["Bairros coincidentes"] = ", ".join(intersecao)
+                eventos_relacionados.append(item)
+    return os_grupo, ativos, pd.DataFrame(eventos_relacionados)
 
 
-# ============================================================
-# DIÁLOGO — MATRÍCULA
-# ============================================================
+def texto_relatorio(valor):
+    if valor is None or pd.isna(valor):
+        return "—"
+    return str(valor).strip() or "—"
 
-@st.dialog(
-    "Registro da Matrícula",
-    width="large",
-)
-def dialogo_matricula(
-    matricula,
-    df_registro,
-    df_historico,
-):
 
-    registro_df = (
-        registro_da_matricula(
-            df_registro,
-            matricula,
-        )
+def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
+    """Mapa compacto do agrupamento; não depende do enquadramento do mapa principal."""
+    lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+    mapa = folium.Map(location=[lat, lon], zoom_start=16, tiles="OpenStreetMap",
+                      control_scale=True, zoom_control=False, attribution_control=True)
+    raio_grupo = RAIO_CONCENTRACAO_PADRAO
+    folium.Circle([lat, lon], radius=raio_grupo, color="#8522a5", weight=3,
+                  fill=True, fill_color="#8522a5", fill_opacity=0.07).add_to(mapa)
+    folium.CircleMarker([lat, lon], radius=6, color="#7135A8", fill=True,
+                        fill_color="#7135A8").add_to(mapa)
+    for _, registro in os_grupo.iterrows():
+        y = normalizar_coordenada(registro.get("Latitude"), "lat")
+        x = normalizar_coordenada(registro.get("Longitude"), "lon")
+        if y is None or x is None:
+            continue
+        servico = str(registro.get("Serviço Executado", "") or "")
+        cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+        folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
+                            fill=True, fill_color=cor, fill_opacity=.9).add_to(mapa)
+    # A tabela de proximidades não possui coordenadas: recuperá-las dos cadastros locais.
+    cadastros = {"LOGGER": carregar_cadastro_github(ARQUIVO_LOGGERS_CSV, CABECALHO_LOGGERS), "ATIVO": carregar_pocos()}
+    for _, ativo in ativos.iterrows():
+        tipo = str(ativo.get("Tipo", ""))
+        eh_logger = "LOGGER" in tipo.upper()
+        cadastro = cadastros["LOGGER" if eh_logger else "ATIVO"]
+        identificacao = str(ativo.get("Identificação", "") or "").strip()
+        correspondencias = cadastro[cadastro["IDENTIFICACAO_ATIVO"].astype(str).str.strip() == identificacao]
+        if correspondencias.empty:
+            continue
+        registro_geo = correspondencias.iloc[0]
+        y = normalizar_coordenada(registro_geo.get("LATITUDE"), "lat")
+        x = normalizar_coordenada(registro_geo.get("LONGITUDE"), "lon")
+        if y is None or x is None:
+            continue
+        identificacao = identificacao or str(ativo.get("Nome", "") or tipo)
+        folium.Marker(
+            [y, x], icon=folium.Icon(icon="signal" if eh_logger else "tint",
+                                    prefix="fa", color="orange" if eh_logger else "blue"),
+            tooltip=folium.Tooltip(html_escape(identificacao), permanent=True,
+                                  direction="top", offset=(0, -12),
+                                  class_name="farol-rotulo-relatorio"),
+            z_index_offset=0 if eh_logger else 1000,
+        ).add_to(mapa)
+    mapa.get_root().header.add_child(Element("""<style>
+    .leaflet-tooltip.farol-rotulo-relatorio {background:rgba(255,255,255,.96);color:#1e293b;
+      border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;
+      font:600 11px Arial,sans-serif;box-shadow:0 1px 3px #0002;white-space:nowrap}
+    </style>"""))
+    # O círculo inteiro deve caber no enquadramento; pequena margem para ruas e rótulos.
+    delta_lat = (raio_grupo * 1.13) / 111320.0
+    delta_lon = (raio_grupo * 1.13) / (111320.0 * max(.2, math.cos(math.radians(lat))))
+    mapa.fit_bounds([[lat-delta_lat, lon-delta_lon], [lat+delta_lat, lon+delta_lon]],
+                    padding=(12, 12))
+    return mapa
+
+
+def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_mapa=None):
+    """Gera PDF em memória, sem gravar ou alterar informações no Sheets."""
+    fonte_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    fonte_negrito = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if os.path.isfile(fonte_regular) and "FarolDejaVu" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("FarolDejaVu", fonte_regular))
+        pdfmetrics.registerFont(TTFont("FarolDejaVu-Bold", fonte_negrito))
+        pdfmetrics.registerFontFamily("FarolDejaVu", normal="FarolDejaVu", bold="FarolDejaVu-Bold")
+    fonte = "FarolDejaVu" if "FarolDejaVu" in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.4*cm,
+                            rightMargin=1.4*cm, topMargin=1.3*cm, bottomMargin=1.3*cm)
+    estilos = getSampleStyleSheet()
+    normal = ParagraphStyle("FarolNormal", parent=estilos["Normal"], fontName=fonte, fontSize=8.5, leading=12)
+    pequeno = ParagraphStyle("FarolPequeno", parent=normal, fontSize=7, leading=10)
+    titulo = ParagraphStyle("FarolTitulo", parent=normal, fontSize=17, leading=22, spaceAfter=8)
+    subtitulo = ParagraphStyle("FarolSubtitulo", parent=normal, fontSize=11, leading=16, spaceBefore=12, spaceAfter=6)
+    historia = []
+    def p(valor, estilo=pequeno):
+        return Paragraph(xml_escape(texto_relatorio(valor)), estilo)
+    def tabela(cabecalho, linhas, larguras):
+        dados = [[p(v) for v in cabecalho]] + [[p(v) for v in linha] for linha in linhas]
+        t = Table(dados, colWidths=larguras, repeatRows=1, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E9EFF7")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D4DCE5")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        return t
+    historia.append(p("Farol Operacional — " + str(concentracao["ID_CONCENTRACAO"]), titulo))
+    historia.append(p("RELATÓRIO INDIVIDUAL DE CONCENTRAÇÃO | VISÃO TERRITORIAL", pequeno))
+    historia.append(Spacer(1, .25*cm))
+    if imagem_mapa:
+        # Ficha em duas colunas: 55% mapa e 45% dados. O restante do PDF permanece tabular.
+        largura_mapa, largura_info = 14.15*cm, 11.15*cm
+        altura_mapa = 12.1*cm
+        mapa_pdf = Image(io.BytesIO(imagem_mapa), width=largura_mapa, height=altura_mapa)
+        mapa_pdf.hAlign = "LEFT"
+        cidades_ficha = ", ".join(sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()}))
+        info = [
+            p("RESUMO OPERACIONAL", subtitulo), Spacer(1, .15*cm),
+            p(f"O.S.: {len(os_grupo)}", normal), Spacer(1, .18*cm),
+            p(f"Matrículas distintas: {concentracao['QTD_MATRICULAS']}", normal), Spacer(1, .18*cm),
+            p(f"Município: {cidades_ficha or 'Não informado'}", normal), Spacer(1, .18*cm),
+            p(f"Bairros: {texto_relatorio(concentracao['BAIRROS'])}", normal), Spacer(1, .18*cm),
+            p(f"Equipamentos próximos: {len(ativos)}", normal), Spacer(1, .18*cm),
+            p(f"Eventos relacionados: {len(eventos_relacionados)}", normal), Spacer(1, .18*cm),
+            p(f"Raio operacional: {raio} m", normal), Spacer(1, .25*cm),
+            p("A imagem mostra a concentração e seus equipamentos próximos. A proximidade não comprova vínculo hidráulico ou causalidade.", pequeno),
+        ]
+        ficha = Table([[mapa_pdf, info]], colWidths=[largura_mapa+.35*cm, largura_info],
+                      hAlign="LEFT")
+        ficha.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("BACKGROUND", (1,0), (1,0), colors.HexColor("#F4F7FB")),
+            ("LEFTPADDING", (0,0), (0,0), 0),
+            ("RIGHTPADDING", (0,0), (0,0), 6),
+            ("LEFTPADDING", (1,0), (1,0), 12),
+            ("TOPPADDING", (0,0), (-1,-1), 7),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+        ]))
+        historia.append(ficha)
+        historia.append(Spacer(1, .25*cm))
+    cidades = ", ".join(sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()}))
+    resumo = (
+        f"Município(s): {cidades or 'Não informado'} | Bairros: {texto_relatorio(concentracao['BAIRROS'])} | "
+        f"O.S.: {len(os_grupo)} | Matrículas: {concentracao['QTD_MATRICULAS']} | "
+        f"Raio operacional: {raio} m"
     )
-
-    historico_df = (
-        historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-    )
-
-    if registro_df.empty:
-
-        st.warning(
-            "Registro principal não encontrado."
-        )
-
+    historia.append(p(resumo, normal))
+    historia.append(p(f"Centro: {float(concentracao['LATITUDE']):.6f}, {float(concentracao['LONGITUDE']):.6f}", normal))
+    historia.append(p("Ordens de serviço da concentração", subtitulo))
+    colunas = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
+    linhas = [[r.get(c, "") for c in colunas] for _, r in os_grupo.iterrows()]
+    historia.append(tabela(colunas, linhas, [2.1*cm, 2.2*cm, 2.5*cm, 3.0*cm, 3.0*cm, 3.3*cm, 10.0*cm]))
+    historia.append(p("Poços / ativos e loggers próximos", subtitulo))
+    if ativos.empty:
+        historia.append(p("Nenhum equipamento encontrado no raio operacional.", normal))
     else:
+        cols = ["Tipo", "Identificação", "Nome", "Município", "Distância"]
+        historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in ativos.iterrows()],
+                                [3.0*cm, 4.0*cm, 10.0*cm, 5.0*cm, 4.1*cm]))
+    historia.append(p("Eventos relacionados por município e bairro", subtitulo))
+    if eventos_relacionados.empty:
+        historia.append(p("Nenhum evento relacionado por correspondência de município e bairro.", normal))
+    else:
+        cols = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in eventos_relacionados.iterrows()],
+                                [3.1*cm, 2.5*cm, 3.0*cm, 5.0*cm, 4.5*cm, 8.0*cm]))
+    historia.append(Spacer(1, 0.3*cm))
+    historia.append(p("Nota: a relação de eventos é indicativa, baseada na coincidência de bairros e município; não comprova causalidade.", pequeno))
+    doc.build(historia)
+    return buffer.getvalue()
 
-        registro = registro_df.iloc[0]
 
-        st.subheader(
-            f"Matrícula: {matricula}"
-        )
+def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximidades, eventos, raio, bairros_geograficos=None):
+    registro = concentracoes[concentracoes["ID_CONCENTRACAO"] == codigo]
+    if registro.empty:
+        st.warning("Concentração não encontrada com os filtros atuais.")
+        return
+    concentracao = registro.iloc[0]
+    os_grupo, ativos, eventos_relacionados = dados_relatorio_concentracao(
+        concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos
+    )
+    cidades = sorted({str(c).strip() for c in os_grupo["Cidade"] if str(c).strip()})
+    st.subheader(f"{codigo} — {', '.join(cidades) or 'Município não informado'}")
+    st.caption(f"Bairros: {concentracao['BAIRROS'] or 'Não informados'}")
+    a, b, c = st.columns(3)
+    a.metric("O.S.", len(os_grupo))
+    b.metric("Matrículas distintas", int(concentracao["QTD_MATRICULAS"]))
+    c.metric("Equipamentos próximos", len(ativos))
+    st.markdown(
+        f"**Eventos relacionados:** {len(eventos_relacionados)} evento(s) identificado(s)"
+        if not eventos_relacionados.empty else "**Eventos relacionados:** nenhum evento identificado"
+    )
+    st.caption(
+        f"Centro geográfico: {float(concentracao['LATITUDE']):.6f}, "
+        f"{float(concentracao['LONGITUDE']):.6f} | Raio operacional: {raio} m"
+    )
+    st.markdown("#### Ordens de serviço")
+    colunas_os = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
+    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), use_container_width=True, hide_index=True)
+    st.markdown("#### Poços / ativos e loggers próximos")
+    if ativos.empty:
+        st.info("Nenhum equipamento dentro do raio operacional desta concentração.")
+    else:
+        st.dataframe(ativos[["Tipo", "Identificação", "Nome", "Município", "Distância"]],
+                     use_container_width=True, hide_index=True)
+    st.markdown("#### Eventos relacionados")
+    st.caption("Correspondência por município e bairro impactado; não estabelece relação causal.")
+    if eventos_relacionados.empty:
+        st.info("Nenhum evento com município e bairro correspondente.")
+    else:
+        colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
+                     use_container_width=True, hide_index=True)
+    # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
+    if st.button("📸 Preparar PDF com mapa da concentração", key=f"preparar_pdf_{codigo}"):
+        try:
+            with st.spinner("Capturando mapa aproximado e preparando relatório..."):
+                mapa_ficha = mapa_exclusivo_concentracao(concentracao, os_grupo, ativos)
+                imagem_ficha = capturar_mapa_folium(mapa_ficha, largura=800, altura=690)
+                st.session_state[f"farol_pdf_individual_{codigo}"] = gerar_pdf_concentracao(
+                    concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_ficha
+                )
+        except Exception as erro:
+            st.error(f"Não foi possível gerar o PDF cartográfico: {erro}")
+    if st.session_state.get(f"farol_pdf_individual_{codigo}"):
+        st.download_button("📄 Baixar relatório em PDF", data=st.session_state[f"farol_pdf_individual_{codigo}"],
+                           file_name=f"Farol_{codigo}_{datetime.now(FUSO_FAROL):%Y%m%d}.pdf",
+                           mime="application/pdf", key=f"baixar_pdf_{codigo}")
 
-        col1, col2 = st.columns(2)
 
-        with col1:
+@st.dialog("📥 Importação de bases", width="large")
+def modal_importacao():
+    if not PODE_EDITAR_FAROL:
+        st.error("Acesso somente para visualização.")
+        return
+    st.subheader("Importação das bases")
+    st.info("PONTOS e EVENTOS não são apagados automaticamente. A limpeza manual está disponível somente ao administrador, na barra lateral do mapa.")
 
-            st.markdown(
-                f"**Endereço:** "
-                f"{texto(registro['Endereço'])}"
+    c1, c2 = st.columns(2)
+    with c1:
+        arq_os = st.file_uploader("Base diária de O.S.", type=["xlsx", "xls", "csv"], key="upload_os")
+        if arq_os is not None:
+            try:
+                previa = ler_planilha_upload(arq_os)
+                st.write(f"**{len(previa):,}** linhas encontradas")
+                st.dataframe(previa.head(10), use_container_width=True, hide_index=True)
+                if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
+                    preparados = preparar_pontos(previa)
+                    inseridas, total = upsert_pontos(preparados)
+                    registrar_atualizacao_base("PONTOS")
+                    st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro na base de O.S.: {e}")
+
+    with c2:
+        arq_eventos = st.file_uploader("Base de eventos", type=["xlsx", "xls", "csv"], key="upload_eventos")
+        if arq_eventos is not None:
+            try:
+                previa_e = ler_planilha_upload(arq_eventos)
+                st.write(f"**{len(previa_e):,}** linhas encontradas")
+                st.dataframe(previa_e.head(10), use_container_width=True, hide_index=True)
+                if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
+                    preparados_e = preparar_eventos(previa_e)
+                    processados, total = upsert_eventos(preparados_e)
+                    registrar_atualizacao_base("EVENTOS")
+                    st.success(f"Importação concluída: {processados:,} linhas processadas. EVENTOS agora possui {total:,} registros.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro na base de eventos: {e}")
+
+    st.divider()
+    st.subheader("Resumo do armazenamento")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Poços / Ativos", len(df_pocos))
+    m2.metric("Loggers", len(df_loggers))
+    m3.metric("O.S. em PONTOS", len(df_pontos))
+    m4.metric("Eventos", len(df_eventos))
+
+
+def atualizar_evento_cadastrado(indice, original, alteracoes):
+    """Atualiza somente as células editadas, com proteção contra edição concorrente."""
+    exigir_edicao_farol()
+    aba = obter_aba_para_leitura(NOME_ABA_EVENTOS)
+    valores = aba.get_all_values()
+    if not valores or indice + 1 >= len(valores):
+        raise ValueError("Evento não encontrado. Reabra a janela e tente novamente.")
+    cabecalho = valores[0]
+    linha_atual = valores[indice + 1]
+    mapa_atual = dict(zip(cabecalho, linha_atual))
+    # Garante que outra pessoa não alterou o evento desde sua abertura.
+    for campo in CABECALHO_EVENTOS:
+        if str(mapa_atual.get(campo, "")) != str(original.get(campo, "")):
+            raise ValueError("Este evento foi alterado na planilha. Atualize a página antes de salvar.")
+    # A proteção fica em aba independente, para sobreviver à substituição
+    # completa da aba EVENTOS durante futuras importações.
+    area_antiga = str(original.get("Áreas Impactadas", ""))
+    area_nova = str(alteracoes.get("Áreas Impactadas", area_antiga))
+    if area_nova != area_antiga:
+        registrar_area_editada(chave_evento(original), area_nova)
+    for campo, novo_valor in alteracoes.items():
+        if campo not in cabecalho:
+            raise ValueError(f"Coluna não encontrada na planilha: {campo}")
+        pos = cabecalho.index(campo)
+        antigo = str(original.get(campo, ""))
+        if novo_valor != antigo:
+            from gspread.utils import rowcol_to_a1
+            aba.update(range_name=rowcol_to_a1(indice + 2, pos + 1),
+                       values=[[novo_valor]], value_input_option="RAW")
+    invalidar_cache()
+    eventos_georreferenciados.clear()
+
+
+@st.dialog("⚡ Eventos x O.S.", width="large")
+def modal_eventos():
+    st.subheader("Eventos x O.S. por bairro")
+
+    if df_eventos.empty:
+        st.info("A aba EVENTOS ainda não possui dados.")
+    elif df_pontos.empty:
+        st.warning("Há eventos cadastrados, mas ainda não existem O.S. em PONTOS para o cruzamento.")
+    else:
+        rel = relacionar_eventos_pontos(df_eventos, df_pontos, bairros)
+
+        if rel.empty:
+            st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
+        else:
+            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), use_container_width=True, hide_index=True)
+
+            fig = px.bar(
+                rel.sort_values("O.S. encontradas", ascending=False),
+                x="Bairro",
+                y="O.S. encontradas",
+                color="Status",
+                hover_data=["Protocolo", "Matrículas", "Parcial"],
+                title="O.S. encontradas nos bairros impactados pelos eventos",
             )
-
-            st.markdown(
-                f"**Bairro:** "
-                f"{texto(registro['Bairro'])}"
-            )
-
-            st.markdown(
-                f"**Latitude:** "
-                f"{texto(registro['Latitude'])}"
-            )
-
-            st.markdown(
-                f"**Longitude:** "
-                f"{texto(registro['Longitude'])}"
-            )
-
-            st.markdown(
-                f"**Data de Registro:** "
-                f"{formatar_data(registro['Data de Registro'])}"
-            )
-
-            st.markdown(
-                f"**Responsável:** "
-                f"{texto(registro['Responsável']) or '—'}"
-            )
-
-        with col2:
-
-            st.markdown(
-                f"**Grau de Impacto:** "
-                f"{texto(registro['Grau de Impacto']) or '—'}"
-            )
-
-            st.markdown(
-                f"**Resolvido:** "
-                f"{texto(registro['Resolvido']) or '—'}"
-            )
-
-            st.markdown(
-                f"**Executado?:** "
-                f"{texto(registro['Executado?']) or '—'}"
-            )
-
-            st.markdown(
-                f"**Parecer:** "
-                f"{texto(registro['Parecer']) or '—'}"
-            )
-
-        st.markdown(
-            f"**Tratativa 1:** "
-            f"{texto(registro['Tratativa 1']) or '—'}"
-        )
-
-        st.markdown(
-            f"**Retorno:** "
-            f"{texto(registro['Retorno']) or '—'}"
-        )
+            st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
+        st.markdown("### Eventos armazenados")
+        mostrar_eventos = df_eventos.copy()
+        colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
+        st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
 
-        col_edit, col_delete = (
-            st.columns(2)
+    # A edição permanece disponível mesmo sem O.S. cadastradas.
+    if PODE_EDITAR_FAROL and not df_eventos.empty:
+        st.divider()
+        st.markdown("### ✏️ Corrigir evento cadastrado")
+        st.caption("Selecione o evento pela identificação e corrija somente Áreas Impactadas, quando necessário. A correção será preservada nas próximas importações.")
+        opcoes = list(range(len(df_eventos)))
+        indice_evento = st.selectbox(
+            "Evento para editar", opcoes,
+            format_func=lambda i: (
+                f"{df_eventos.iloc[i].get('Protocolo', '') or 'Sem protocolo'} · "
+                f"{df_eventos.iloc[i].get('Cidade', '')} · "
+                f"{df_eventos.iloc[i].get('Serviço', '')} · "
+                f"{df_eventos.iloc[i].get('Data', '')} · Evento {i + 1}"
+            ), key="farol_evento_editar_indice",
         )
-
-        with col_edit:
-
-            if st.button(
-                "✏️ Editar Registro",
-                use_container_width=True,
-            ):
-
-                fechar_dialogo()
-
-                abrir_dialogo(
-                    "editar",
-                    registro=registro.to_dict(),
-                )
-
-                st.rerun()
-
-        with col_delete:
-
-            if st.button(
-                "🗑️ Excluir Registro",
-                use_container_width=True,
-            ):
-
-                abrir_dialogo(
-                    "confirmar_exclusao_registro",
-                    registro=registro.to_dict(),
-                )
-
-                st.rerun()
-
-    st.divider()
-
-    st.subheader(
-        f"Histórico de O.S. ({len(historico_df)})"
-    )
-
-    if historico_df.empty:
-
-        st.info(
-            "Nenhuma O.S. cadastrada."
+        registro = df_eventos.iloc[indice_evento].to_dict()
+        st.caption(
+            f"Evento {indice_evento + 1} de {len(df_eventos)} — "
+            "a numeração exibida não inclui o cabeçalho da planilha."
         )
+        with st.form(f"farol_edicao_evento_{indice_evento}"):
+            area_atual = str(registro.get("Áreas Impactadas", "") or "")
+            area_editada = st.text_area(
+                "Áreas Impactadas",
+                value=area_atual,
+                height=110,
+                help="Somente este campo pode ser alterado. A correção ficará protegida nas próximas importações.",
+            )
+            salvar = st.form_submit_button(
+                "💾 Salvar área impactada",
+                use_container_width=True,
+            )
+        campos = {"Áreas Impactadas": area_editada}
+        if salvar:
+            try:
+                atualizar_evento_cadastrado(indice_evento, registro, campos)
+                st.success("Evento atualizado. O mapa e as associações serão recalculados.")
+                st.rerun()
+            except Exception as erro:
+                st.error(f"Não foi possível salvar o evento: {erro}")
 
+
+def capturar_mapa_folium(mapa, largura=1100, altura=600):
+    """Renderiza o Folium em Chromium e captura o mapa com as camadas visíveis.
+
+    Requer `playwright` no requirements.txt e Chromium no sistema (packages.txt).
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as erro:
+        raise RuntimeError("Instale playwright no requirements.txt para gerar o relatório cartográfico.") from erro
+
+    html = mapa.get_root().render()
+    # A captura deve ter uma proporção próxima da visualização operacional.
+    html = html.replace('</head>', f"""<style>
+        html, body {{margin:0 !important; padding:0 !important; width:{largura}px !important; height:{altura}px !important; overflow:hidden !important;}}
+        .folium-map {{width:{largura}px !important; height:{altura}px !important;}}
+        </style></head>""", 1)
+    with tempfile.TemporaryDirectory(prefix="farol_mapa_") as pasta:
+        arquivo = os.path.join(pasta, "mapa.html")
+        with open(arquivo, "w", encoding="utf-8") as f:
+            f.write(html)
+        with sync_playwright() as playwright:
+            executavel = (os.environ.get("CHROMIUM_PATH") or shutil.which("chromium")
+                          or shutil.which("chromium-browser") or shutil.which("google-chrome"))
+            kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if executavel:
+                kwargs["executable_path"] = executavel
+            try:
+                browser = playwright.chromium.launch(**kwargs)
+            except Exception as erro:
+                raise RuntimeError("Chromium indisponível. Configure packages.txt com 'chromium' e requirements.txt com 'playwright'.") from erro
+            try:
+                pagina = browser.new_page(viewport={"width": largura, "height": altura}, device_scale_factor=1.5)
+                pagina.goto(Path(arquivo).as_uri(), wait_until="load", timeout=45000)
+                pagina.wait_for_function("typeof L !== 'undefined' && document.querySelector('.leaflet-map-pane') !== null", timeout=30000)
+                pagina.wait_for_timeout(2400)
+                # A imagem não é utilizável se o mapa de fundo não carregou.
+                tiles = pagina.locator(".leaflet-tile-loaded")
+                if tiles.count() == 0:
+                    raise RuntimeError("As imagens de fundo do OpenStreetMap não carregaram no navegador de captura. Verifique a conectividade do servidor.")
+                return pagina.locator(".folium-map").first.screenshot(type="png")
+            finally:
+                browser.close()
+
+
+def cidades_da_concentracao(concentracao, pontos_cluster):
+    if "_grupo" not in pontos_cluster.columns or "Cidade" not in pontos_cluster.columns:
+        return []
+    grupo = pontos_cluster[pontos_cluster["_grupo"] == concentracao["GRUPO"]]
+    return sorted({str(v).strip() for v in grupo["Cidade"] if str(v).strip()}, key=normalizar_texto)
+
+
+def filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades):
+    if not cidades:
+        return concentracoes.iloc[0:0].copy()
+    nomes = {normalizar_municipio(c) for c in cidades}
+    indices = [i for i, c in concentracoes.iterrows()
+               if any(normalizar_municipio(nome) in nomes
+                      for nome in cidades_da_concentracao(c, pontos_cluster))]
+    return concentracoes.loc[indices].copy()
+
+
+def limites_cidades_relatorio(bairros, cidades):
+    """Obtém o enquadramento a partir das feições cartográficas disponíveis."""
+    selecionadas = {normalizar_municipio(c) for c in cidades}
+    coordenadas = []
+    for bairro in bairros:
+        if normalizar_municipio(bairro.get("municipio", "")) not in selecionadas:
+            continue
+        for poligono in bairro.get("poligonos", []):
+            for ponto in poligono:
+                try:
+                    coordenadas.append((float(ponto[0]), float(ponto[1])))
+                except (ValueError, TypeError, IndexError):
+                    continue
+    if not coordenadas:
+        return None
+    return [[min(y for y, x in coordenadas), min(x for y, x in coordenadas)],
+            [max(y for y, x in coordenadas), max(x for y, x in coordenadas)]]
+
+
+def protocolo_os_relatorio(registro):
+    """Número de O.S. com ano da emissão, sem fabricar ano quando ausente."""
+    numero = str(registro.get("Nº da O.S", "") or "").strip()
+    if not numero or numero.lower() == "nan":
+        return ""
+    if re.search(r"/\d{4}-1$", numero):
+        return numero
+    emissao = str(registro.get("Dt. Emissão", "") or "").strip()
+    ano = None
+    for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            ano = datetime.strptime(emissao, formato).year
+            break
+        except ValueError:
+            pass
+    if ano is None:
+        encontrado = re.search(r"(?<!\d)(20\d{2})(?!\d)", emissao)
+        if encontrado:
+            ano = int(encontrado.group(1))
+    return f"{numero}/{ano}-1" if ano else numero
+
+
+def planilha_os_relatorio(concentracoes, pontos_cluster):
+    """CSV tabular, pronto para Excel e para selecionar O.S. por concentração."""
+    saida = io.StringIO()
+    escritor = csv.writer(saida, delimiter=";", lineterminator="\n")
+    escritor.writerow(["Concentração", "Município", "Bairro", "O.S. / Ano", "Matrícula", "Status", "Dt. Emissão", "Serviço Executado"])
+    for _, c in concentracoes.iterrows():
+        if "_grupo" not in pontos_cluster.columns:
+            continue
+        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+        for _, registro in grupo.iterrows():
+            escritor.writerow([str(c["ID_CONCENTRACAO"]), str(registro.get("Cidade", "")),
+                              str(registro.get("Bairro", "")), protocolo_os_relatorio(registro),
+                              str(registro.get("Matrícula", "")), str(registro.get("Status OS", "")),
+                              str(registro.get("Dt. Emissão", "")), str(registro.get("Serviço Executado", ""))])
+    return ("\ufeff" + saida.getvalue()).encode("utf-8")
+
+
+def nome_arquivo_relatorio(cidades=None, extensao="pdf"):
+    data = datetime.now(FUSO_FAROL).strftime("%d-%m-%Y")
+    if not cidades:
+        base = "Relatorio_Geral"
     else:
-
-        historico_exibicao = (
-            historico_df.copy()
-        )
-
-        historico_exibicao["_data"] = (
-            pd.to_datetime(
-                historico_exibicao[
-                    "Data de Abertura"
-                ],
-                errors="coerce",
-            )
-        )
-
-        historico_exibicao = (
-            historico_exibicao
-            .sort_values(
-                "_data",
-                ascending=False,
-            )
-        )
-
-        for _, os_row in (
-            historico_exibicao.iterrows()
-        ):
-
-            os_id = texto(
-                os_row["ID"]
-            )
-
-            with st.container(
-                border=True
-            ):
-
-                col1, col2, col3 = (
-                    st.columns(
-                        [2.5, 2.5, 1]
-                    )
-                )
-
-                with col1:
-
-                    st.markdown(
-                        f"**N. O.S:** "
-                        f"{texto(os_row['N. O.S'])}"
-                    )
-
-                    st.caption(
-                        formatar_data_hora(
-                            os_row[
-                                "Data de Abertura"
-                            ]
-                        )
-                    )
-
-                with col2:
-
-                    st.markdown(
-                        f"**Pressão:** "
-                        f"{texto(os_row['Pressão'])} MCA"
-                    )
-
-                    st.markdown(
-                        f"**Pontual:** "
-                        f"{texto(os_row['Pontual'])}"
-                    )
-
-                with col3:
-
-                    if st.button(
-                        "✏️",
-                        key=f"editar_os_{os_id}",
-                    ):
-
-                        fechar_dialogo()
-
-                        abrir_dialogo(
-                            "editar_os",
-                            os_id=os_id,
-                            matricula=matricula,
-                        )
-
-                        st.rerun()
-
-                    if st.button(
-                        "🗑️",
-                        key=f"excluir_os_{os_id}",
-                    ):
-
-                        abrir_dialogo(
-                            "confirmar_exclusao_os",
-                            os_id=os_id,
-                            matricula=matricula,
-                        )
-
-                        st.rerun()
-
-    st.divider()
-
-    col_add, col_download = (
-        st.columns(2)
-    )
-
-    with col_add:
-
-        if st.button(
-            "＋ Adicionar Registro",
-            type="primary",
-            use_container_width=True,
-        ):
-
-            fechar_dialogo()
-
-            abrir_dialogo(
-                "nova_os",
-                matricula=matricula,
-            )
-
-            st.rerun()
-
-    with col_download:
-
-        arquivo = gerar_excel_cliente(
-            registro_df,
-            historico_df,
-        )
-
-        st.download_button(
-            "⬇️ Baixar Excel",
-            data=arquivo,
-            file_name=(
-                f"mapeamento_"
-                f"{matricula.replace('/', '_')}.xlsx"
-            ),
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            ),
-            use_container_width=True,
-        )
-
-
-# ============================================================
-# DIÁLOGO — NOVA O.S.
-# ============================================================
-
-@st.dialog(
-    "Adicionar O.S.",
-    width="medium",
-)
-def dialogo_nova_os(
-    matricula,
-    df_historico,
-):
-
-    st.write(
-        f"**Matrícula:** {matricula}"
-    )
-
-    numero_os = st.text_input(
-        "N. O.S *",
-        placeholder="Digite a identificação da O.S.",
-    )
-
-    data_abertura = st.datetime_input(
-        "Data de Abertura *",
-        value=datetime.now(),
-    )
-
-    pressao = st.number_input(
-        "Pressão (MCA) *",
-        min_value=0.0,
-        step=0.01,
-        format="%.2f",
-    )
-
-    pontual = st.selectbox(
-        "Pontual",
-        [
-            "SIM",
-            "NÃO",
-        ],
-    )
-
-    salvar = st.button(
-        "💾 Salvar O.S.",
-        type="primary",
-        use_container_width=True,
-    )
-
-    if not salvar:
-        return
-
-    numero_os = texto(
-        numero_os
-    )
-
-    if not numero_os:
-
-        st.error(
-            "Informe a N. O.S."
-        )
-
-        return
-
-    if os_duplicada(
-        df_historico,
-        matricula,
-        numero_os,
-    ):
-
-        st.error(
-            "Essa O.S. já está cadastrada."
-        )
-
-        return
-
-    dados = {
-        "ID": gerar_id(),
-        "Matrícula": matricula,
-        "N. O.S": numero_os,
-        "Data de Abertura": (
-            data_abertura.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        ),
-        "Pressão": pressao,
-        "Pontual": pontual,
-    }
-
-    try:
-
-        adicionar_os(
-            dados
-        )
-
-        fechar_dialogo()
-
-        st.rerun()
-
-    except Exception as exc:
-
-        st.error(
-            "Não foi possível adicionar a O.S."
-        )
-
-        st.exception(exc)
-
-
-# ============================================================
-# DIÁLOGO — EDITAR O.S.
-# ============================================================
-
-@st.dialog(
-    "Editar O.S.",
-    width="medium",
-)
-def dialogo_editar_os(
-    os_id,
-    matricula,
-    df_historico,
-):
-
-    os_df = df_historico[
-        df_historico["ID"]
-        .astype(str)
-        ==
-        str(os_id)
-    ]
-
-    if os_df.empty:
-
-        st.error(
-            "O.S. não encontrada."
-        )
-
-        return
-
-    os_atual = os_df.iloc[0]
-
-    numero_os = st.text_input(
-        "N. O.S *",
-        value=texto(
-            os_atual["N. O.S"]
-        ),
-        placeholder="Digite a identificação da O.S.",
-    )
-
-    data_abertura = st.datetime_input(
-        "Data de Abertura *",
-        value=valor_datetime(
-            os_atual[
-                "Data de Abertura"
+        nomes = [re.sub(r"[^A-Za-z0-9_-]", "_", unicodedata.normalize("NFKD", str(c)).encode("ascii", "ignore").decode("ascii")) for c in cidades]
+        base = "Relatorio_" + "_".join(nomes)
+    return f"Farol_{base}_{data}.{extensao}"
+
+
+def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=None,
+                                  cidades=None, bairros=None, pocos=None, loggers=None,
+                                  panoramico=False, pontos=None, raio_ativos=500):
+    """Panorama completo com O.S. e infraestrutura; fichas com equipamentos próximos."""
+    mapa = folium.Map(location=[-5.09, -42.80], zoom_start=13, tiles="OpenStreetMap",
+                      control_scale=True, zoom_control=False)
+    selecionadas = (concentracoes if concentracao is None else
+                    concentracoes[concentracoes["ID_CONCENTRACAO"] == concentracao["ID_CONCENTRACAO"]])
+    coordenadas = []
+    # No panorama, a camada de O.S. será desenhada uma única vez, incluindo
+    # registros dentro e fora das concentrações.
+    if panoramico and pontos is not None and not pontos.empty:
+        nomes_os = {normalizar_municipio(v) for v in cidades} if cidades else None
+        for _, r in pontos.iterrows():
+            if nomes_os is not None and normalizar_municipio(r.get("Cidade", "")) not in nomes_os:
+                continue
+            y = normalizar_coordenada(r.get("Latitude"), "lat")
+            x = normalizar_coordenada(r.get("Longitude"), "lon")
+            if y is None or x is None:
+                continue
+            servico = str(r.get("Serviço Executado", "") or "")
+            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+            folium.CircleMarker([y, x], radius=4, color=cor, weight=1,
+                                fill=True, fill_color=cor, fill_opacity=.85).add_to(mapa)
+    for _, c in selecionadas.iterrows():
+        lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+        raio = RAIO_CONCENTRACAO_PADRAO
+        if not panoramico:
+            folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
+                          fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
+            folium.CircleMarker([lat, lon], radius=5, color="#7135A8", weight=2,
+                                fill=True, fill_color="#7135A8", fill_opacity=1).add_to(mapa)
+        coordenadas.append((lat, lon))
+        if "_grupo" not in pontos_cluster.columns:
+            continue
+        grupo = pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+        if panoramico:
+            continue
+        for _, r in grupo.iterrows():
+            y = normalizar_coordenada(r.get("Latitude"), "lat")
+            x = normalizar_coordenada(r.get("Longitude"), "lon")
+            if y is None or x is None:
+                continue
+            servico = str(r.get("Serviço Executado", "") or "")
+            cor = "#F28C28" if re.search(r"(?<!\d)146005(?!\d)", servico) else "#1677D2"
+            folium.CircleMarker([y, x], radius=4.5, color=cor, weight=1,
+                                fill=True, fill_color=cor, fill_opacity=.92).add_to(mapa)
+            coordenadas.append((y, x))
+    # Panorama: equipamentos do(s) município(s) selecionado(s), sem mostrar
+    # cadastros nacionais inteiros. Individual: apenas equipamentos próximos.
+    nomes = {normalizar_municipio(v) for v in cidades} if cidades else None
+    if panoramico and pocos is not None and loggers is not None:
+        # Exatamente como o mapa operacional: apenas equipamentos próximos
+        # das concentrações, nunca o cadastro inteiro da cidade.
+        pocos, loggers = filtrar_ativos_proximos(selecionadas, pocos, loggers, raio_ativos)
+    for cadastro, eh_logger in ((loggers, True), (pocos, False)):
+        if cadastro is None or cadastro.empty:
+            continue
+        for _, r in cadastro.iterrows():
+            y = normalizar_coordenada(r.get("LATITUDE"), "lat")
+            x = normalizar_coordenada(r.get("LONGITUDE"), "lon")
+            if y is None or x is None:
+                continue
+            if concentracao is not None:
+                # Distância geodésica aproximada em metros, suficiente para filtro visual.
+                lat0, lon0 = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+                dy = (y-lat0)*111320.0
+                dx = (x-lon0)*111320.0*math.cos(math.radians(lat0))
+                if math.hypot(dx, dy) > raio_ativos:
+                    continue
+            elif nomes is not None and normalizar_municipio(r.get("MUNICIPIO", "")) not in nomes:
+                continue
+            nome = str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Equipamento")
+            if panoramico:
+                icone = (folium.Icon(icon="signal", prefix="fa", color="orange") if eh_logger
+                         else folium.Icon(icon="tint", prefix="fa", color="blue"))
+                folium.Marker([y, x], icon=icone,
+                              z_index_offset=0 if eh_logger else 1000).add_to(mapa)
+            else:
+                cor = "#E89021" if eh_logger else "#149AC8"
+                folium.CircleMarker([y, x], radius=5, color="white", weight=1.2,
+                                    fill=True, fill_color=cor, fill_opacity=.95).add_to(mapa)
+            if concentracao is not None:
+                # Rótulo permanente nas fichas, sem alterar o mapa interativo.
+                folium.Marker([y, x], icon=folium.DivIcon(
+                    html='<div style="position:relative;left:9px;top:-12px;white-space:nowrap;'
+                         'font: bold 11px Arial;background:rgba(255,255,255,.94);'
+                         'border:1px solid #aab7c4;border-radius:3px;padding:2px 4px;'
+                         'color:#193348;display:inline-block">'+html_escape(nome)+'</div>')).add_to(mapa)
+    if panoramico:
+        # Desenha os círculos DEPOIS dos equipamentos, garantindo que as
+        # concentrações continuem visíveis como na referência enviada.
+        for _, c in selecionadas.iterrows():
+            lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+            folium.Circle([lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
+                          color="#8522A5", weight=3.2, fill=True,
+                          fill_color="#8522A5", fill_opacity=.055).add_to(mapa)
+            folium.CircleMarker([lat, lon], radius=6, color="#7135A8",
+                                weight=2, fill=True, fill_color="#7135A8",
+                                fill_opacity=1).add_to(mapa)
+    if coordenadas:
+        if concentracao is not None:
+            lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
+            raio = RAIO_CONCENTRACAO_PADRAO * 1.08
+            dy = raio / 111320.0
+            dx = raio / (111320.0 * max(.2, math.cos(math.radians(lat))))
+            extremos = coordenadas + [(lat-dy, lon-dx), (lat+dy, lon+dx)]
+            bounds = [[min(y for y, _ in extremos), min(x for _, x in extremos)],
+                      [max(y for y, _ in extremos), max(x for _, x in extremos)]]
+        else:
+            extremos = list(coordenadas)
+            for _, c in selecionadas.iterrows():
+                y, x = float(c["LATITUDE"]), float(c["LONGITUDE"])
+                dy = RAIO_CONCENTRACAO_PADRAO / 111320.0
+                dx = RAIO_CONCENTRACAO_PADRAO / (111320.0 * max(.2, math.cos(math.radians(y))))
+                extremos.extend([(y-dy, x-dx), (y+dy, x+dx)])
+            bounds = [[min(y for y, _ in extremos), min(x for _, x in extremos)],
+                      [max(y for y, _ in extremos), max(x for _, x in extremos)]]
+            if cidades:
+                bounds_cidades = limites_cidades_relatorio(bairros or [], cidades)
+                if bounds_cidades:
+                    bounds = bounds_cidades
+        mapa.fit_bounds(bounds, padding=(18, 18))
+    return mapa
+
+
+def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, eventos,
+                           bairros, raio, observacoes, mapa_relatorio=None,
+                           cidades=None, pocos=None, loggers=None):
+    """Panorama territorial seguido de fichas compactas, com O.S. ao lado do mapa."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), leftMargin=1.2*cm,
+                            rightMargin=1.2*cm, topMargin=1.2*cm, bottomMargin=1.2*cm)
+    estilos = getSampleStyleSheet()
+    normal = ParagraphStyle("FarolGeralNormal2", parent=estilos["Normal"], fontSize=8.4, leading=11.5)
+    pequeno = ParagraphStyle("FarolGeralPequeno2", parent=normal, fontSize=7.1, leading=9.3)
+    titulo = ParagraphStyle("FarolGeralTitulo2", parent=estilos["Heading2"], fontSize=12.5, leading=16, spaceAfter=8)
+    historia = [Paragraph("Farol Operacional — Relatório de concentrações", estilos["Title"]),
+                Paragraph("Gerado em " + datetime.now(FUSO_FAROL).strftime("%d/%m/%Y %H:%M") +
+                          (" · Municípios: " + ", ".join(cidades) if cidades else " · Visão geral"), normal),
+                Spacer(1, 10)]
+    if concentracoes.empty:
+        historia.append(Paragraph("Nenhuma concentração identificada para a seleção.", normal))
+    else:
+        mapa_geral = mapa_relatorio_concentracoes(concentracoes, pontos_cluster,
+                    cidades=cidades, bairros=bairros, pocos=pocos, loggers=loggers,
+                    panoramico=True, pontos=pontos, raio_ativos=raio)
+        imagem_geral = capturar_mapa_folium(mapa_geral, largura=1280, altura=700)
+        # Mantém título, imagem e legenda na MESMA página.
+        # Altura calculada para caber no A4 paisagem com cabeçalho e margens.
+        historia.append(KeepTogether([
+            Paragraph("Panorama territorial das concentrações", titulo),
+            Image(io.BytesIO(imagem_geral), width=26.0*cm, height=14.22*cm),
+            Spacer(1, 4),
+            Paragraph(f"Concentrações: {len(concentracoes)} · O.S., concentrações e equipamentos operacionais.", pequeno),
+        ]))
+        historia.append(PageBreak())
+        for indice, (_, c) in enumerate(concentracoes.iterrows()):
+            grupo = (pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
+                     if "_grupo" in pontos_cluster.columns else pd.DataFrame())
+            codigo = str(c["ID_CONCENTRACAO"])
+            nota = str(c.get("OBSERVACAO_ANALISTA", "") or "")
+            nomes_cidades = cidades_da_concentracao(c, pontos_cluster)
+            bairros_concentracao = str(c.get("BAIRROS", "") or "").replace(";", ", ")
+            cabecalho = " - ".join([codigo, ", ".join(nomes_cidades) or "MUNICÍPIO NÃO INFORMADO",
+                                     bairros_concentracao or "BAIRRO NÃO INFORMADO"])
+            historia.append(Paragraph(xml_escape(cabecalho), titulo))
+            imagem_foco = capturar_mapa_folium(
+                mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=c,
+                                            pocos=pocos, loggers=loggers, raio_ativos=raio),
+                largura=760, altura=560)
+            imagem = Image(io.BytesIO(imagem_foco), width=13.4*cm, height=9.87*cm)
+            resumo = [
+                Paragraph(xml_escape(f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas distintas"), normal),
+                Spacer(1, 5),
+                Paragraph("<b>Acompanhamento:</b> " + xml_escape(nota or "Sem observação registrada"), pequeno),
             ]
-        ),
-    )
+            if "EVENTOS_RELACIONADOS" in c:
+                resumo.extend([Spacer(1, 4), Paragraph("<b>Eventos relacionados:</b> " +
+                               xml_escape(str(int(float(c["EVENTOS_RELACIONADOS"]))) if pd.notna(c["EVENTOS_RELACIONADOS"]) else "0"), pequeno)])
+            resumo.extend([Spacer(1, 7), Paragraph("<b>Ordens de serviço vinculadas</b>", normal), Spacer(1, 4)])
+            linhas_os = []
+            if grupo.empty:
+                resumo.append(Paragraph("Nenhuma O.S. vinculada ao agrupamento.", pequeno))
+            else:
+                linhas_os = [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
+                              str(r.get("Status OS", ""))] for _, r in grupo.iterrows()]
+                # A tabela possui células independentes e pode ser copiada do PDF.
+                # CSV completo fica disponível para importar no Excel.
+                limite = 17
+                dados_tabela = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
+                                 Paragraph("<b>Matrícula</b>", pequeno),
+                                 Paragraph("<b>Status</b>", pequeno)]]
+                dados_tabela.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
+                                     for linha in linhas_os[:limite]])
+                tabela_os = Table(dados_tabela, colWidths=[3.25*cm, 2.8*cm, 5.8*cm], repeatRows=1)
+                tabela_os.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DEE8F2")),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
+                    ("LINEBELOW", (0, 0), (-1, 0), .5, colors.HexColor("#A8B9C8")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ]))
+                resumo.append(tabela_os)
+            ficha = Table([[imagem, resumo]], colWidths=[13.8*cm, 12.8*cm], hAlign="LEFT")
+            ficha.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#F4F7FB")),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("LEFTPADDING", (1, 0), (1, 0), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            historia.append(ficha)
+            if len(linhas_os) > 17:
+                historia.append(Spacer(1, 8))
+                historia.append(Paragraph("Continuação das O.S. vinculadas", pequeno))
+                dados_extra = [[Paragraph("<b>O.S. / Ano</b>", pequeno), Paragraph("<b>Matrícula</b>", pequeno),
+                                Paragraph("<b>Status</b>", pequeno)]]
+                dados_extra.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
+                                    for linha in linhas_os[17:]])
+                tabela_extra = Table(dados_extra, colWidths=[5*cm, 5*cm, 15*cm], repeatRows=1)
+                tabela_extra.setStyle(TableStyle([("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                                                  [colors.white, colors.HexColor("#F4F7FB")]),
+                                                  ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                historia.append(tabela_extra)
+            if indice < len(concentracoes) - 1:
+                historia.append(PageBreak())
+    doc.build(historia)
+    return buffer.getvalue()
 
-    pressao_atual = (
-        converter_float(
-            os_atual["Pressão"]
-        )
-    )
 
-    if pressao_atual is None:
-        pressao_atual = 0.0
+@st.dialog("📄 Configurar relatório operacional", width="large")
+def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidades,
+                               eventos, bairros, raio, observacoes, pocos, loggers):
+    st.caption("Escolha a abrangência do relatório. A seleção não altera os filtros do mapa principal.")
+    tipo = st.radio("Abrangência", ["Geral", "Por município(s)"], horizontal=True,
+                    key="farol_tipo_relatorio")
+    cidades = None
+    if tipo == "Por município(s)":
+        disponiveis = sorted({cidade for _, c in concentracoes.iterrows()
+                             for cidade in cidades_da_concentracao(c, pontos_cluster)},
+                            key=normalizar_texto)
+        cidades = st.multiselect("Municípios incluídos no relatório", disponiveis,
+                                key="farol_cidades_relatorio",
+                                placeholder="Selecione um ou mais municípios")
+        if cidades:
+            qtd = len(filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades))
+            st.caption(f"{qtd} concentração(ões) serão incluídas.")
+    gerar = st.button("📸 Gerar relatório em PDF", type="primary", use_container_width=True,
+                      disabled=(tipo == "Por município(s)" and not cidades))
+    if gerar:
+        selecionadas = (concentracoes if cidades is None else
+                        filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades))
+        if selecionadas.empty:
+            st.warning("Nenhuma concentração encontrada para a seleção.")
+        else:
+            try:
+                with st.spinner("Gerando mapa panorâmico e fichas das concentrações..."):
+                    pdf = gerar_pdf_operacional(selecionadas, pontos, pontos_cluster,
+                          proximidades, eventos, bairros, raio, observacoes,
+                          cidades=cidades, pocos=pocos, loggers=loggers)
+                st.session_state["farol_pdf_operacional_pronto"] = pdf
+                st.session_state["farol_pdf_operacional_nome"] = nome_arquivo_relatorio(cidades, "pdf")
+                st.session_state["farol_os_relatorio_csv"] = planilha_os_relatorio(selecionadas, pontos_cluster)
+                st.session_state["farol_os_relatorio_nome"] = nome_arquivo_relatorio(cidades, "csv")
+                st.success("Relatório gerado. Faça o download abaixo.")
+            except Exception as erro:
+                st.error(f"Não foi possível gerar o relatório: {erro}")
+    if st.session_state.get("farol_pdf_operacional_pronto"):
+        st.download_button("⬇️ Baixar relatório gerado",
+            data=st.session_state["farol_pdf_operacional_pronto"],
+            file_name=st.session_state.get("farol_pdf_operacional_nome", "Farol_Relatorio.pdf"),
+            mime="application/pdf", use_container_width=True,
+            key="farol_download_relatorio_modal")
+        if st.session_state.get("farol_os_relatorio_csv"):
+            st.download_button("📊 Baixar planilha das O.S. (Excel/CSV)",
+                data=st.session_state["farol_os_relatorio_csv"],
+                file_name=st.session_state.get("farol_os_relatorio_nome", "Farol_OS.csv"),
+                mime="text/csv", use_container_width=True,
+                key="farol_download_os_relatorio_csv")
 
-    pressao = st.number_input(
-        "Pressão (MCA) *",
-        min_value=0.0,
-        value=float(
-            pressao_atual
-        ),
-        step=0.01,
-        format="%.2f",
-    )
+# ============================================================
+# INTERFACE
+# ============================================================
 
-    pontual_atual = texto(
-        os_atual["Pontual"]
-    )
+st.title("Farol Operacional")
+st.caption("O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
-    if pontual_atual not in [
-        "SIM",
-        "NÃO",
-    ]:
-        pontual_atual = "SIM"
+# Carregamento automático de polígonos de todos os municípios disponíveis.
+# A ausência de arquivo geográfico é normal e não gera avisos no mapa.
+_inicio_geometria = tempo_execucao.perf_counter()
+bairros = descobrir_kmz()
+_tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
-    pontual = st.selectbox(
-        "Pontual",
-        [
-            "SIM",
-            "NÃO",
-        ],
-        index=[
-            "SIM",
-            "NÃO",
-        ].index(
-            pontual_atual
-        ),
-    )
+# PONTOS e EVENTOS são mantidos sem limpeza automática.
 
-    salvar = st.button(
-        "💾 Salvar alterações",
-        type="primary",
-        use_container_width=True,
-    )
-
-    if not salvar:
-        return
-
-    numero_os = texto(
-        numero_os
-    )
-
-    if not numero_os:
-
-        st.error(
-            "Informe a N. O.S."
-        )
-
-        return
-
-    if os_duplicada(
-        df_historico,
-        matricula,
-        numero_os,
-        ignorar_id=os_id,
-    ):
-
-        st.error(
-            "Essa O.S. já está cadastrada."
-        )
-
-        return
-
-    dados = {
-        "ID": os_id,
-        "Matrícula": matricula,
-        "N. O.S": numero_os,
-        "Data de Abertura": (
-            data_abertura.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
-        ),
-        "Pressão": pressao,
-        "Pontual": pontual,
-    }
-
+# Os cadastros são lidos localmente; apenas PONTOS e EVENTOS usam Google Sheets.
+_inicio_planilhas = tempo_execucao.perf_counter()
+with st.spinner("Carregando dados operacionais..."):
     try:
+        df_pocos = carregar_pocos()
+        df_loggers = carregar_cadastro_github(ARQUIVO_LOGGERS_CSV, CABECALHO_LOGGERS)
+    except (FileNotFoundError, ValueError, pd.errors.ParserError, OSError) as erro:
+        st.error(f"Não foi possível carregar os cadastros locais: {erro}")
+        st.info("Confira dados/pocos.csv e dados/loggers.csv no GitHub. As abas originais do Google Sheets permanecem como backup.")
+        st.stop()
+    df_pontos = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
+    df_eventos = carregar_aba(NOME_ABA_EVENTOS, CABECALHO_EVENTOS)
+_tempo_planilhas = tempo_execucao.perf_counter() - _inicio_planilhas
 
-        atualizar_os(
-            os_id,
-            dados,
-        )
+# Normaliza tipos para análise.
+if not df_pontos.empty:
+    df_pontos = df_pontos.copy()
+    for coluna in CABECALHO_PONTOS:
+        if coluna not in df_pontos.columns:
+            df_pontos[coluna] = ""
+    df_pontos["Latitude"] = df_pontos["Latitude"].map(lambda v: normalizar_coordenada(v, "lat"))
+    df_pontos["Longitude"] = df_pontos["Longitude"].map(lambda v: normalizar_coordenada(v, "lon"))
 
-        fechar_dialogo()
-
-        st.rerun()
-
-    except Exception as exc:
-
-        st.error(
-            "Não foi possível atualizar a O.S."
-        )
-
-        st.exception(exc)
-
-
-# ============================================================
-# DIÁLOGO — CONFIRMAÇÃO REGISTRO
-# ============================================================
-
-@st.dialog(
-    "Confirmar exclusão"
-)
-def dialogo_confirmar_exclusao_registro(
-    registro,
-):
-
-    matricula = texto(
-        registro["Matrícula"]
-    )
-
-    st.warning(
-        f"Excluir o registro da matrícula "
-        f"**{matricula}**?"
-    )
-
-    st.info(
-        "O histórico de O.S. será preservado."
-    )
-
-    col1, col2 = (
-        st.columns(2)
-    )
-
-    with col1:
-
-        confirmar = st.button(
-            "🗑️ Excluir",
-            type="primary",
-            use_container_width=True,
-        )
-
-    with col2:
-
-        cancelar = st.button(
-            "Cancelar",
-            use_container_width=True,
-        )
-
-    if cancelar:
-
-        fechar_dialogo()
-        st.rerun()
-
-    if confirmar:
-
-        try:
-
-            excluir_registro(
-                registro["ID"]
-            )
-
-            fechar_dialogo()
-
-            st.rerun()
-
-        except Exception as exc:
-
-            st.error(
-                "Não foi possível excluir o registro."
-            )
-
-            st.exception(exc)
-
+if not df_pocos.empty:
+    df_pocos = df_pocos.reindex(columns=CABECALHO_POCOS).fillna("")
+if not df_loggers.empty:
+    df_loggers = df_loggers.reindex(columns=CABECALHO_LOGGERS).fillna("")
 
 # ============================================================
-# DIÁLOGO — CONFIRMAÇÃO O.S.
-# ============================================================
-
-@st.dialog(
-    "Confirmar exclusão da O.S."
-)
-def dialogo_confirmar_exclusao_os(
-    os_id,
-    matricula,
-    df_historico,
-):
-
-    historico_cliente = (
-        historico_da_matricula(
-            df_historico,
-            matricula,
-        )
-    )
-
-    os_df = df_historico[
-        df_historico["ID"]
-        .astype(str)
-        ==
-        str(os_id)
-    ]
-
-    if os_df.empty:
-
-        st.error(
-            "O.S. não encontrada."
-        )
-
-        return
-
-    numero_os = texto(
-        os_df.iloc[0]["N. O.S"]
-    )
-
-    if len(historico_cliente) <= 1:
-
-        st.warning(
-            "Esta é a única O.S. da matrícula."
-        )
-
-        st.info(
-            "A última O.S. não pode ser excluída."
-        )
-
-        if st.button(
-            "Fechar",
-            use_container_width=True,
-        ):
-
-            fechar_dialogo()
-            st.rerun()
-
-        return
-
-    st.warning(
-        f"Excluir a O.S. **{numero_os}**?"
-    )
-
-    col1, col2 = (
-        st.columns(2)
-    )
-
-    with col1:
-
-        confirmar = st.button(
-            "🗑️ Excluir",
-            type="primary",
-            use_container_width=True,
-        )
-
-    with col2:
-
-        cancelar = st.button(
-            "Cancelar",
-            use_container_width=True,
-        )
-
-    if cancelar:
-
-        fechar_dialogo()
-        st.rerun()
-
-    if confirmar:
-
-        try:
-
-            excluir_os(
-                os_id
-            )
-
-            fechar_dialogo()
-
-            st.rerun()
-
-        except Exception as exc:
-
-            st.error(
-                "Não foi possível excluir a O.S."
-            )
-
-            st.exception(exc)
-
-
-# ============================================================
-# CARREGAMENTO DOS DADOS
-# ============================================================
-
-(
-    registro_ws,
-    historico_ws,
-    df_registro,
-    df_historico,
-) = carregar_dados()
-
-
-# ============================================================
-# SIDEBAR
+# ABAS
 # ============================================================
 
 with st.sidebar:
-
-    st.markdown(
-        "## 🗺️ Mapeamento de Melhorias"
-    )
-
-    st.divider()
-
-    if st.button(
-        "＋ Adicionar melhoria",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        fechar_dialogo()
-
-        abrir_dialogo(
-            "novo"
-        )
-
+    st.markdown("### 🧭 Navegação")
+    if "farol_tela" not in st.session_state:
+        st.session_state["farol_tela"] = "mapa"
+    if st.button("🗺️ Mapa operacional", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
+        st.session_state["farol_tela"] = "mapa"
         st.rerun()
-
-    st.divider()
-
-    st.markdown(
-        "### Filtros"
-    )
-
-
-# ============================================================
-# APLICA FILTROS
-# ============================================================
-
-df_registro_filtrado, df_historico_filtrado = (
-    aplicar_filtros(
-        df_registro,
-        df_historico,
-    )
-)
-
-
-# ============================================================
-# LIMPAR FILTROS
-# ============================================================
-
-with st.sidebar:
-
-    if st.button(
-        "🧹 Limpar filtros",
-        use_container_width=True,
-    ):
-
-        limpar_filtros()
-
-        st.session_state[
-            "pagina_mapeamento"
-        ] = 1
-
+    if PODE_EDITAR_FAROL:
+        if st.button("📥 Importação", use_container_width=True):
+            modal_importacao()
+    if st.button("⚡ Eventos", use_container_width=True):
+        modal_eventos()
+    if st.button("📍 Cadastros", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
+        st.session_state["farol_tela"] = "cadastros"
         st.rerun()
+    if not PODE_EDITAR_FAROL:
+        st.caption("🔒 Perfil Operador: somente visualização e downloads.")
 
     st.divider()
-
-    arquivo_sidebar = gerar_excel(
-        df_registro_filtrado,
-        df_historico_filtrado,
+    st.markdown("### 🔎 Filtros")
+    # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
+    cidades_filtro = set()
+    for dados, campo in ((df_pontos, "Cidade"), (df_pocos, "MUNICIPIO"), (df_loggers, "MUNICIPIO")):
+        if campo in dados.columns and not dados.empty:
+            cidades_filtro.update(str(v).strip() for v in dados[campo].dropna() if str(v).strip())
+    cidades_filtro = sorted(cidades_filtro, key=normalizar_texto)
+    cidade_sel = st.selectbox("Cidade dos poços e loggers", ["Todas"] + cidades_filtro, key="farol_filtro_cidade_sidebar")
+    cidade_especifica = cidade_sel != "Todas"
+    mostrar_pocos_cidade = st.checkbox(
+        "Mostrar poços / ativos da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_pocos_cidade",
     )
-
-    st.download_button(
-        "⬇️ Exportar filtrado",
-        data=arquivo_sidebar,
-        file_name=(
-            "mapeamento_de_melhorias_filtrado.xlsx"
-        ),
-        mime=(
-            "application/vnd.openxmlformats-officedocument."
-            "spreadsheetml.sheet"
-        ),
-        use_container_width=True,
+    mostrar_loggers_cidade = st.checkbox(
+        "Mostrar loggers da cidade", value=False,
+        disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
     )
+    if not cidade_especifica:
+        st.caption("Os equipamentos próximos às concentrações continuam visíveis. Selecione uma cidade para acrescentar outros equipamentos.")
 
     st.divider()
+    st.markdown("### ⚙️ Configuração")
+    raio_operacional = st.number_input(
+        "Raio operacional (m)", min_value=50, max_value=5000,
+        value=RAIO_OPERACIONAL_PADRAO, step=50,
+        help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
+    )
+    raio_concentracao = st.number_input(
+        "Raio da concentração (m)", min_value=50, max_value=5000,
+        value=RAIO_CONCENTRACAO_PADRAO, step=50,
+        help="Distância usada para agrupar O.S. espacialmente.",
+    )
+    minimo_os = st.number_input(
+    "Mínimo de O.S. por concentração",
+    min_value=2,
+    value=3,
+    step=1,
+)
 
-    if st.button(
-        "🏠 Voltar ao Menu Principal",
-        use_container_width=True,
-    ):
+    # Desativado por padrão: o navegador move o mapa sem enviar centro/zoom
+    # ao Python a cada arrasto. Ative apenas para registrar o enquadramento
+    # exato que será usado no relatório PDF.
+    sincronizar_mapa_pdf = st.checkbox(
+        "Sincronizar enquadramento para PDF",
+        value=False,
+        key="farol_sincronizar_mapa_pdf",
+        help="Ative antes de ajustar o mapa para o PDF. Enquanto ativo, arrastar/zoom pode recarregar a página.",
+    )
+    if sincronizar_mapa_pdf:
+        st.caption("Modo PDF ativo: centro e zoom serão registrados. Para navegar sem recarregamentos, desmarque esta opção.")
 
-        st.switch_page(
-            "app.py"
+    if st.session_state.pop("farol_mensagem_limpeza", None):
+        st.success("Dados operacionais limpos com sucesso.")
+    espaco_relatorio_operacional = st.empty()
+    if PERFIL_FAROL == "admin":
+        if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
+                     use_container_width=True, key="abrir_limpeza_farol"):
+            modal_limpar_dados_operacionais()
+    if PERFIL_FAROL == "admin":
+        espaco_diagnostico_farol = st.empty()
+    st.divider()
+    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+        try:
+            st.switch_page("app.py")
+        except Exception as erro:
+            st.error(f"Não foi possível voltar ao Hub. Confira o nome do arquivo principal (app.py): {erro}")
+    # O seletor de tema permanece no fim da barra lateral.
+    modo_escuro = st.toggle("🌙 Modo escuro", key="farol_modo_escuro")
+
+if modo_escuro:
+    st.markdown("""
+    <style>
+      .stApp { background-color: #0e1117; color: #fafafa; }
+      .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3,
+      .stApp h4, .stApp h5, .stApp h6 { color: #f0f0f0 !important; }
+      .stButton > button { background-color: #20252d; color: #fafafa; border-color: #444c56; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def ativos_da_cidade(df, campo, cidade, habilitado):
+    """Evita enviar ao Folium milhares de equipamentos de outros municípios."""
+    if not habilitado or cidade == "Todas" or df.empty or campo not in df.columns:
+        return df.iloc[0:0].copy()
+    return df.loc[normalizar_texto_series(df[campo]) == normalizar_texto(cidade)].copy()
+
+ativos_pocos_cidade = ativos_da_cidade(df_pocos, "MUNICIPIO", cidade_sel, mostrar_pocos_cidade)
+ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mostrar_loggers_cidade)
+
+
+if st.session_state.get("farol_tela", "mapa") == "mapa":
+    eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
+    st.subheader("🗺️ Visão geográfica operacional")
+
+    st.caption("Eventos: vermelho = em andamento · amarelo = programado · verde = finalizado · cinza = outro status. "
+               "As áreas destacadas representam os bairros inteiros dos arquivos geográficos, inclusive quando o evento informa impacto parcial.")
+
+    if df_pontos.empty:
+        st.warning("A aba PONTOS ainda não possui dados.")
+        ativos_pocos = ativos_pocos_cidade
+        ativos_loggers = ativos_loggers_cidade
+        mapa = criar_mapa(
+            bairros, df_pontos, ativos_pocos, ativos_loggers,
+            pd.DataFrame(), pd.DataFrame(), mostrar_bairros=bool(bairros),
+            eventos_mapeados=eventos_mapeados,
+        )
+        if st.session_state.get("farol_foco_concentracao"):
+            lat_foco, lon_foco = st.session_state["farol_foco_concentracao"]
+            mapa.location = [lat_foco, lon_foco]
+            mapa.options["zoom"] = 15
+            mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
+        estado_mapa = st_folium(
+            mapa, width=None, height=650,
+            returned_objects=["center", "zoom"] if sincronizar_mapa_pdf else [],
+            key="farol_mapa_principal",
+        )
+        exibir_atualizacoes_abaixo_mapa()
+        if sincronizar_mapa_pdf and estado_mapa:
+            if estado_mapa.get("center") is not None:
+                st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
+            if estado_mapa.get("zoom") is not None:
+                st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
+    else:
+        # Filtros.
+        f1, f2, f3 = st.columns(3)
+        bairros_os = sorted([x for x in df_pontos["Bairro"].dropna().astype(str).unique() if x.strip()])
+        status_os = sorted([x for x in df_pontos["Status OS"].dropna().astype(str).unique() if x.strip()])
+
+        with f1:
+            bairro_sel = st.multiselect("Bairro", bairros_os)
+        with f2:
+            status_sel = st.multiselect("Status", status_os)
+        with f3:
+            apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
+
+        servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
+                              if str(x).strip()})
+        servico_sel = st.multiselect(
+            "Tipo da O.S",
+            options=servicos_os,
+            placeholder="Todos os tipos",
+            help="Selecione um ou mais serviços; sem seleção, todos são exibidos.",
+            key="farol_filtro_servico_executado",
         )
 
+        analise = df_pontos.copy()
+        if bairro_sel:
+            bairros_norm = {limpar_nome_bairro(x) for x in bairro_sel}
+            analise = analise[analise["Bairro"].map(limpar_nome_bairro).isin(bairros_norm)]
+        if status_sel:
+            status_norm = {normalizar_texto(x) for x in status_sel}
+            analise = analise[analise["Status OS"].map(normalizar_texto).isin(status_norm)]
+        if servico_sel:
+            servicos_norm = {normalizar_texto(x) for x in servico_sel}
+            analise = analise[analise["Serviço Executado"].map(normalizar_texto).isin(servicos_norm)]
+        if apenas_com_coord:
+            analise = analise.dropna(subset=["Latitude", "Longitude"])
 
-# ============================================================
-# CABEÇALHO
-# ============================================================
-
-st.title(
-    "🗺️ Mapeamento de Melhorias"
-)
-
-st.caption(
-    "Cadastro, acompanhamento e histórico das melhorias "
-    "relacionadas às matrículas."
-)
-
-
-# ============================================================
-# KPIs
-# ============================================================
-
-kpis = calcular_kpis(
-    df_registro_filtrado,
-    df_historico_filtrado,
-)
-
-exibir_kpis(
-    kpis
-)
-
-
-# ============================================================
-# MAPA
-# ============================================================
-
-st.markdown(
-    "### Mapa"
-)
-
-mapa = construir_mapa(
-    df_registro_filtrado,
-    df_historico_filtrado,
-)
-
-st_folium(
-    mapa,
-    width=None,
-    height=520,
-    returned_objects=[],
-)
-
-
-# ============================================================
-# LISTA DE REGISTROS
-# ============================================================
-
-st.markdown(
-    "### Registros"
-)
-
-df_lista = ordenar_registros(
-    df_registro_filtrado,
-    df_historico_filtrado,
-)
-
-
-if df_lista.empty:
-
-    st.info(
-        "Nenhum registro encontrado com os filtros atuais."
-    )
-
-else:
-
-    total_registros = len(
-        df_lista
-    )
-
-    total_paginas = max(
-        1,
-        math.ceil(
-            total_registros
-            / REGISTROS_POR_PAGINA
-        ),
-    )
-
-    pagina = st.session_state.get(
-        "pagina_mapeamento",
-        1,
-    )
-
-    pagina = min(
-        pagina,
-        total_paginas,
-    )
-
-    col_prev, col_info, col_next = (
-        st.columns(
-            [1, 2, 1]
+        _inicio_analise = tempo_execucao.perf_counter()
+        concentracoes, pontos_cluster = criar_concentracoes(
+            analise,
+            raio_m=raio_concentracao,
+            minimo_os=int(minimo_os),
         )
-    )
-
-    with col_prev:
-
-        if st.button(
-            "← Anterior",
-            disabled=pagina <= 1,
-            use_container_width=True,
-        ):
-
-            st.session_state[
-                "pagina_mapeamento"
-            ] = max(
-                1,
-                pagina - 1,
-            )
-
-            st.rerun()
-
-    with col_info:
-
-        st.markdown(
-            f"""
-            <div style="
-                text-align:center;
-                padding-top:8px;
-            ">
-                Página {pagina} de {total_paginas}
-            </div>
-            """,
-            unsafe_allow_html=True,
+        proximidades = pontos_proximos_concentracoes(
+            concentracoes,
+            df_pocos,
+            df_loggers,
+            raio=int(raio_operacional),
         )
 
-    with col_next:
+        _tempo_analise = tempo_execucao.perf_counter() - _inicio_analise
 
-        if st.button(
-            "Próxima →",
-            disabled=pagina >= total_paginas,
-            use_container_width=True,
-        ):
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("O.S. analisadas", len(analise))
+        k2.metric("O.S. com coordenada", int(analise[["Latitude", "Longitude"]].notna().all(axis=1).sum()))
+        k3.metric("Concentrações", len(concentracoes))
+        k4.metric("Pontos operacionais próximos", len(proximidades))
 
-            st.session_state[
-                "pagina_mapeamento"
-            ] = min(
-                total_paginas,
-                pagina + 1,
-            )
+        # A camada cartográfica SEMPRE inclui os equipamentos próximos às concentrações.
+        # A cidade selecionada apenas acrescenta os demais equipamentos da cidade.
+        # A análise de proximidade continua utilizando as bases completas.
+        def equipamentos_proximos(base, tipo):
+            if base.empty or proximidades.empty:
+                return base.iloc[0:0].copy()
+            correspondencias = proximidades.loc[
+                proximidades["Tipo"] == tipo, ["Identificação", "Município"]
+            ]
+            if correspondencias.empty:
+                return base.iloc[0:0].copy()
+            # A seleção por chave composta preserva a regra de município + identificação.
+            chaves = pd.MultiIndex.from_arrays([
+                correspondencias["Identificação"].fillna("").astype(str).map(normalizar_texto),
+                correspondencias["Município"].fillna("").astype(str).map(normalizar_texto),
+            ])
+            chaves_base = pd.MultiIndex.from_arrays([
+                base["IDENTIFICACAO_ATIVO"].fillna("").astype(str).map(normalizar_texto),
+                base["MUNICIPIO"].fillna("").astype(str).map(normalizar_texto),
+            ])
+            return base.loc[chaves_base.isin(chaves)].copy()
 
-            st.rerun()
+        def juntar_sem_duplicar(base, proximos, adicionais):
+            if proximos.empty:
+                return adicionais.copy()
+            if adicionais.empty:
+                return proximos.copy()
+            # Índices originais das abas permitem evitar marcadores duplicados.
+            return base.loc[base.index.isin(proximos.index.union(adicionais.index))].copy()
 
-    inicio = (
-        pagina - 1
-    ) * REGISTROS_POR_PAGINA
-
-    fim = (
-        inicio
-        + REGISTROS_POR_PAGINA
-    )
-
-    pagina_df = df_lista.iloc[
-        inicio:fim
-    ]
-
-    for _, registro in (
-        pagina_df.iterrows()
-    ):
-
-        registro_id = texto(
-            registro["ID"]
+        ativos_pocos = juntar_sem_duplicar(
+            df_pocos,
+            equipamentos_proximos(df_pocos, "Poço / Ativo"),
+            ativos_pocos_cidade,
+        )
+        ativos_loggers = juntar_sem_duplicar(
+            df_loggers,
+            equipamentos_proximos(df_loggers, "Logger"),
+            ativos_loggers_cidade,
         )
 
-        matricula = texto(
-            registro["Matrícula"]
+        st.caption(
+            f"Exibindo {len(ativos_pocos)} poço(s)/ativo(s) e "
+            f"{len(ativos_loggers)} logger(s) no mapa: equipamentos próximos às "
+            "concentrações e, quando habilitados, equipamentos adicionais da cidade selecionada."
         )
-
-        historico_cliente = (
-            historico_da_matricula(
-                df_historico_filtrado,
-                matricula,
-            )
+        st.markdown("### 🗺️ Mapa operacional")
+        st.caption("🟠 Laranja: Informação de Falta de água (146005) · 🔵 Azul: Reclamação de Falta de água (demais serviços).")
+        _inicio_renderizacao = tempo_execucao.perf_counter()
+        mapa = criar_mapa(
+            bairros, analise, ativos_pocos, ativos_loggers, concentracoes,
+            proximidades, mostrar_bairros=bool(bairros),
+            eventos_mapeados=eventos_mapeados,
         )
-
-        qtd_os = len(
-            historico_cliente
+        if st.session_state.get("farol_foco_concentracao"):
+            lat_foco, lon_foco = st.session_state["farol_foco_concentracao"]
+            mapa.location = [lat_foco, lon_foco]
+            mapa.options["zoom"] = 15
+            mapa.fit_bounds([[lat_foco - .007, lon_foco - .007], [lat_foco + .007, lon_foco + .007]])
+        estado_mapa = st_folium(
+            mapa, width=None, height=650,
+            returned_objects=["center", "zoom", "last_object_clicked"] if sincronizar_mapa_pdf else ["last_object_clicked"],
+            key="farol_mapa_principal",
         )
+        exibir_atualizacoes_abaixo_mapa()
+        if sincronizar_mapa_pdf and estado_mapa:
+            if estado_mapa.get("center") is not None:
+                st.session_state["farol_ultimo_centro_mapa"] = estado_mapa["center"]
+            if estado_mapa.get("zoom") is not None:
+                st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
 
-        ultima_os = "—"
+        # Clique em um centro de concentração expande seu painel de análise.
+        # Movimentação e zoom continuam sem enviar eventos ao Streamlit, exceto
+        # quando o usuário habilita a sincronização opcional para o PDF.
+        clique = (estado_mapa or {}).get("last_object_clicked")
+        if isinstance(clique, dict) and not concentracoes.empty:
+            lat_clique, lon_clique = parse_float(clique.get("lat")), parse_float(clique.get("lng"))
+            if lat_clique is not None and lon_clique is not None:
+                mais_proxima = None
+                menor_distancia = float("inf")
+                for _, centro in concentracoes.iterrows():
+                    distancia = distancia_metros(lat_clique, lon_clique, centro["LATITUDE"], centro["LONGITUDE"])
+                    if distancia is not None and distancia < menor_distancia:
+                        menor_distancia, mais_proxima = distancia, str(centro["ID_CONCENTRACAO"])
+                # Apenas o clique no marcador central (até 3 m) seleciona o painel.
+                if menor_distancia <= 3 and mais_proxima:
+                    st.session_state["farol_concentracao_expandida"] = mais_proxima
 
-        if not historico_cliente.empty:
-
-            aux = historico_cliente.copy()
-
-            aux["_data"] = pd.to_datetime(
-                aux["Data de Abertura"],
-                errors="coerce",
-            )
-
-            aux = aux.sort_values(
-                "_data"
-            )
-
-            ultima_os = texto(
-                aux.iloc[-1]["N. O.S"]
-            )
-
-        with st.container(
-            border=True
-        ):
-
-            col1, col2, col3, col4, col5 = (
-                st.columns(
-                    [
-                        1.7,
-                        2.7,
-                        1.5,
-                        1,
-                        1.2,
-                    ]
+        _tempo_mapa = tempo_execucao.perf_counter() - _inicio_renderizacao
+        if PERFIL_FAROL == "admin":
+            with espaco_diagnostico_farol.container():
+                with st.expander("⏱️ Diagnóstico de desempenho", expanded=False):
+                    st.caption("Tempo desta interação; valores baixos podem indicar uso do cache.")
+                    st.write(f"Geometrias: {_tempo_geometria:.2f} s")
+                    st.write(f"Google Sheets: {_tempo_planilhas:.2f} s")
+                    st.write(f"Análise espacial: {_tempo_analise:.2f} s")
+                    st.write(f"Montagem e exibição do mapa: {_tempo_mapa:.2f} s")
+        if concentracoes.empty:
+            st.warning("Nenhuma concentração atingiu o mínimo configurado.")
+        else:
+            st.markdown("### 📋 Análise das Concentrações")
+            st.caption("Expanda uma concentração para consultar O.S., equipamentos, eventos relacionados e baixar o PDF.")
+            observacoes_df = carregar_observacoes_concentracoes()
+            resumo_pdf = concentracoes.copy()
+            grupos_os = {chave: quadro for chave, quadro in pontos_cluster.groupby("_grupo", sort=False)} if not pontos_cluster.empty else {}
+            for _, concentracao in concentracoes.iterrows():
+                codigo = concentracao["ID_CONCENTRACAO"]
+                os_grupo = grupos_os.get(concentracao["GRUPO"], pontos_cluster.iloc[0:0])
+                cidades_grupo = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
+                qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
+                              if not proximidades.empty else 0)
+                _, _, eventos_do_grupo = dados_relatorio_concentracao(
+                    concentracao, pontos_cluster, proximidades, df_eventos, bairros
                 )
-            )
-
-            with col1:
-
-                if st.button(
-                    matricula,
-                    key=f"abrir_{registro_id}",
-                    use_container_width=True,
-                ):
-
-                    fechar_dialogo()
-
-                    abrir_dialogo(
-                        "matricula",
-                        matricula=matricula,
+                indicador_eventos = (
+                    f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
+                    if not eventos_do_grupo.empty else "Sem evento relacionado"
+                )
+                municipio_nota, chave_nota, texto_nota = identificar_observacao(
+                    concentracao, os_grupo, observacoes_df, raio_concentracao
+                )
+                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
+                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
+                indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
+                titulo = (
+                    f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'} | "
+                    f"{int(concentracao['QTD_OS'])} O.S. · "
+                    f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
+                    f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
+                )
+                with st.expander(titulo, expanded=(st.session_state.get("farol_concentracao_expandida") == codigo)):
+                    if st.button("🎯 Focar esta concentração no mapa", key=f"foco_{codigo}"):
+                        st.session_state["farol_foco_concentracao"] = (float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]))
+                        st.rerun()
+                    if PODE_EDITAR_FAROL:
+                        nota_editada = st.text_area("Observação do analista", value=texto_nota,
+                                                    key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                    placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
+                        if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                            try:
+                                salvar_observacao_concentracao(chave_nota, municipio_nota,
+                                    float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
+                                st.success("Acompanhamento salvo.")
+                                st.rerun()
+                            except Exception as erro:
+                                st.error(f"Não foi possível salvar: {erro}")
+                    else:
+                        st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
+                    exibir_relatorio_concentracao(
+                        codigo, concentracoes, pontos_cluster, proximidades,
+                        df_eventos, int(raio_operacional), bairros
                     )
-
-                    st.rerun()
-
-            with col2:
-
-                st.markdown(
-                    f"**{texto(registro['Endereço'])}**"
-                )
-
-                st.caption(
-                    texto(
-                        registro["Bairro"]
-                    )
-                )
-
-            with col3:
-
-                st.caption(
-                    "Grau de Impacto"
-                )
-
-                st.write(
-                    texto(
-                        registro[
-                            "Grau de Impacto"
-                        ]
-                    )
-                    or "—"
-                )
-
-            with col4:
-
-                st.caption(
-                    "O.S."
-                )
-
-                st.write(
-                    qtd_os
-                )
-
-            with col5:
-
-                st.caption(
-                    "Última O.S."
-                )
-
-                st.write(
-                    ultima_os
-                )
-
-
-# ============================================================
-# ROTEAMENTO DOS DIÁLOGOS
-# ============================================================
-
-dialogo = st.session_state.get(
-    "dialogo_melhorias"
-)
-
-
-if dialogo == "novo":
-
-    dialogo_novo_registro(
-        df_registro,
-        df_historico,
-    )
-
-
-elif dialogo == "editar":
-
-    registro = st.session_state.get(
-        "dialogo_registro"
-    )
-
-    if registro:
-
-        dialogo_editar_registro(
-            registro,
-            df_registro,
-            df_historico,
+        # Disponível também quando não há concentrações no filtro atual.
+        if concentracoes.empty:
+            resumo_pdf = concentracoes.copy()
+            observacoes_df = pd.DataFrame()
+        with espaco_relatorio_operacional.container():
+            st.caption("Relatório geral ou por município(s), com panorama e fichas individuais compactas.")
+            if st.button("📄 Configurar e gerar relatório (PDF)",
+                         use_container_width=True, key="abrir_configuracao_relatorio"):
+                modal_configurar_relatorio(resumo_pdf, analise, pontos_cluster,
+                    proximidades, df_eventos, bairros, int(raio_operacional),
+                    observacoes_df, df_pocos, df_loggers)
+    # Sem dados de O.S.: manter a opção visível, porém desabilitada.
+    if df_pontos.empty:
+        espaco_relatorio_operacional.button(
+            "📄 Gerar relatório operacional (PDF)", disabled=True,
+            use_container_width=True, key="relatorio_sem_pontos"
         )
 
 
-elif dialogo == "matricula":
 
-    matricula = st.session_state.get(
-        "dialogo_matricula"
-    )
-
-    if matricula:
-
-        dialogo_matricula(
-            matricula,
-            df_registro,
-            df_historico,
-        )
-
-
-elif dialogo == "nova_os":
-
-    matricula = st.session_state.get(
-        "dialogo_matricula"
-    )
-
-    if matricula:
-
-        dialogo_nova_os(
-            matricula,
-            df_historico,
-        )
-
-
-elif dialogo == "editar_os":
-
-    os_id = st.session_state.get(
-        "dialogo_os_id"
-    )
-
-    matricula = st.session_state.get(
-        "dialogo_matricula"
-    )
-
-    if os_id and matricula:
-
-        dialogo_editar_os(
-            os_id,
-            matricula,
-            df_historico,
-        )
-
-
-elif (
-    dialogo
-    == "confirmar_exclusao_registro"
-):
-
-    registro = st.session_state.get(
-        "dialogo_registro"
-    )
-
-    if registro:
-
-        dialogo_confirmar_exclusao_registro(
-            registro
-        )
-
-
-elif (
-    dialogo
-    == "confirmar_exclusao_os"
-):
-
-    os_id = st.session_state.get(
-        "dialogo_os_id"
-    )
-
-    matricula = st.session_state.get(
-        "dialogo_matricula"
-    )
-
-    if os_id and matricula:
-
-        dialogo_confirmar_exclusao_os(
-            os_id,
-            matricula,
-            df_historico,
-        )
+if st.session_state.get("farol_tela", "mapa") == "cadastros":
+    espaco_relatorio_operacional.caption("📄 Relatório disponível na tela Mapa operacional.")
+    st.subheader("Consulta de Poços / Ativos e Loggers")
+    st.caption("Cadastros fixos carregados dos arquivos dados/pocos.csv e dados/loggers.csv do GitHub. Para atualizar, substitua os arquivos no repositório.")
+    c_poco, c_logger = st.columns(2)
+    with c_poco:
+        st.markdown("### Poços / Ativos")
+        st.metric("Registros", len(df_pocos))
+        st.dataframe(df_pocos, use_container_width=True, hide_index=True)
+    with c_logger:
+        st.markdown("### Loggers")
+        st.metric("Registros", len(df_loggers))
+        st.dataframe(df_loggers, use_container_width=True, hide_index=True)
