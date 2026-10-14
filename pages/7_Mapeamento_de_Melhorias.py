@@ -50,16 +50,22 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional V2 - Homologação",
+    page_title="Farol Operacional - Módulo 3",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-if not verificar_autenticacao() or not tem_acesso_modulo("7"):
-    st.error("Acesso negado ao Farol Operacional. Entre pelo Hub Central com um perfil autorizado.")
+# O Farol (módulo 3) é autorizado para os três perfis válidos.
+# A autenticação continua obrigatória; o módulo 7 permanece privado.
+if not verificar_autenticacao():
+    st.error("Sessão não autenticada. Entre pelo Hub Central.")
     st.stop()
 
 PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
+if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
+    st.error("Seu perfil não está autorizado a acessar o Farol Operacional.")
+    st.stop()
+
 PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
 
 def exigir_edicao_farol():
@@ -239,7 +245,7 @@ def slug_hash(*valores):
 def limpar_nome_bairro(valor):
     texto = normalizar_texto(valor)
     texto = re.sub(r"\s*\(\s*PARCIAL\s*\)\s*$", "", texto)
-    texto = re.sub(r"\s+", " ", texto).strip()
+    texto = re.sub(r"\s+", " ", texto).strip(" \t.,;:!?")
     return texto
 
 
@@ -296,7 +302,7 @@ def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
     saida = []
     vistos = set()
     for parte in partes:
-        original = parte.strip(" \t-*•")
+        original = parte.strip(" \t-*•.,;:!?")
         if not original:
             continue
         # Desconsidera linha isolada com o nome da cidade, quando a descrição o inclui.
@@ -306,13 +312,11 @@ def extrair_bairros_evento(valor, municipio="", bairros_geograficos=None):
         chave = resolver_nome_bairro(original, nomes)
         candidatos = [(chave, original)]
         if nomes and chave not in nomes:
-            # Só divide 'A e B' se os dois nomes resultantes estiverem no município.
-            pedacos = re.split(r"\s+E\s+", chave)
-            if len(pedacos) == 2:
-                esquerda = resolver_nome_bairro(pedacos[0], nomes)
-                direita = resolver_nome_bairro(pedacos[1], nomes)
-                if esquerda in nomes and direita in nomes:
-                    candidatos = [(esquerda, pedacos[0]), (direita, pedacos[1])]
+            # Só divide a conjunção quando TODOS os nomes resultantes existem
+            # no catálogo geográfico do município. Preserva nomes compostos.
+            pedacos = [resolver_nome_bairro(p, nomes) for p in re.split(r"\s+E\s+", chave)]
+            if len(pedacos) >= 2 and all(p in nomes for p in pedacos):
+                candidatos = [(p, p) for p in pedacos]
         for bairro, origem in candidatos:
             if bairro and bairro not in vistos:
                 vistos.add(bairro)
@@ -542,7 +546,7 @@ def exibir_atualizacoes_abaixo_mapa():
 
 def limpar_dados_operacionais_admin():
     """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
-    if not verificar_autenticacao() or not tem_acesso_modulo("3") or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
+    if not verificar_autenticacao() or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
         raise PermissionError("Somente administradores podem limpar os dados operacionais.")
     planilha = obter_planilha()
     resultados = []
@@ -571,7 +575,7 @@ def limpar_dados_operacionais_admin():
 
 @st.dialog("🗑️ Limpar dados operacionais")
 def modal_limpar_dados_operacionais():
-    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao() or not tem_acesso_modulo("3"):
+    if str(st.session_state.get("perfil", "")).strip().lower() != "admin" or not verificar_autenticacao():
         st.error("Operação exclusiva do administrador.")
         st.stop()
     st.warning(
@@ -1403,7 +1407,7 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
             f"<b>Início:</b> {esc('Início')}<br>"
             f"<b>Previsão de término:</b> {esc('Prev. Término')}<br>"
             f"<b>Término real:</b> {esc('Término Real')}<br>"
-            f"<b>Descrição:</b> {esc('Descrição do Serviço')}<br>"
+            f"<b>Código do Ativo:</b> {esc('Código do Ativo')}<br>"
             f"<b>Abrangência:</b> {html_escape(abrangencia)}"
             f"</div>"
         )
@@ -1457,13 +1461,60 @@ def icone_bandeira_concentracao():
     )
 
 
-def criar_mapa_panorama_v2(concentracoes, raio_m=500):
+def municipios_das_concentracoes(concentracoes, pontos_cluster):
+    """Municípios reais por grupo; o cadastro de concentrações não possui cidade."""
+    resultado = {}
+    if pontos_cluster is None or pontos_cluster.empty or "Cidade" not in pontos_cluster.columns:
+        return resultado
+    por_grupo = pontos_cluster.groupby("_grupo")["Cidade"].agg(
+        lambda valores: {normalizar_municipio(v) for v in valores if str(v).strip()}
+    ).to_dict()
+    for _, c in concentracoes.iterrows():
+        resultado[str(c["ID_CONCENTRACAO"])] = por_grupo.get(c["GRUPO"], set())
+    return resultado
+
+
+def bairros_dos_municipios(bairros, municipios):
+    """Todos os bairros cadastrados dos municípios solicitados, sem recorte por raio."""
+    if not municipios:
+        return []
+    return [b for b in bairros if normalizar_municipio(b.get("municipio", "")) in municipios]
+
+
+def adicionar_limites_bairros(mapa, bairros):
+    """Camada única GeoJSON: mais leve que criar um Polygon Leaflet por bairro."""
+    features = []
+    for b in bairros:
+        for pol in b.get("poligonos_mapa", b["poligonos"]):
+            if len(pol) < 4:
+                continue
+            features.append({
+                "type": "Feature",
+                "properties": {"bairro": str(b.get("nome", "")), "municipio": str(b.get("municipio", ""))},
+                "geometry": {"type": "Polygon", "coordinates": [[[float(lon), float(lat)] for lat, lon in pol]]},
+            })
+    if not features:
+        return
+    fg = folium.FeatureGroup(name="Limites dos bairros", show=True)
+    folium.GeoJson(
+        {"type": "FeatureCollection", "features": features},
+        name="Bairros", smooth_factor=1.0,
+        style_function=lambda _feature: {"color": "#65758b", "weight": 1.15, "opacity": 0.75, "fillOpacity": 0},
+        highlight_function=lambda _feature: {"color": "#334155", "weight": 2, "fillOpacity": 0.06},
+        tooltip=folium.GeoJsonTooltip(fields=["bairro", "municipio"], aliases=["Bairro:", "Município:"], sticky=True),
+    ).add_to(fg)
+    fg.add_to(mapa)
+
+
+def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mapeados=None):
     """Panorama leve: somente mapa-base e concentrações clicáveis.
 
     A ausência das camadas operacionais no panorama é intencional.
     """
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12,
                       control_scale=True, tiles="OpenStreetMap", prefer_canvas=True)
+    adicionar_limites_bairros(mapa, bairros or [])
+    adicionar_camada_eventos(mapa, eventos_mapeados or [])
     limites = []
     for _, c in concentracoes.iterrows():
         lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
@@ -1484,25 +1535,16 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500):
     elif len(limites) == 1:
         mapa.location = limites[0]
         mapa.options["zoom"] = 14
+    folium.LayerControl(collapsed=True).add_to(mapa)
     return mapa
 
 
-def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None):
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None, outras_concentracoes=None):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
     if mostrar_bairros:
-        fg_bairros = folium.FeatureGroup(name="Bairros", show=True)
-        for bairro in bairros:
-            for poly in bairro.get("poligonos_mapa", bairro["poligonos"]):
-                folium.Polygon(
-                    locations=poly,
-                    color="#666666",
-                    weight=1,
-                    fill=False,
-                    tooltip=bairro["nome"],
-                ).add_to(fg_bairros)
-        fg_bairros.add_to(mapa)
+        adicionar_limites_bairros(mapa, bairros)
 
     adicionar_camada_eventos(mapa, eventos_mapeados or [])
 
@@ -1644,6 +1686,21 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             popup=folium.Popup(conteudo_popup, max_width=370),
         ).add_to(fg_conc)
     fg_conc.add_to(mapa)
+
+    # As outras concentrações do mesmo município ficam sinalizadas, mesmo
+    # quando estão distantes da concentração aberta. Sem carregar suas O.S.
+    if outras_concentracoes is not None and not outras_concentracoes.empty:
+        fg_outras = folium.FeatureGroup(name="Outras concentrações do município", show=True)
+        for _, c in outras_concentracoes.iterrows():
+            codigo = html_escape(str(c["ID_CONCENTRACAO"]))
+            lat, lon = float(c["LATITUDE"]), float(c["LONGITUDE"])
+            resumo = (f"<b>{codigo}</b><br>"
+                      f"{html_escape(str(c.get('BAIRROS', '')))}<br>"
+                      f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas")
+            folium.Marker([lat, lon], icon=icone_bandeira_concentracao(),
+                          tooltip=f"🚩 {codigo} — outra concentração",
+                          popup=folium.Popup(resumo, max_width=320)).add_to(fg_outras)
+        fg_outras.add_to(mapa)
 
     # Centraliza o mapa nos registros efetivamente desenhados, como no Módulo 1.
     coordenadas_visiveis = []
@@ -2613,7 +2670,7 @@ if not df_loggers.empty:
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### 🧪 Farol V2 — Módulo 7")
+    st.markdown("### 🚰 Farol Operacional — Módulo 3")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -2802,6 +2859,13 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             df_loggers,
             raio=int(raio_operacional),
         )
+        municipios_por_concentracao = municipios_das_concentracoes(concentracoes, pontos_cluster)
+        municipios_panorama = set().union(*municipios_por_concentracao.values()) if municipios_por_concentracao else set()
+        bairros_panorama = bairros_dos_municipios(bairros, municipios_panorama)
+        eventos_mapeados_todos, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
+        eventos_panorama = [e for e in eventos_mapeados_todos
+                            if normalizar_municipio(e["bairro"].get("municipio", "")) in municipios_panorama]
+
 
         _tempo_analise = tempo_execucao.perf_counter() - _inicio_analise
 
@@ -2811,9 +2875,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k3.metric("Concentrações", len(concentracoes))
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
-        # V2: o panorama não constrói camadas de O.S., equipamentos ou eventos.
-        # Os dados completos continuam disponíveis para análise e relatórios.
-        st.caption("Panorama leve: selecione o centro roxo de uma concentração para abrir seu mapa operacional completo.")
+        # Panorama sem O.S./equipamentos, mas com bairros e eventos de todos os municípios analisados.
+        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione uma bandeira 🚩 para abrir a concentração.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
         codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
         selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
@@ -2898,13 +2961,27 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 ativos_pocos = df_pocos.loc[df_pocos.index.isin(ativos_pocos.index.union(ativos_pocos_cidade.index))].copy()
             if not ativos_loggers_cidade.empty:
                 ativos_loggers = df_loggers.loc[df_loggers.index.isin(ativos_loggers.index.union(ativos_loggers_cidade.index))].copy()
-            eventos_mapeados, eventos_sem_geometria = eventos_georreferenciados(df_eventos, bairros)
+            # Todas as feições dos bairros do município, não apenas as
+            # próximas ao círculo ou com evento cadastrado.
+            cidades_detalhe = municipios_por_concentracao.get(selecionada, set())
+            bairros_detalhe = bairros_dos_municipios(bairros, cidades_detalhe)
+            eventos_mapeados = [e for e in eventos_mapeados_todos
+                                if normalizar_municipio(e["bairro"].get("municipio", "")) in cidades_detalhe]
+            # As concentrações distantes permanecem identificadas com bandeira.
+            # As vizinhas, cujos círculos se tocam, já são desenhadas completas.
+            outras_concentracoes = concentracoes.loc[
+                concentracoes["ID_CONCENTRACAO"].astype(str).map(
+                    lambda cod: cod not in ids_detalhe and bool(
+                        municipios_por_concentracao.get(cod, set()) & cidades_detalhe)
+                )
+            ].copy()
             mapa = criar_mapa(
-                [], pontos_mapa, ativos_pocos, ativos_loggers,
+                bairros_detalhe, pontos_mapa, ativos_pocos, ativos_loggers,
                 concentracoes_detalhe,
-                proximidades_atuais, mostrar_bairros=False,
+                proximidades_atuais, mostrar_bairros=True,
                 eventos_mapeados=eventos_mapeados,
                 raio_circulo=raio_concentracao,
+                outras_concentracoes=outras_concentracoes,
             )
             # Ajusta o enquadramento para mostrar integralmente os círculos
             # próximos, com margem para O.S. e equipamentos.
@@ -2928,7 +3005,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         + ", ".join(vizinhas)
                         + ". Os agrupamentos permanecem independentes; selecione outro registro na lista para analisar seus dados.")
         else:
-            mapa = criar_mapa_panorama_v2(concentracoes, raio_m=raio_concentracao)
+            mapa = criar_mapa_panorama_v2(
+                concentracoes, raio_m=raio_concentracao,
+                bairros=bairros_panorama, eventos_mapeados=eventos_panorama,
+            )
             estado_mapa = st_folium(
                 mapa, width=None, height=650,
                 returned_objects=["last_object_clicked"],
