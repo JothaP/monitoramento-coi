@@ -597,11 +597,11 @@ def modal_limpar_dados_operacionais():
     )
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Cancelar", use_container_width=True, key="cancelar_limpeza_farol"):
+        if st.button("Cancelar", width="stretch", key="cancelar_limpeza_farol"):
             st.rerun()
     with c2:
         if st.button("🗑️ Limpar agora", type="primary", disabled=not confirmado,
-                     use_container_width=True, key="executar_limpeza_farol"):
+                     width="stretch", key="executar_limpeza_farol"):
             try:
                 abas = limpar_dados_operacionais_admin()
                 st.session_state["farol_mensagem_limpeza"] = "Dados removidos das abas: " + ", ".join(abas) + "."
@@ -2029,13 +2029,13 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     )
     st.markdown("#### Ordens de serviço")
     colunas_os = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
-    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), use_container_width=True, hide_index=True)
+    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), width="stretch", hide_index=True)
     st.markdown("#### Poços / ativos e loggers próximos")
     if ativos.empty:
         st.info("Nenhum equipamento dentro do raio operacional desta concentração.")
     else:
         st.dataframe(ativos[["Tipo", "Identificação", "Nome", "Município", "Distância"]],
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
     st.markdown("#### Eventos relacionados")
     st.caption("Correspondência por município e bairro impactado; não estabelece relação causal.")
     if eventos_relacionados.empty:
@@ -2043,7 +2043,7 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     else:
         colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
         st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
     # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
     if st.button("📸 Preparar PDF com mapa da concentração", key=f"preparar_pdf_{codigo}"):
         try:
@@ -2076,7 +2076,7 @@ def modal_importacao():
             try:
                 previa = ler_planilha_upload(arq_os)
                 st.write(f"**{len(previa):,}** linhas encontradas")
-                st.dataframe(previa.head(10), use_container_width=True, hide_index=True)
+                st.dataframe(previa.head(10), width="stretch", hide_index=True)
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
                     inseridas, total = upsert_pontos(preparados)
@@ -2092,7 +2092,7 @@ def modal_importacao():
             try:
                 previa_e = ler_planilha_upload(arq_eventos)
                 st.write(f"**{len(previa_e):,}** linhas encontradas")
-                st.dataframe(previa_e.head(10), use_container_width=True, hide_index=True)
+                st.dataframe(previa_e.head(10), width="stretch", hide_index=True)
                 if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
                     preparados_e = preparar_eventos(previa_e)
                     processados, total = upsert_eventos(preparados_e)
@@ -2158,7 +2158,7 @@ def modal_eventos():
         if rel.empty:
             st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
         else:
-            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), width="stretch", hide_index=True)
 
             fig = px.bar(
                 rel.sort_values("O.S. encontradas", ascending=False),
@@ -2168,13 +2168,13 @@ def modal_eventos():
                 hover_data=["Protocolo", "Matrículas", "Parcial"],
                 title="O.S. encontradas nos bairros impactados pelos eventos",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         st.divider()
         st.markdown("### Eventos armazenados")
         mostrar_eventos = df_eventos.copy()
         colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
-        st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
+        st.dataframe(mostrar_eventos[colunas_evento], width="stretch", hide_index=True)
 
     # A edição permanece disponível mesmo sem O.S. cadastradas.
     if PODE_EDITAR_FAROL and not df_eventos.empty:
@@ -2206,7 +2206,7 @@ def modal_eventos():
             )
             salvar = st.form_submit_button(
                 "💾 Salvar área impactada",
-                use_container_width=True,
+                width="stretch",
             )
         campos = {"Áreas Impactadas": area_editada}
         if salvar:
@@ -2604,7 +2604,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
                 if normalizar_municipio(cidade) == "TERESINA"])
     selecionadas = filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades)
     st.caption(f"{len(selecionadas)} concentração(ões) incluída(s) em {tipo}.")
-    gerar = st.button("📸 Gerar relatório em PDF", type="primary", use_container_width=True,
+    gerar = st.button("📸 Gerar relatório em PDF", type="primary", width="stretch",
                       disabled=selecionadas.empty)
     if gerar:
         if selecionadas.empty:
@@ -2631,13 +2631,13 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
         st.download_button("⬇️ Baixar relatório gerado",
             data=st.session_state["farol_pdf_operacional_pronto"],
             file_name=st.session_state.get("farol_pdf_operacional_nome", "Farol_Relatorio.pdf"),
-            mime="application/pdf", use_container_width=True,
+            mime="application/pdf", width="stretch",
             key="farol_download_relatorio_modal")
         if st.session_state.get("farol_os_relatorio_csv"):
             st.download_button("📊 Baixar planilha das O.S. (Excel/CSV)",
                 data=st.session_state["farol_os_relatorio_csv"],
                 file_name=st.session_state.get("farol_os_relatorio_nome", "Farol_OS.csv"),
-                mime="text/csv", use_container_width=True,
+                mime="text/csv", width="stretch",
                 key="farol_download_os_relatorio_csv")
 
 # ============================================================
@@ -2692,15 +2692,15 @@ with st.sidebar:
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
-    if st.button("🗺️ Mapa operacional", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
+    if st.button("🗺️ Mapa operacional", width="stretch", type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
         st.session_state["farol_tela"] = "mapa"
         st.rerun()
     if PODE_EDITAR_FAROL:
-        if st.button("📥 Importação", use_container_width=True):
+        if st.button("📥 Importação", width="stretch"):
             modal_importacao()
-    if st.button("⚡ Eventos", use_container_width=True):
+    if st.button("⚡ Eventos", width="stretch"):
         modal_eventos()
-    if st.button("📍 Cadastros", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
+    if st.button("📍 Cadastros", width="stretch", type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
         st.session_state["farol_tela"] = "cadastros"
         st.rerun()
     if not PODE_EDITAR_FAROL:
@@ -2763,12 +2763,12 @@ with st.sidebar:
     espaco_relatorio_operacional = st.empty()
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
-                     use_container_width=True, key="abrir_limpeza_farol"):
+                     width="stretch", key="abrir_limpeza_farol"):
             modal_limpar_dados_operacionais()
     if PERFIL_FAROL == "admin":
         espaco_diagnostico_farol = st.empty()
     st.divider()
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+    if st.button("🏠 Voltar ao Menu Principal", width="stretch"):
         try:
             st.switch_page("app.py")
         except Exception as erro:
@@ -3136,7 +3136,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         with espaco_relatorio_operacional.container():
             st.caption("Relatórios API (exceto Teresina) ou THE (somente Teresina), com panorama e fichas individuais.")
             if st.button("📄 Configurar e gerar relatório (PDF)",
-                         use_container_width=True, key="abrir_configuracao_relatorio"):
+                         width="stretch", key="abrir_configuracao_relatorio"):
                 modal_configurar_relatorio(resumo_pdf, analise, pontos_cluster,
                     proximidades, df_eventos, bairros, int(raio_operacional),
                     observacoes_df, df_pocos, df_loggers)
@@ -3144,7 +3144,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
     if df_pontos.empty:
         espaco_relatorio_operacional.button(
             "📄 Gerar relatório operacional (PDF)", disabled=True,
-            use_container_width=True, key="relatorio_sem_pontos"
+            width="stretch", key="relatorio_sem_pontos"
         )
 
 
@@ -3157,8 +3157,8 @@ if st.session_state.get("farol_tela", "mapa") == "cadastros":
     with c_poco:
         st.markdown("### Poços / Ativos")
         st.metric("Registros", len(df_pocos))
-        st.dataframe(df_pocos, use_container_width=True, hide_index=True)
+        st.dataframe(df_pocos, width="stretch", hide_index=True)
     with c_logger:
         st.markdown("### Loggers")
         st.metric("Registros", len(df_loggers))
-        st.dataframe(df_loggers, use_container_width=True, hide_index=True)
+        st.dataframe(df_loggers, width="stretch", hide_index=True)
