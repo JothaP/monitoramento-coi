@@ -50,19 +50,19 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional - Módulo 3",
+    page_title="Farol Operacional V2 - Demonstração (Módulo 7)",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# O Farol (módulo 3) é autorizado para os três perfis válidos.
-# A autenticação continua obrigatória; o módulo 7 permanece privado.
+# Módulo 7 de demonstração: apenas admin e usuario.
+# Dados totalmente separados da planilha de produção.
 if not verificar_autenticacao():
     st.error("Sessão não autenticada. Entre pelo Hub Central.")
     st.stop()
 
 PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
-if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
+if PERFIL_FAROL not in {"admin", "usuario"}:
     st.error("Seu perfil não está autorizado a acessar o Farol Operacional.")
     st.stop()
 
@@ -73,7 +73,14 @@ def exigir_edicao_farol():
     if not PODE_EDITAR_FAROL:
         raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
-SPREADSHEET_ID = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+# Definir em Streamlit Cloud > App settings > Secrets:
+# farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
+# Não utilizar a planilha de produção como fallback.
+SPREADSHEET_ID_PRODUCAO = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
+SPREADSHEET_ID = str(st.secrets.get("farol_v2_spreadsheet_id", "")).strip()
+if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_PRODUCAO:
+    st.error("Módulo 7 protegido: configure farol_v2_spreadsheet_id com o ID de uma CÓPIA independente da planilha de produção em Secrets.")
+    st.stop()
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -346,14 +353,14 @@ def obter_cliente_google():
 
 
 @st.cache_resource(show_spinner=False)
-def obter_planilha():
-    planilha = obter_cliente_google().open_by_key(SPREADSHEET_ID)
+def obter_planilha(spreadsheet_id):
+    planilha = obter_cliente_google().open_by_key(spreadsheet_id)
 
     return planilha
 
 
 def obter_aba(nome, cabecalho):
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     if planilha.id != SPREADSHEET_ID:
         st.error("Conexão bloqueada: planilha diferente da configurada para o Farol.")
         st.stop()
@@ -385,17 +392,17 @@ def obter_aba(nome, cabecalho):
 
 
 @st.cache_resource(ttl=600, show_spinner=False)
-def obter_aba_para_leitura(nome):
+def obter_aba_para_leitura(nome, spreadsheet_id):
     """Reutiliza o objeto Worksheet; não lê toda a planilha para conferir cabeçalhos."""
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     if planilha.id != SPREADSHEET_ID:
         raise PermissionError("A planilha conectada não é a planilha autorizada do Farol.")
     return planilha.worksheet(nome)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def carregar_aba(nome, cabecalho):
-    aba = obter_aba_para_leitura(nome)
+def carregar_aba(nome, cabecalho, spreadsheet_id=None):
+    aba = obter_aba_para_leitura(nome, spreadsheet_id or SPREADSHEET_ID)
     # Preserva as vírgulas decimais das coordenadas (ex.: -5,18817).
     # A conversão automática do gspread interpreta a vírgula como milhar
     # e transforma -5,18817 em -518817, invalidando os marcadores.
@@ -445,7 +452,7 @@ def invalidar_cache():
 def carregar_observacoes_concentracoes():
     """Lê anotações persistentes; operador não cria nem altera planilhas."""
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_OBSERVACOES)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_OBSERVACOES)
     except gspread.WorksheetNotFound:
         return pd.DataFrame(columns=["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"])
     registros = aba.get_all_records(numericise_ignore=["all"])
@@ -474,7 +481,7 @@ def identificar_observacao(concentracao, os_grupo, observacoes, raio_m):
 
 def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
     exigir_edicao_farol()
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     cab = ["CHAVE", "MUNICIPIO", "LATITUDE", "LONGITUDE", "OBSERVACAO", "ATUALIZADO_EM", "AUTOR"]
     try:
         aba = planilha.worksheet(NOME_ABA_OBSERVACOES)
@@ -498,7 +505,7 @@ def salvar_observacao_concentracao(chave, municipio, lat, lon, observacao):
 def carregar_datas_atualizacao():
     """Consulta apenas duas linhas de metadados; nunca lê as bases para obter datas."""
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_ATUALIZACOES)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_ATUALIZACOES)
         linhas = aba.get_all_values()
     except gspread.WorksheetNotFound:
         return {}
@@ -513,7 +520,7 @@ def registrar_atualizacao_base(tipo):
     exigir_edicao_farol()
     if tipo not in {"PONTOS", "EVENTOS"}:
         raise ValueError("Tipo de base desconhecido.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     try:
         aba = planilha.worksheet(NOME_ABA_ATUALIZACOES)
     except gspread.WorksheetNotFound:
@@ -548,7 +555,7 @@ def limpar_dados_operacionais_admin():
     """Limpa PONTOS, EVENTOS e correções manuais de áreas, preservando cabeçalhos."""
     if not verificar_autenticacao() or str(st.session_state.get("perfil", "")).strip().lower() != "admin":
         raise PermissionError("Somente administradores podem limpar os dados operacionais.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     resultados = []
     abas = (
         (NOME_ABA_PONTOS, CABECALHO_PONTOS),
@@ -590,11 +597,11 @@ def modal_limpar_dados_operacionais():
     )
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Cancelar", use_container_width=True, key="cancelar_limpeza_farol"):
+        if st.button("Cancelar", width="stretch", key="cancelar_limpeza_farol"):
             st.rerun()
     with c2:
         if st.button("🗑️ Limpar agora", type="primary", disabled=not confirmado,
-                     use_container_width=True, key="executar_limpeza_farol"):
+                     width="stretch", key="executar_limpeza_farol"):
             try:
                 abas = limpar_dados_operacionais_admin()
                 st.session_state["farol_mensagem_limpeza"] = "Dados removidos das abas: " + ", ".join(abas) + "."
@@ -782,7 +789,7 @@ def carregar_areas_editadas():
     Aba separada também permite proteger uma correção para campo vazio.
     """
     try:
-        aba = obter_planilha().worksheet(NOME_ABA_AREAS_PROTEGIDAS)
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_AREAS_PROTEGIDAS)
     except gspread.WorksheetNotFound:
         return {}
     linhas = aba.get_all_values()
@@ -801,7 +808,7 @@ def registrar_area_editada(chave, area):
     exigir_edicao_farol()
     if not chave:
         raise ValueError("Não foi possível identificar o evento para proteger a área.")
-    planilha = obter_planilha()
+    planilha = obter_planilha(SPREADSHEET_ID)
     try:
         aba = planilha.worksheet(NOME_ABA_AREAS_PROTEGIDAS)
     except gspread.WorksheetNotFound:
@@ -1353,6 +1360,10 @@ def eventos_georreferenciados(eventos, bairros_kmz):
         chave = (bairro.get("municipio", "TERESINA"), bairro["nome_normalizado"])
         indice.setdefault(chave, []).append(bairro)
     for _, evento in eventos.iterrows():
+        # Eventos encerrados permanecem na base, mas não geram feições no mapa.
+        categoria_status, _ = classificar_status_evento(evento.get("Status", ""))
+        if categoria_status == "Finalizado":
+            continue
         cidade = normalizar_municipio(evento.get("Cidade", ""))
         areas = extrair_bairros_evento(evento.get("Áreas Impactadas", ""), evento.get("Cidade", ""), bairros_kmz)
         if not cidade or not areas:
@@ -1389,6 +1400,9 @@ def adicionar_camada_eventos(mapa, eventos_mapeados):
     fg = folium.FeatureGroup(name="Eventos de desabastecimento", show=True)
     for item in eventos_mapeados:
         evento = item["evento"]
+        # Proteção adicional contra feições finalizadas vindas de outra origem.
+        if classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado":
+            continue
         bairro = item["bairro"]
         categoria = item["categoria"]
         parcial = item["parcial"]
@@ -1539,7 +1553,7 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mape
     return mapa
 
 
-def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None, outras_concentracoes=None):
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None, outras_concentracoes=None, rotulos_equipamentos=False):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
@@ -1575,41 +1589,34 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             ).add_to(fg_os)
     fg_os.add_to(mapa)
 
-    # Rótulos só ficam visíveis em aproximações de detalhe (~200 m na escala).
-    # A lógica é executada no Leaflet, sem provocar rerun do Streamlit.
-    mapa.get_root().header.add_child(Element("""
-    <style>
-      .leaflet-tooltip.farol-rotulo-equipamento {
-        display: none;
-        background: rgba(255,255,255,.95);
-        color: #1e293b;
-        border: 1px solid #cbd5e1;
-        border-radius: 4px;
-        padding: 2px 5px;
-        font: 600 11px/1.25 Arial, sans-serif;
-        box-shadow: 0 1px 3px rgba(0,0,0,.18);
-        white-space: nowrap;
-        pointer-events: none;
-      }
-      .farol-zoom-detalhe .leaflet-tooltip.farol-rotulo-equipamento { display: block; }
-    </style>
-    """))
-    mapa.get_root().script.add_child(Element(f"""
-    (function() {{
-      var mapaFarol = {mapa.get_name()};
-      var limiarZoom = 16.5;
-      function atualizarRotulosFarol() {{
-        var container = mapaFarol.getContainer();
-        if (mapaFarol.getZoom() >= limiarZoom) {{
-          container.classList.add('farol-zoom-detalhe');
-        }} else {{
-          container.classList.remove('farol-zoom-detalhe');
-        }}
-      }}
-      mapaFarol.on('zoomend', atualizarRotulosFarol);
-      mapaFarol.whenReady(atualizarRotulosFarol);
-    }})();
-    """))
+    # Rótulos independentes, controlados manualmente no menu de camadas.
+    # Esta camada só existe no detalhamento operacional e inicia desmarcada.
+    fg_rotulos = (folium.FeatureGroup(name="Rótulos de ativos e loggers", show=False)
+                  if rotulos_equipamentos else None)
+    if fg_rotulos is not None:
+        mapa.get_root().header.add_child(Element("""
+        <style>
+          .farol-etiqueta-equipamento {
+            display: inline-block; width: max-content;
+            padding: 2px 5px; border-radius: 4px;
+            background: rgba(255,255,255,.95); color: #1e293b;
+            border: 1px solid #cbd5e1; font: 600 11px/1.25 Arial,sans-serif;
+            box-shadow: 0 1px 3px rgba(0,0,0,.18);
+            white-space: nowrap; pointer-events: none;
+          }
+        </style>
+        """))
+
+    def adicionar_rotulo_equipamento(lat, lon, nome):
+        if fg_rotulos is None:
+            return
+        folium.Marker(
+            [lat, lon],
+            icon=folium.DivIcon(
+                html=f'<span class="farol-etiqueta-equipamento">{html_escape(str(nome))}</span>',
+                icon_size=(0, 0), icon_anchor=(-12, 24),
+            ),
+        ).add_to(fg_rotulos)
 
     fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
     for _, r in df_loggers.iterrows():
@@ -1617,13 +1624,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
+        adicionar_rotulo_equipamento(lat, lon, r.get("IDENTIFICACAO_ATIVO", "") or "Logger")
         folium.Marker(
             [lat, lon],
-            tooltip=folium.Tooltip(
-                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or "Logger")),
-                permanent=True, direction="top", offset=(0, -12),
-                class_name="farol-rotulo-equipamento",
-            ),
             popup=folium.Popup(
                 f"<b>Logger:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Endereço:</b> {r.get('ENDERECO','')}", max_width=300
@@ -1638,13 +1641,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
+        adicionar_rotulo_equipamento(lat, lon, r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")
         folium.Marker(
             [lat, lon],
-            tooltip=folium.Tooltip(
-                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")),
-                permanent=True, direction="top", offset=(0, -12),
-                class_name="farol-rotulo-equipamento",
-            ),
             popup=folium.Popup(
                 f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
@@ -1654,6 +1653,8 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             z_index_offset=1000,  # Mantém ativos acima dos loggers coincidentes.
         ).add_to(fg_pocos)
     fg_pocos.add_to(mapa)
+    if fg_rotulos is not None:
+        fg_rotulos.add_to(mapa)
 
     fg_conc = folium.FeatureGroup(name="Concentrações", show=True)
     for _, c in concentracoes.iterrows():
@@ -2015,13 +2016,13 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     )
     st.markdown("#### Ordens de serviço")
     colunas_os = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
-    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), use_container_width=True, hide_index=True)
+    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), width="stretch", hide_index=True)
     st.markdown("#### Poços / ativos e loggers próximos")
     if ativos.empty:
         st.info("Nenhum equipamento dentro do raio operacional desta concentração.")
     else:
         st.dataframe(ativos[["Tipo", "Identificação", "Nome", "Município", "Distância"]],
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
     st.markdown("#### Eventos relacionados")
     st.caption("Correspondência por município e bairro impactado; não estabelece relação causal.")
     if eventos_relacionados.empty:
@@ -2029,7 +2030,7 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     else:
         colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
         st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
-                     use_container_width=True, hide_index=True)
+                     width="stretch", hide_index=True)
     # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
     if st.button("📸 Preparar PDF com mapa da concentração", key=f"preparar_pdf_{codigo}"):
         try:
@@ -2062,7 +2063,7 @@ def modal_importacao():
             try:
                 previa = ler_planilha_upload(arq_os)
                 st.write(f"**{len(previa):,}** linhas encontradas")
-                st.dataframe(previa.head(10), use_container_width=True, hide_index=True)
+                st.dataframe(previa.head(10), width="stretch", hide_index=True)
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
                     inseridas, total = upsert_pontos(preparados)
@@ -2078,7 +2079,7 @@ def modal_importacao():
             try:
                 previa_e = ler_planilha_upload(arq_eventos)
                 st.write(f"**{len(previa_e):,}** linhas encontradas")
-                st.dataframe(previa_e.head(10), use_container_width=True, hide_index=True)
+                st.dataframe(previa_e.head(10), width="stretch", hide_index=True)
                 if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
                     preparados_e = preparar_eventos(previa_e)
                     processados, total = upsert_eventos(preparados_e)
@@ -2144,7 +2145,7 @@ def modal_eventos():
         if rel.empty:
             st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
         else:
-            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), use_container_width=True, hide_index=True)
+            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), width="stretch", hide_index=True)
 
             fig = px.bar(
                 rel.sort_values("O.S. encontradas", ascending=False),
@@ -2154,13 +2155,13 @@ def modal_eventos():
                 hover_data=["Protocolo", "Matrículas", "Parcial"],
                 title="O.S. encontradas nos bairros impactados pelos eventos",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         st.divider()
         st.markdown("### Eventos armazenados")
         mostrar_eventos = df_eventos.copy()
         colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
-        st.dataframe(mostrar_eventos[colunas_evento], use_container_width=True, hide_index=True)
+        st.dataframe(mostrar_eventos[colunas_evento], width="stretch", hide_index=True)
 
     # A edição permanece disponível mesmo sem O.S. cadastradas.
     if PODE_EDITAR_FAROL and not df_eventos.empty:
@@ -2192,7 +2193,7 @@ def modal_eventos():
             )
             salvar = st.form_submit_button(
                 "💾 Salvar área impactada",
-                use_container_width=True,
+                width="stretch",
             )
         campos = {"Áreas Impactadas": area_editada}
         if salvar:
@@ -2407,13 +2408,15 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
                 continue
             nome = str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Equipamento")
             if panoramico:
+                # No PDF, ambos os tipos de equipamento usam laranja.
                 icone = (folium.Icon(icon="signal", prefix="fa", color="orange") if eh_logger
-                         else folium.Icon(icon="tint", prefix="fa", color="blue"))
+                         else folium.Icon(icon="tint", prefix="fa", color="orange"))
                 folium.Marker([y, x], icon=icone,
                               z_index_offset=0 if eh_logger else 1000).add_to(mapa)
             else:
-                cor = "#E89021" if eh_logger else "#149AC8"
-                folium.CircleMarker([y, x], radius=5, color="white", weight=1.2,
+                # Mesma cor para poços/ativos e loggers somente nos mapas do relatório.
+                cor = "#FF8C00"
+                folium.CircleMarker([y, x], radius=5, color="#663600", weight=1.2,
                                     fill=True, fill_color=cor, fill_opacity=.95).add_to(mapa)
             if concentracao is not None:
                 # Rótulo permanente nas fichas, sem alterar o mapa interativo.
@@ -2575,51 +2578,53 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
 @st.dialog("📄 Configurar relatório operacional", width="large")
 def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidades,
                                eventos, bairros, raio, observacoes, pocos, loggers):
-    st.caption("Escolha a abrangência do relatório. A seleção não altera os filtros do mapa principal.")
-    tipo = st.radio("Abrangência", ["Geral", "Por município(s)"], horizontal=True,
-                    key="farol_tipo_relatorio")
-    cidades = None
-    if tipo == "Por município(s)":
-        disponiveis = sorted({cidade for _, c in concentracoes.iterrows()
-                             for cidade in cidades_da_concentracao(c, pontos_cluster)},
-                            key=normalizar_texto)
-        cidades = st.multiselect("Municípios incluídos no relatório", disponiveis,
-                                key="farol_cidades_relatorio",
-                                placeholder="Selecione um ou mais municípios")
-        if cidades:
-            qtd = len(filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades))
-            st.caption(f"{qtd} concentração(ões) serão incluídas.")
-    gerar = st.button("📸 Gerar relatório em PDF", type="primary", use_container_width=True,
-                      disabled=(tipo == "Por município(s)" and not cidades))
+    st.caption("API: concentrações dos municípios exceto Teresina. THE: somente Teresina. Os filtros do mapa principal não são alterados.")
+    tipo = st.radio("Relatório", ["API", "THE"], horizontal=True,
+                    key="farol_tipo_relatorio_api_the")
+    disponiveis = sorted({cidade for _, c in concentracoes.iterrows()
+                         for cidade in cidades_da_concentracao(c, pontos_cluster)},
+                        key=normalizar_texto)
+    cidades = ([cidade for cidade in disponiveis
+                if normalizar_municipio(cidade) != "TERESINA"]
+               if tipo == "API" else
+               [cidade for cidade in disponiveis
+                if normalizar_municipio(cidade) == "TERESINA"])
+    selecionadas = filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades)
+    st.caption(f"{len(selecionadas)} concentração(ões) incluída(s) em {tipo}.")
+    gerar = st.button("📸 Gerar relatório em PDF", type="primary", width="stretch",
+                      disabled=selecionadas.empty)
     if gerar:
-        selecionadas = (concentracoes if cidades is None else
-                        filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades))
         if selecionadas.empty:
             st.warning("Nenhuma concentração encontrada para a seleção.")
         else:
             try:
+                # O panorama também deve excluir as O.S. de Teresina no relatório API.
+                cidades_normalizadas = {normalizar_municipio(c) for c in cidades}
+                pontos_relatorio = pontos.loc[
+                    pontos["Cidade"].map(normalizar_municipio).isin(cidades_normalizadas)
+                ].copy()
                 with st.spinner("Gerando mapa panorâmico e fichas das concentrações..."):
-                    pdf = gerar_pdf_operacional(selecionadas, pontos, pontos_cluster,
+                    pdf = gerar_pdf_operacional(selecionadas, pontos_relatorio, pontos_cluster,
                           proximidades, eventos, bairros, raio, observacoes,
                           cidades=cidades, pocos=pocos, loggers=loggers)
                 st.session_state["farol_pdf_operacional_pronto"] = pdf
-                st.session_state["farol_pdf_operacional_nome"] = nome_arquivo_relatorio(cidades, "pdf")
+                st.session_state["farol_pdf_operacional_nome"] = f"Farol_Relatorio_{tipo}.pdf"
                 st.session_state["farol_os_relatorio_csv"] = planilha_os_relatorio(selecionadas, pontos_cluster)
-                st.session_state["farol_os_relatorio_nome"] = nome_arquivo_relatorio(cidades, "csv")
-                st.success("Relatório gerado. Faça o download abaixo.")
+                st.session_state["farol_os_relatorio_nome"] = f"Farol_OS_{tipo}.csv"
+                st.success(f"Relatório {tipo} gerado. Faça o download abaixo.")
             except Exception as erro:
                 st.error(f"Não foi possível gerar o relatório: {erro}")
     if st.session_state.get("farol_pdf_operacional_pronto"):
         st.download_button("⬇️ Baixar relatório gerado",
             data=st.session_state["farol_pdf_operacional_pronto"],
             file_name=st.session_state.get("farol_pdf_operacional_nome", "Farol_Relatorio.pdf"),
-            mime="application/pdf", use_container_width=True,
+            mime="application/pdf", width="stretch",
             key="farol_download_relatorio_modal")
         if st.session_state.get("farol_os_relatorio_csv"):
             st.download_button("📊 Baixar planilha das O.S. (Excel/CSV)",
                 data=st.session_state["farol_os_relatorio_csv"],
                 file_name=st.session_state.get("farol_os_relatorio_nome", "Farol_OS.csv"),
-                mime="text/csv", use_container_width=True,
+                mime="text/csv", width="stretch",
                 key="farol_download_os_relatorio_csv")
 
 # ============================================================
@@ -2627,7 +2632,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
 # ============================================================
 
 st.title("Farol Operacional")
-st.caption("O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
+st.caption("🧪 AMBIENTE DE DEMONSTRAÇÃO — dados isolados do Módulo 3 | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
@@ -2674,15 +2679,15 @@ with st.sidebar:
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
-    if st.button("🗺️ Mapa operacional", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
+    if st.button("🗺️ Mapa operacional", width="stretch", type="primary" if st.session_state["farol_tela"] == "mapa" else "secondary"):
         st.session_state["farol_tela"] = "mapa"
         st.rerun()
     if PODE_EDITAR_FAROL:
-        if st.button("📥 Importação", use_container_width=True):
+        if st.button("📥 Importação", width="stretch"):
             modal_importacao()
-    if st.button("⚡ Eventos", use_container_width=True):
+    if st.button("⚡ Eventos", width="stretch"):
         modal_eventos()
-    if st.button("📍 Cadastros", use_container_width=True, type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
+    if st.button("📍 Cadastros", width="stretch", type="primary" if st.session_state["farol_tela"] == "cadastros" else "secondary"):
         st.session_state["farol_tela"] = "cadastros"
         st.rerun()
     if not PODE_EDITAR_FAROL:
@@ -2745,12 +2750,12 @@ with st.sidebar:
     espaco_relatorio_operacional = st.empty()
     if PERFIL_FAROL == "admin":
         if st.button("🗑️ Limpar dados (PONTOS e EVENTOS)",
-                     use_container_width=True, key="abrir_limpeza_farol"):
+                     width="stretch", key="abrir_limpeza_farol"):
             modal_limpar_dados_operacionais()
     if PERFIL_FAROL == "admin":
         espaco_diagnostico_farol = st.empty()
     st.divider()
-    if st.button("🏠 Voltar ao Menu Principal", use_container_width=True):
+    if st.button("🏠 Voltar ao Menu Principal", width="stretch"):
         try:
             st.switch_page("app.py")
         except Exception as erro:
@@ -2982,6 +2987,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 eventos_mapeados=eventos_mapeados,
                 raio_circulo=raio_concentracao,
                 outras_concentracoes=outras_concentracoes,
+                rotulos_equipamentos=True,
             )
             # Ajusta o enquadramento para mostrar integralmente os círculos
             # próximos, com margem para O.S. e equipamentos.
@@ -3116,9 +3122,9 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             resumo_pdf = concentracoes.copy()
             observacoes_df = pd.DataFrame()
         with espaco_relatorio_operacional.container():
-            st.caption("Relatório geral ou por município(s), com panorama e fichas individuais compactas.")
+            st.caption("Relatórios API (exceto Teresina) ou THE (somente Teresina), com panorama e fichas individuais.")
             if st.button("📄 Configurar e gerar relatório (PDF)",
-                         use_container_width=True, key="abrir_configuracao_relatorio"):
+                         width="stretch", key="abrir_configuracao_relatorio"):
                 modal_configurar_relatorio(resumo_pdf, analise, pontos_cluster,
                     proximidades, df_eventos, bairros, int(raio_operacional),
                     observacoes_df, df_pocos, df_loggers)
@@ -3126,7 +3132,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
     if df_pontos.empty:
         espaco_relatorio_operacional.button(
             "📄 Gerar relatório operacional (PDF)", disabled=True,
-            use_container_width=True, key="relatorio_sem_pontos"
+            width="stretch", key="relatorio_sem_pontos"
         )
 
 
@@ -3139,8 +3145,8 @@ if st.session_state.get("farol_tela", "mapa") == "cadastros":
     with c_poco:
         st.markdown("### Poços / Ativos")
         st.metric("Registros", len(df_pocos))
-        st.dataframe(df_pocos, use_container_width=True, hide_index=True)
+        st.dataframe(df_pocos, width="stretch", hide_index=True)
     with c_logger:
         st.markdown("### Loggers")
         st.metric("Registros", len(df_loggers))
-        st.dataframe(df_loggers, use_container_width=True, hide_index=True)
+        st.dataframe(df_loggers, width="stretch", hide_index=True)
