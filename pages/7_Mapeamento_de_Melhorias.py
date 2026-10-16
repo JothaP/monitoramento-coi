@@ -1792,6 +1792,9 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
     eventos_relacionados = []
     if not eventos.empty:
         for _, evento in eventos.iterrows():
+            # Eventos encerrados não entram nos vínculos, indicadores ou PDFs.
+            if classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado":
+                continue
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
@@ -3061,62 +3064,78 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             observacoes_df = carregar_observacoes_concentracoes()
             resumo_pdf = concentracoes.copy()
             grupos_os = {chave: quadro for chave, quadro in pontos_cluster.groupby("_grupo", sort=False)} if not pontos_cluster.empty else {}
-            for _, concentracao in concentracoes.iterrows():
-                codigo = concentracao["ID_CONCENTRACAO"]
-                os_grupo = grupos_os.get(concentracao["GRUPO"], pontos_cluster.iloc[0:0])
-                cidades_grupo = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
-                qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
-                              if not proximidades.empty else 0)
-                _, _, eventos_do_grupo = dados_relatorio_concentracao(
-                    concentracao, pontos_cluster, proximidades, df_eventos, bairros
-                )
-                indicador_eventos = (
-                    f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
-                    if not eventos_do_grupo.empty else "Sem evento relacionado"
-                )
-                municipio_nota, chave_nota, texto_nota = identificar_observacao(
-                    concentracao, os_grupo, observacoes_df, raio_concentracao
-                )
-                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
-                resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
-                indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
-                bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
-                titulo = (
-                    f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'}"
-                    f" — {bairros_grupo or 'Bairro não informado'} | "
-                    f"{int(concentracao['QTD_OS'])} O.S. · "
-                    f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
-                    f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
-                )
-                # Preservar TODOS os registros no formato original de expansores.
-                # Somente a concentração ativa carrega o relatório detalhado,
-                # evitando gerar tabelas e componentes pesados para as demais.
-                ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
-                with st.expander(titulo, expanded=ativa):
-                    if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
-                                 key=f"foco_{codigo}", disabled=ativa):
-                        st.session_state["farol_v2_concentracao"] = str(codigo)
-                        st.session_state["farol_concentracao_expandida"] = str(codigo)
-                        st.rerun()
-                    if ativa:
-                        if PODE_EDITAR_FAROL:
-                            nota_editada = st.text_area("Observação do analista", value=texto_nota,
-                                                        key=f"nota_{codigo}_{chave_nota}", height=90,
-                                                        placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
-                            if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
-                                try:
-                                    salvar_observacao_concentracao(chave_nota, municipio_nota,
-                                        float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
-                                    st.success("Acompanhamento salvo.")
-                                    st.rerun()
-                                except Exception as erro:
-                                    st.error(f"Não foi possível salvar: {erro}")
-                        else:
-                            st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
-                        exibir_relatorio_concentracao(
-                            codigo, concentracoes, pontos_cluster, proximidades,
-                            df_eventos, int(raio_operacional), bairros
+            # Mesma divisão geográfica adotada nos relatórios PDF.
+            aba_api, aba_the = st.tabs(["🌐 API — Demais municípios", "📍 THE — Teresina"])
+            for aba, abrangencia in ((aba_api, "API"), (aba_the, "THE")):
+                with aba:
+                    cidades_abrangencia = sorted({
+                        cidade
+                        for _, conc in concentracoes.iterrows()
+                        for cidade in cidades_da_concentracao(conc, pontos_cluster)
+                        if (normalizar_municipio(cidade) != "TERESINA") == (abrangencia == "API")
+                    }, key=normalizar_texto)
+                    concentracoes_abrangencia = filtrar_concentracoes_relatorio(
+                        concentracoes, pontos_cluster, cidades_abrangencia
+                    )
+                    st.caption(f"{len(concentracoes_abrangencia)} concentração(ões) em {abrangencia}.")
+                    if concentracoes_abrangencia.empty:
+                        st.info("Nenhuma concentração encontrada nesta abrangência.")
+                    for _, concentracao in concentracoes_abrangencia.iterrows():
+                        codigo = concentracao["ID_CONCENTRACAO"]
+                        os_grupo = grupos_os.get(concentracao["GRUPO"], pontos_cluster.iloc[0:0])
+                        cidades_grupo = sorted({str(v).strip() for v in os_grupo["Cidade"] if str(v).strip()})
+                        qtd_ativos = (int((proximidades["Concentração"] == codigo).sum())
+                                      if not proximidades.empty else 0)
+                        _, _, eventos_do_grupo = dados_relatorio_concentracao(
+                            concentracao, pontos_cluster, proximidades, df_eventos, bairros
                         )
+                        indicador_eventos = (
+                            f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
+                            if not eventos_do_grupo.empty else "Sem evento relacionado"
+                        )
+                        municipio_nota, chave_nota, texto_nota = identificar_observacao(
+                            concentracao, os_grupo, observacoes_df, raio_concentracao
+                        )
+                        resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
+                        resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
+                        indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
+                        bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
+                        titulo = (
+                            f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'}"
+                            f" — {bairros_grupo or 'Bairro não informado'} | "
+                            f"{int(concentracao['QTD_OS'])} O.S. · "
+                            f"{int(concentracao['QTD_MATRICULAS'])} matrículas · "
+                            f"{qtd_ativos} ativo(s) próximo(s) · {indicador_eventos} · {indicador_nota}"
+                        )
+                        # Preservar TODOS os registros no formato original de expansores.
+                        # Somente a concentração ativa carrega o relatório detalhado,
+                        # evitando gerar tabelas e componentes pesados para as demais.
+                        ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
+                        with st.expander(titulo, expanded=ativa):
+                            if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
+                                         key=f"foco_{codigo}", disabled=ativa):
+                                st.session_state["farol_v2_concentracao"] = str(codigo)
+                                st.session_state["farol_concentracao_expandida"] = str(codigo)
+                                st.rerun()
+                            if ativa:
+                                if PODE_EDITAR_FAROL:
+                                    nota_editada = st.text_area("Observação do analista", value=texto_nota,
+                                                                key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                                placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
+                                    if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                                        try:
+                                            salvar_observacao_concentracao(chave_nota, municipio_nota,
+                                                float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
+                                            st.success("Acompanhamento salvo.")
+                                            st.rerun()
+                                        except Exception as erro:
+                                            st.error(f"Não foi possível salvar: {erro}")
+                                else:
+                                    st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
+                                exibir_relatorio_concentracao(
+                                    codigo, concentracoes, pontos_cluster, proximidades,
+                                    df_eventos, int(raio_operacional), bairros
+                                )
         # Disponível também quando não há concentrações no filtro atual.
         if concentracoes.empty:
             resumo_pdf = concentracoes.copy()
