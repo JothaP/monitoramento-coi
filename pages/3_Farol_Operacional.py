@@ -2609,18 +2609,23 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                           ) or "Nenhum evento relacionado"), pequeno),
             ])
             vinculadas, nao_vinculadas = classificar_os_por_evento(grupo, eventos_da_concentracao)
-            # Tabelas independentes: a lista completa permanece disponível nas continuações.
+            # Distribuir as duas tabelas dentro da área cinza ao lado do mapa.
+            # O espaço abaixo do mapa só recebe linhas que não couberem no painel.
             def linhas_pdf(base):
                 return [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
                          str(r.get("Status OS", ""))] for _, r in base.iterrows()]
-            def tabela_resumo(linhas, limite=4):
+
+            def tabela_os(linhas, largura_total=11.85*cm):
                 cab = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
-                        Paragraph("<b>Matrícula</b>", pequeno), Paragraph("<b>Status</b>", pequeno)]]
-                cab.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha] for linha in linhas[:limite]])
-                t = Table(cab, colWidths=[3.25*cm, 2.8*cm, 5.8*cm], repeatRows=1)
+                        Paragraph("<b>Matrícula</b>", pequeno),
+                        Paragraph("<b>Status</b>", pequeno)]]
+                cab.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha] for linha in linhas])
+                larguras = [largura_total * 0.37, largura_total * 0.27, largura_total * 0.36]
+                t = Table(cab, colWidths=larguras, repeatRows=1, hAlign="LEFT")
                 t.setStyle(TableStyle([
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DEE8F2")),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                     [colors.white, colors.HexColor("#F4F7FB")]),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 3),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 2),
@@ -2628,43 +2633,77 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                 ]))
                 return t
-            linhas_vinculadas = linhas_pdf(vinculadas)
-            linhas_nao_vinculadas = linhas_pdf(nao_vinculadas)
-            for titulo_grupo, linhas in (("Ordens vinculadas aos eventos", linhas_vinculadas),
-                                         ("Ordens não vinculadas", linhas_nao_vinculadas)):
-                resumo.extend([Spacer(1, 5), Paragraph(f"<b>{titulo_grupo} ({len(linhas)})</b>", pequeno)])
-                if linhas:
-                    resumo.append(tabela_resumo(linhas, limite=4))
-                    if len(linhas) > 4:
-                        resumo.append(Paragraph(f"+ {len(linhas) - 4} O.S. na continuação", pequeno))
-                else:
-                    resumo.append(Paragraph("Nenhuma O.S. nesta categoria.", pequeno))
-            ficha = Table([[imagem, resumo]], colWidths=[13.8*cm, 12.8*cm], hAlign="LEFT")
+
+            categorias = [
+                ("Ordens vinculadas aos eventos", linhas_pdf(vinculadas)),
+                ("Ordens não vinculadas", linhas_pdf(nao_vinculadas)),
+            ]
+
+            def construir_resumo(contagens):
+                conteudo = list(resumo)
+                for (nome, linhas), quantidade in zip(categorias, contagens):
+                    conteudo.extend([Spacer(1, 5),
+                                     Paragraph(f"<b>{nome} ({len(linhas)})</b>", pequeno)])
+                    if linhas:
+                        if quantidade:
+                            conteudo.append(tabela_os(linhas[:quantidade]))
+                    else:
+                        conteudo.append(Paragraph("Nenhuma O.S. nesta categoria.", pequeno))
+                return conteudo
+
+            # Medir o conteúdo com o próprio motor de layout do ReportLab.
+            # Reservar alguns pontos para as margens internas da célula.
+            largura_painel = 12.8*cm - 16
+            altura_painel = 9.87*cm - 12
+            def altura_resumo(elementos):
+                altura = 0
+                for elemento in elementos:
+                    _, h = elemento.wrap(largura_painel, altura_painel)
+                    altura += h + elemento.getSpaceBefore() + elemento.getSpaceAfter()
+                return altura
+
+            contagens = [0, 0]
+            # Preencher primeiro a tabela de vinculadas e depois a de não vinculadas.
+            # O cabeçalho de cada categoria é sempre preservado.
+            for i, (_, linhas) in enumerate(categorias):
+                for _ in linhas:
+                    proposta = contagens.copy()
+                    proposta[i] += 1
+                    if altura_resumo(construir_resumo(proposta)) <= altura_painel:
+                        contagens = proposta
+                    else:
+                        break
+            conteudo_painel = construir_resumo(contagens)
+            ficha = Table([[imagem, conteudo_painel]], colWidths=[13.8*cm, 12.8*cm], hAlign="LEFT")
             ficha.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#F4F7FB")),
                 ("LEFTPADDING", (0, 0), (0, 0), 0),
                 ("LEFTPADDING", (1, 0), (1, 0), 10),
+                ("RIGHTPADDING", (1, 0), (1, 0), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]))
             historia.append(ficha)
-            # Continuação integral das duas categorias, sem omitir O.S.
-            for titulo_grupo, linhas in (("Ordens vinculadas aos eventos", linhas_vinculadas),
-                                         ("Ordens não vinculadas", linhas_nao_vinculadas)):
-                if len(linhas) > 4:
-                    historia.append(Spacer(1, 8))
-                    historia.append(Paragraph(f"Continuação — {titulo_grupo}", pequeno))
-                    dados_extra = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
-                                    Paragraph("<b>Matrícula</b>", pequeno), Paragraph("<b>Status</b>", pequeno)]]
-                    dados_extra.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
-                                        for linha in linhas[4:]])
-                    tabela_extra = Table(dados_extra, colWidths=[5*cm, 5*cm, 15*cm], repeatRows=1)
-                    tabela_extra.setStyle(TableStyle([
-                        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                         [colors.white, colors.HexColor("#F4F7FB")]),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-                    historia.append(tabela_extra)
+
+            # Se houver excedente, continuar abaixo do mapa com o mesmo
+            # fundo cinza, cabeçalho azul-claro e listras da tabela lateral.
+            for (nome, linhas), exibidas in zip(categorias, contagens):
+                restantes = linhas[exibidas:]
+                if not restantes:
+                    continue
+                conteudo_extra = [Paragraph(f"<b>{nome} — continuação</b>", pequeno),
+                                  Spacer(1, 4), tabela_os(restantes, largura_total=25.6*cm)]
+                painel_extra = Table([[conteudo_extra]], colWidths=[26.6*cm], hAlign="LEFT")
+                painel_extra.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F4F7FB")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ]))
+                historia.append(Spacer(1, 6))
+                historia.append(painel_extra)
             if indice < len(concentracoes) - 1:
                 historia.append(PageBreak())
     doc.build(historia)
