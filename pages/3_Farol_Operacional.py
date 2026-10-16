@@ -1205,7 +1205,19 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
         })
 
     cdf = pd.DataFrame(concentracoes).sort_values(["QTD_OS", "QTD_MATRICULAS"], ascending=False).reset_index(drop=True)
-    cdf["ID_CONCENTRACAO"] = [f"C{i:03d}" for i in range(1, len(cdf) + 1)]
+    # Sequências independentes por abrangência, sem alterar o identificador
+    # interno GRUPO (que vincula as O.S., ativos, eventos e acompanhamentos).
+    # Concentrações que incluam Teresina são atribuídas a THE, evitando
+    # identificadores duplicados entre as abas.
+    contador = {"API": 0, "THE": 0}
+    novos_ids = []
+    for _, concentracao in cdf.iterrows():
+        grupo = df[df["_grupo"] == concentracao["GRUPO"]]
+        cidades = {normalizar_municipio(c) for c in grupo["Cidade"].dropna()}
+        abrangencia = "THE" if "TERESINA" in cidades else "API"
+        contador[abrangencia] += 1
+        novos_ids.append(f"{abrangencia} C{contador[abrangencia]:03d}")
+    cdf["ID_CONCENTRACAO"] = novos_ids
     return cdf, df
 
 
@@ -3074,9 +3086,9 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         for cidade in cidades_da_concentracao(conc, pontos_cluster)
                         if (normalizar_municipio(cidade) != "TERESINA") == (abrangencia == "API")
                     }, key=normalizar_texto)
-                    concentracoes_abrangencia = filtrar_concentracoes_relatorio(
-                        concentracoes, pontos_cluster, cidades_abrangencia
-                    )
+                    concentracoes_abrangencia = concentracoes.loc[
+                        concentracoes["ID_CONCENTRACAO"].astype(str).str.startswith(f"{abrangencia} ")
+                    ].copy()
                     st.caption(f"{len(concentracoes_abrangencia)} concentração(ões) em {abrangencia}.")
                     if concentracoes_abrangencia.empty:
                         st.info("Nenhuma concentração encontrada nesta abrangência.")
@@ -3113,16 +3125,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
                         with st.expander(titulo, expanded=ativa):
                             if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
-                                         key=f"foco_{codigo}", disabled=ativa):
+                                         key=f"farol_v2_foco_{abrangencia}_{codigo}", disabled=ativa):
                                 st.session_state["farol_v2_concentracao"] = str(codigo)
                                 st.session_state["farol_concentracao_expandida"] = str(codigo)
                                 st.rerun()
                             if ativa:
                                 if PODE_EDITAR_FAROL:
                                     nota_editada = st.text_area("Observação do analista", value=texto_nota,
-                                                                key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                                key=f"farol_v2_nota_{abrangencia}_{codigo}_{chave_nota}", height=90,
                                                                 placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
-                                    if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                                    if st.button("💾 Salvar acompanhamento", key=f"farol_v2_salvar_nota_{abrangencia}_{codigo}"):
                                         try:
                                             salvar_observacao_concentracao(chave_nota, municipio_nota,
                                                 float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
