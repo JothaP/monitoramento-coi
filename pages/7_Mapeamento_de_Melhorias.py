@@ -3113,16 +3113,16 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
                         with st.expander(titulo, expanded=ativa):
                             if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
-                                         key=f"foco_{codigo}", disabled=ativa):
+                                         key=f"farol_v2_foco_{abrangencia}_{codigo}", disabled=ativa):
                                 st.session_state["farol_v2_concentracao"] = str(codigo)
                                 st.session_state["farol_concentracao_expandida"] = str(codigo)
                                 st.rerun()
                             if ativa:
                                 if PODE_EDITAR_FAROL:
                                     nota_editada = st.text_area("Observação do analista", value=texto_nota,
-                                                                key=f"nota_{codigo}_{chave_nota}", height=90,
+                                                                key=f"farol_v2_nota_{abrangencia}_{codigo}_{chave_nota}", height=90,
                                                                 placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
-                                    if st.button("💾 Salvar acompanhamento", key=f"salvar_nota_{codigo}"):
+                                    if st.button("💾 Salvar acompanhamento", key=f"farol_v2_salvar_nota_{abrangencia}_{codigo}"):
                                         try:
                                             salvar_observacao_concentracao(chave_nota, municipio_nota,
                                                 float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
