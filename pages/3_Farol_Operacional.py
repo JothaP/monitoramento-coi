@@ -1804,9 +1804,7 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
     eventos_relacionados = []
     if not eventos.empty:
         for _, evento in eventos.iterrows():
-            # Eventos encerrados não entram nos vínculos, indicadores ou PDFs.
-            if classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado":
-                continue
+            # Preservar histórico de eventos encerrados no relatório; somente o mapa os oculta.
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
@@ -1825,6 +1823,68 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
                 eventos_relacionados.append(item)
     return os_grupo, ativos, pd.DataFrame(eventos_relacionados)
 
+
+
+def interpretar_data_operacional(valor):
+    """Converte data/hora real; data sem hora não prova vínculo temporal."""
+    if valor is None or str(valor).strip().lower() in ("", "nan", "none", "nat", "-"):
+        return pd.NaT
+    if isinstance(valor, (datetime, pd.Timestamp)):
+        return pd.Timestamp(valor)
+    texto = str(valor).strip()
+    # Não presumir meia-noite para campos que informam somente a data.
+    if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{1,2}-\d{1,2}", texto):
+        return pd.NaT
+    try:
+        resultado = pd.to_datetime(texto, dayfirst=True, errors="coerce")
+        if pd.isna(resultado):
+            return pd.NaT
+        return pd.Timestamp(resultado).tz_localize(None) if resultado.tzinfo else pd.Timestamp(resultado)
+    except (ValueError, TypeError, OverflowError):
+        return pd.NaT
+
+
+def classificar_os_por_evento(os_grupo, eventos_relacionados):
+    """Associa O.S. por município, bairro e janela [início, término real + 3h].
+
+    Sem horário completo ou término real de evento concluído, não presume vínculo.
+    Para eventos ainda abertos, considera o período desde o início até o presente.
+    """
+    vinculadas, nao_vinculadas = [], []
+    agora = pd.Timestamp.now(tz=FUSO_FAROL).tz_localize(None)
+    for _, os_reg in os_grupo.iterrows():
+        data_os = interpretar_data_operacional(os_reg.get("Dt. Emissão", ""))
+        cidade_os = normalizar_municipio(os_reg.get("Cidade", ""))
+        bairro_os = limpar_nome_bairro(os_reg.get("Bairro", ""))
+        protocolos = []
+        if pd.notna(data_os) and eventos_relacionados is not None and not eventos_relacionados.empty:
+            for _, evento in eventos_relacionados.iterrows():
+                if cidade_os != normalizar_municipio(evento.get("Cidade", "")):
+                    continue
+                bairros = [limpar_nome_bairro(b) for b in str(evento.get("Bairros coincidentes", "")).split(",")]
+                if "Todo o município" not in str(evento.get("Bairros coincidentes", "")) and bairro_os not in bairros:
+                    continue
+                inicio = interpretar_data_operacional(evento.get("Início", ""))
+                fim = interpretar_data_operacional(evento.get("Término Real", ""))
+                encerrado = classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado"
+                if pd.isna(inicio):
+                    continue
+                if pd.isna(fim):
+                    if encerrado:
+                        continue  # Encerrado sem término real: não inventar janela.
+                    fim = agora
+                if inicio <= data_os <= fim + pd.Timedelta(hours=3):
+                    protocolos.append(str(evento.get("Protocolo", "") or evento.get("Serviço", "") or "Evento"))
+        linha = os_reg.copy()
+        linha["Evento(s) vinculado(s)"] = ", ".join(dict.fromkeys(protocolos))
+        if protocolos:
+            vinculadas.append(linha)
+        else:
+            nao_vinculadas.append(linha)
+    cols = list(os_grupo.columns) + ["Evento(s) vinculado(s)"]
+    def dataframe(linhas):
+        return pd.DataFrame(linhas).reindex(columns=cols) if linhas else pd.DataFrame(columns=cols)
+    return dataframe(vinculadas), dataframe(nao_vinculadas)
 
 
 def descricao_eventos_pdf(eventos_relacionados):
@@ -1981,10 +2041,16 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
     )
     historia.append(p(resumo, normal))
     historia.append(p(f"Centro: {float(concentracao['LATITUDE']):.6f}, {float(concentracao['LONGITUDE']):.6f}", normal))
-    historia.append(p("Ordens de serviço da concentração", subtitulo))
+    vinculadas, nao_vinculadas = classificar_os_por_evento(os_grupo, eventos_relacionados)
     colunas = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
-    linhas = [[r.get(c, "") for c in colunas] for _, r in os_grupo.iterrows()]
-    historia.append(tabela(colunas, linhas, [2.1*cm, 2.2*cm, 2.5*cm, 3.0*cm, 3.0*cm, 3.3*cm, 10.0*cm]))
+    for nome_grupo, base in (("Ordens vinculadas aos eventos", vinculadas),
+                             ("Ordens não vinculadas", nao_vinculadas)):
+        historia.append(p(f"{nome_grupo} ({len(base)})", subtitulo))
+        if base.empty:
+            historia.append(p("Nenhuma O.S. nesta categoria.", pequeno))
+        else:
+            linhas = [[r.get(c, "") for c in colunas] for _, r in base.iterrows()]
+            historia.append(tabela(colunas, linhas, [2.1*cm, 2.2*cm, 2.5*cm, 3.0*cm, 3.0*cm, 3.3*cm, 10.0*cm]))
     historia.append(p("Poços / ativos e loggers próximos", subtitulo))
     if ativos.empty:
         historia.append(p("Nenhum equipamento encontrado no raio operacional.", normal))
@@ -1996,9 +2062,9 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
     if eventos_relacionados.empty:
         historia.append(p("Nenhum evento relacionado por correspondência de município e bairro.", normal))
     else:
-        cols = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        cols = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Início", "Término Real", "Serviço"]
         historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in eventos_relacionados.iterrows()],
-                                [3.1*cm, 2.5*cm, 3.0*cm, 5.0*cm, 4.5*cm, 8.0*cm]))
+                                [3.1*cm, 2.5*cm, 3.0*cm, 4.5*cm, 4.2*cm, 4.2*cm, 4.6*cm]))
     historia.append(Spacer(1, 0.3*cm))
     historia.append(p("Nota: a relação de eventos é indicativa, baseada na coincidência de bairros e município; não comprova causalidade.", pequeno))
     doc.build(historia)
@@ -2029,9 +2095,12 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
         f"Centro geográfico: {float(concentracao['LATITUDE']):.6f}, "
         f"{float(concentracao['LONGITUDE']):.6f} | Raio operacional: {raio} m"
     )
-    st.markdown("#### Ordens de serviço")
+    vinculadas, nao_vinculadas = classificar_os_por_evento(os_grupo, eventos_relacionados)
     colunas_os = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Status OS", "Dt. Emissão", "Serviço Executado"]
-    st.dataframe(os_grupo.reindex(columns=colunas_os).fillna(""), width="stretch", hide_index=True)
+    for nome_grupo, base in (("Ordens vinculadas aos eventos", vinculadas),
+                             ("Ordens não vinculadas", nao_vinculadas)):
+        st.markdown(f"#### {nome_grupo} ({len(base)})")
+        st.dataframe(base.reindex(columns=colunas_os).fillna(""), width="stretch", hide_index=True)
     st.markdown("#### Poços / ativos e loggers próximos")
     if ativos.empty:
         st.info("Nenhum equipamento dentro do raio operacional desta concentração.")
@@ -2043,7 +2112,7 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
     if eventos_relacionados.empty:
         st.info("Nenhum evento com município e bairro correspondente.")
     else:
-        colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Serviço", "Descrição do Serviço"]
+        colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Início", "Término Real", "Serviço", "Descrição do Serviço"]
         st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
                      width="stretch", hide_index=True)
     # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
@@ -2533,35 +2602,43 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             resumo.extend([
                 Spacer(1, 4),
                 Paragraph("<b>Eventos relacionados:</b> " +
-                          xml_escape(descricao_eventos_pdf(eventos_da_concentracao)), pequeno),
+                          xml_escape("; ".join(
+                              f"{r.get('Protocolo', '')} — {r.get('Serviço', '')} / {r.get('Código do Ativo', '')} "
+                              f"[{r.get('Status', '')}] {r.get('Início', '')} até {r.get('Término Real', '') or 'em andamento'}"
+                              for _, r in eventos_da_concentracao.iterrows()
+                          ) or "Nenhum evento relacionado"), pequeno),
             ])
-            resumo.extend([Spacer(1, 7), Paragraph("<b>Ordens de serviço vinculadas</b>", normal), Spacer(1, 4)])
-            linhas_os = []
-            if grupo.empty:
-                resumo.append(Paragraph("Nenhuma O.S. vinculada ao agrupamento.", pequeno))
-            else:
-                linhas_os = [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
-                              str(r.get("Status OS", ""))] for _, r in grupo.iterrows()]
-                # A tabela possui células independentes e pode ser copiada do PDF.
-                # CSV completo fica disponível para importar no Excel.
-                limite = 17
-                dados_tabela = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
-                                 Paragraph("<b>Matrícula</b>", pequeno),
-                                 Paragraph("<b>Status</b>", pequeno)]]
-                dados_tabela.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
-                                     for linha in linhas_os[:limite]])
-                tabela_os = Table(dados_tabela, colWidths=[3.25*cm, 2.8*cm, 5.8*cm], repeatRows=1)
-                tabela_os.setStyle(TableStyle([
+            vinculadas, nao_vinculadas = classificar_os_por_evento(grupo, eventos_da_concentracao)
+            # Tabelas independentes: a lista completa permanece disponível nas continuações.
+            def linhas_pdf(base):
+                return [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
+                         str(r.get("Status OS", ""))] for _, r in base.iterrows()]
+            def tabela_resumo(linhas, limite=4):
+                cab = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
+                        Paragraph("<b>Matrícula</b>", pequeno), Paragraph("<b>Status</b>", pequeno)]]
+                cab.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha] for linha in linhas[:limite]])
+                t = Table(cab, colWidths=[3.25*cm, 2.8*cm, 5.8*cm], repeatRows=1)
+                t.setStyle(TableStyle([
                     ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DEE8F2")),
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FB")]),
-                    ("LINEBELOW", (0, 0), (-1, 0), .5, colors.HexColor("#A8B9C8")),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 3),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 2),
                     ("TOPPADDING", (0, 0), (-1, -1), 2),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                 ]))
-                resumo.append(tabela_os)
+                return t
+            linhas_vinculadas = linhas_pdf(vinculadas)
+            linhas_nao_vinculadas = linhas_pdf(nao_vinculadas)
+            for titulo_grupo, linhas in (("Ordens vinculadas aos eventos", linhas_vinculadas),
+                                         ("Ordens não vinculadas", linhas_nao_vinculadas)):
+                resumo.extend([Spacer(1, 5), Paragraph(f"<b>{titulo_grupo} ({len(linhas)})</b>", pequeno)])
+                if linhas:
+                    resumo.append(tabela_resumo(linhas, limite=4))
+                    if len(linhas) > 4:
+                        resumo.append(Paragraph(f"+ {len(linhas) - 4} O.S. na continuação", pequeno))
+                else:
+                    resumo.append(Paragraph("Nenhuma O.S. nesta categoria.", pequeno))
             ficha = Table([[imagem, resumo]], colWidths=[13.8*cm, 12.8*cm], hAlign="LEFT")
             ficha.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -2572,18 +2649,22 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]))
             historia.append(ficha)
-            if len(linhas_os) > 17:
-                historia.append(Spacer(1, 8))
-                historia.append(Paragraph("Continuação das O.S. vinculadas", pequeno))
-                dados_extra = [[Paragraph("<b>O.S. / Ano</b>", pequeno), Paragraph("<b>Matrícula</b>", pequeno),
-                                Paragraph("<b>Status</b>", pequeno)]]
-                dados_extra.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
-                                    for linha in linhas_os[17:]])
-                tabela_extra = Table(dados_extra, colWidths=[5*cm, 5*cm, 15*cm], repeatRows=1)
-                tabela_extra.setStyle(TableStyle([("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                                                  [colors.white, colors.HexColor("#F4F7FB")]),
-                                                  ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-                historia.append(tabela_extra)
+            # Continuação integral das duas categorias, sem omitir O.S.
+            for titulo_grupo, linhas in (("Ordens vinculadas aos eventos", linhas_vinculadas),
+                                         ("Ordens não vinculadas", linhas_nao_vinculadas)):
+                if len(linhas) > 4:
+                    historia.append(Spacer(1, 8))
+                    historia.append(Paragraph(f"Continuação — {titulo_grupo}", pequeno))
+                    dados_extra = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
+                                    Paragraph("<b>Matrícula</b>", pequeno), Paragraph("<b>Status</b>", pequeno)]]
+                    dados_extra.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha]
+                                        for linha in linhas[4:]])
+                    tabela_extra = Table(dados_extra, colWidths=[5*cm, 5*cm, 15*cm], repeatRows=1)
+                    tabela_extra.setStyle(TableStyle([
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                         [colors.white, colors.HexColor("#F4F7FB")]),
+                        ("VALIGN", (0, 0), (-1, -1), "TOP")]))
+                    historia.append(tabela_extra)
             if indice < len(concentracoes) - 1:
                 historia.append(PageBreak())
     doc.build(historia)
