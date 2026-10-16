@@ -1553,7 +1553,7 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mape
     return mapa
 
 
-def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None, outras_concentracoes=None):
+def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximidades, mostrar_bairros=True, eventos_mapeados=None, raio_circulo=None, outras_concentracoes=None, rotulos_equipamentos=False):
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=12, control_scale=True, tiles=None, zoom_snap=0.5, zoom_delta=0.5, wheel_px_per_zoom_level=120, prefer_canvas=True)
     folium.TileLayer(tiles="OpenStreetMap", name="OpenStreetMap", control=False).add_to(mapa)
 
@@ -1589,41 +1589,34 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             ).add_to(fg_os)
     fg_os.add_to(mapa)
 
-    # Rótulos só ficam visíveis em aproximações de detalhe (~200 m na escala).
-    # A lógica é executada no Leaflet, sem provocar rerun do Streamlit.
-    mapa.get_root().header.add_child(Element("""
-    <style>
-      .leaflet-tooltip.farol-rotulo-equipamento {
-        display: none;
-        background: rgba(255,255,255,.95);
-        color: #1e293b;
-        border: 1px solid #cbd5e1;
-        border-radius: 4px;
-        padding: 2px 5px;
-        font: 600 11px/1.25 Arial, sans-serif;
-        box-shadow: 0 1px 3px rgba(0,0,0,.18);
-        white-space: nowrap;
-        pointer-events: none;
-      }
-      .farol-zoom-detalhe .leaflet-tooltip.farol-rotulo-equipamento { display: block; }
-    </style>
-    """))
-    mapa.get_root().script.add_child(Element(f"""
-    (function() {{
-      var mapaFarol = {mapa.get_name()};
-      var limiarZoom = 16.5;
-      function atualizarRotulosFarol() {{
-        var container = mapaFarol.getContainer();
-        if (mapaFarol.getZoom() >= limiarZoom) {{
-          container.classList.add('farol-zoom-detalhe');
-        }} else {{
-          container.classList.remove('farol-zoom-detalhe');
-        }}
-      }}
-      mapaFarol.on('zoomend', atualizarRotulosFarol);
-      mapaFarol.whenReady(atualizarRotulosFarol);
-    }})();
-    """))
+    # Rótulos independentes, controlados manualmente no menu de camadas.
+    # Esta camada só existe no detalhamento operacional e inicia desmarcada.
+    fg_rotulos = (folium.FeatureGroup(name="Rótulos de ativos e loggers", show=False)
+                  if rotulos_equipamentos else None)
+    if fg_rotulos is not None:
+        mapa.get_root().header.add_child(Element("""
+        <style>
+          .farol-etiqueta-equipamento {
+            display: inline-block; width: max-content;
+            padding: 2px 5px; border-radius: 4px;
+            background: rgba(255,255,255,.95); color: #1e293b;
+            border: 1px solid #cbd5e1; font: 600 11px/1.25 Arial,sans-serif;
+            box-shadow: 0 1px 3px rgba(0,0,0,.18);
+            white-space: nowrap; pointer-events: none;
+          }
+        </style>
+        """))
+
+    def adicionar_rotulo_equipamento(lat, lon, nome):
+        if fg_rotulos is None:
+            return
+        folium.Marker(
+            [lat, lon],
+            icon=folium.DivIcon(
+                html=f'<span class="farol-etiqueta-equipamento">{html_escape(str(nome))}</span>',
+                icon_size=(0, 0), icon_anchor=(-12, 24),
+            ),
+        ).add_to(fg_rotulos)
 
     fg_loggers = folium.FeatureGroup(name="Loggers", show=True)
     for _, r in df_loggers.iterrows():
@@ -1631,13 +1624,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
+        adicionar_rotulo_equipamento(lat, lon, r.get("IDENTIFICACAO_ATIVO", "") or "Logger")
         folium.Marker(
             [lat, lon],
-            tooltip=folium.Tooltip(
-                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or "Logger")),
-                permanent=True, direction="top", offset=(0, -12),
-                class_name="farol-rotulo-equipamento",
-            ),
             popup=folium.Popup(
                 f"<b>Logger:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Endereço:</b> {r.get('ENDERECO','')}", max_width=300
@@ -1652,13 +1641,9 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
         lon = normalizar_coordenada(r.get("LONGITUDE"), "lon")
         if lat is None or lon is None:
             continue
+        adicionar_rotulo_equipamento(lat, lon, r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")
         folium.Marker(
             [lat, lon],
-            tooltip=folium.Tooltip(
-                html_escape(str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Ativo")),
-                permanent=True, direction="top", offset=(0, -12),
-                class_name="farol-rotulo-equipamento",
-            ),
             popup=folium.Popup(
                 f"<b>Poço / Ativo:</b> {r.get('IDENTIFICACAO_ATIVO','')}<br>"
                 f"<b>Nome:</b> {r.get('NOME_POCO','')}<br>"
@@ -1668,6 +1653,8 @@ def criar_mapa(bairros, df_pontos, df_pocos, df_loggers, concentracoes, proximid
             z_index_offset=1000,  # Mantém ativos acima dos loggers coincidentes.
         ).add_to(fg_pocos)
     fg_pocos.add_to(mapa)
+    if fg_rotulos is not None:
+        fg_rotulos.add_to(mapa)
 
     fg_conc = folium.FeatureGroup(name="Concentrações", show=True)
     for _, c in concentracoes.iterrows():
@@ -3000,6 +2987,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 eventos_mapeados=eventos_mapeados,
                 raio_circulo=raio_concentracao,
                 outras_concentracoes=outras_concentracoes,
+                rotulos_equipamentos=True,
             )
             # Ajusta o enquadramento para mostrar integralmente os círculos
             # próximos, com margem para O.S. e equipamentos.
