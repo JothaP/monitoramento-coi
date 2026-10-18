@@ -1608,6 +1608,23 @@ def icone_bandeira_concentracao():
     )
 
 
+def icone_alvo_concentracao_panorama():
+    """Marcador circular azul com aro externo, exclusivo do mapa panorâmico."""
+    return folium.DivIcon(
+        html=(
+            '<div style="width:36px;height:36px;display:flex;align-items:center;'
+            'justify-content:center;border-radius:50%;border:4px solid #3730a3;'
+            'background:transparent;box-sizing:border-box;'
+            'filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));">'
+            '<div style="width:21px;height:21px;border-radius:50%;'
+            'background:#3730a3;"></div></div>'
+        ),
+        icon_size=(36, 36),
+        icon_anchor=(18, 18),
+        class_name="farol-alvo-concentracao-panorama",
+    )
+
+
 def municipios_das_concentracoes(concentracoes, pontos_cluster):
     """Municípios reais por grupo; o cadastro de concentrações não possui cidade."""
     resultado = {}
@@ -1673,7 +1690,7 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mape
         folium.Circle([lat, lon], radius=float(raio_m), color="#7c3aed",
                       weight=2, fill=True, fill_opacity=.07,
                       tooltip=f"{codigo} · {int(c['QTD_OS'])} O.S.").add_to(mapa)
-        folium.Marker([lat, lon], icon=icone_bandeira_concentracao(),
+        folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama(),
                       popup=folium.Popup(resumo, max_width=320),
                       tooltip=f"{codigo} — Abrir concentração").add_to(mapa)
         limites.append([lat, lon])
@@ -3209,7 +3226,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
         # Panorama sem O.S./equipamentos, mas com bairros e eventos de todos os municípios analisados.
-        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione uma bandeira 🚩 para abrir a concentração.")
+        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular azul para abrir a concentração.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
         codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
         selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
