@@ -1472,6 +1472,8 @@ def classificar_status_evento(valor):
     status = normalizar_texto(valor)
     if any(p in status for p in ("FINALIZ", "ENCERR", "CONCLUI", "CONCLUID", "NORMALIZ", "RESOLVID", "CANCELAD")):
         return "Finalizado", "#2eaa59"
+    if "PENDENTE" in status:
+        return "Pendente", "#FDE68A"  # Amarelo claro para eventos pendentes.
     if any(p in status for p in ("PROGRAM", "AGEND", "PREVIST", "PLANEJ")):
         return "Programado", "#f2b233"
     if any(p in status for p in ("ANDAMENTO", "EXECU", "INICIAD", "ATIVO", "ABERTO", "OCORRENCIA", "EM CURSO")):
@@ -3129,40 +3131,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             if estado_mapa.get("zoom") is not None:
                 st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
     else:
-        # Filtros.
-        f1, f2, f3 = st.columns(3)
-        bairros_os = sorted([x for x in df_pontos["Bairro"].dropna().astype(str).unique() if x.strip()])
-        status_os = sorted([x for x in df_pontos["Status OS"].dropna().astype(str).unique() if x.strip()])
-
-        with f1:
-            bairro_sel = st.multiselect("Bairro", bairros_os)
-        with f2:
-            status_sel = st.multiselect("Status", status_os)
-        with f3:
-            apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
-
-        servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
-                              if str(x).strip()})
-        servico_sel = st.multiselect(
-            "Tipo da O.S",
-            options=servicos_os,
-            placeholder="Todos os tipos",
-            help="Selecione um ou mais serviços; sem seleção, todos são exibidos.",
-            key="farol_filtro_servico_executado",
-        )
-
-        analise = df_pontos.copy()
-        if bairro_sel:
-            bairros_norm = {limpar_nome_bairro(x) for x in bairro_sel}
-            analise = analise[analise["Bairro"].map(limpar_nome_bairro).isin(bairros_norm)]
-        if status_sel:
-            status_norm = {normalizar_texto(x) for x in status_sel}
-            analise = analise[analise["Status OS"].map(normalizar_texto).isin(status_norm)]
-        if servico_sel:
-            servicos_norm = {normalizar_texto(x) for x in servico_sel}
-            analise = analise[analise["Serviço Executado"].map(normalizar_texto).isin(servicos_norm)]
-        if apenas_com_coord:
-            analise = analise.dropna(subset=["Latitude", "Longitude"])
+        # Filtros manuais removidos: o panorama utiliza todas as O.S.
+        # georreferenciadas do período selecionado no histórico.
+        # Preserva o comportamento anterior de exigir coordenadas válidas.
+        analise = df_pontos.dropna(subset=["Latitude", "Longitude"]).copy()
 
         _inicio_analise = tempo_execucao.perf_counter()
         concentracoes, pontos_cluster = criar_concentracoes(
