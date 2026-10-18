@@ -1609,18 +1609,18 @@ def icone_bandeira_concentracao():
 
 
 def icone_alvo_concentracao_panorama():
-    """Marcador circular azul com aro externo, exclusivo do mapa panorâmico."""
+    """Marcador circular vermelho compacto, exclusivo do mapa panorâmico."""
     return folium.DivIcon(
         html=(
-            '<div style="width:36px;height:36px;display:flex;align-items:center;'
-            'justify-content:center;border-radius:50%;border:4px solid #3730a3;'
+            '<div style="width:28px;height:28px;display:flex;align-items:center;'
+            'justify-content:center;border-radius:50%;border:3px solid #DC2626;'
             'background:transparent;box-sizing:border-box;'
             'filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));">'
-            '<div style="width:21px;height:21px;border-radius:50%;'
-            'background:#3730a3;"></div></div>'
+            '<div style="width:16px;height:16px;border-radius:50%;'
+            'background:#DC2626;"></div></div>'
         ),
-        icon_size=(36, 36),
-        icon_anchor=(18, 18),
+        icon_size=(28, 28),
+        icon_anchor=(14, 14),
         class_name="farol-alvo-concentracao-panorama",
     )
 
@@ -3069,27 +3069,6 @@ with st.sidebar:
                 except Exception as erro:
                     st.error(f"Não foi possível ativar o histórico: {erro}")
     st.divider()
-    st.markdown("### 🔎 Filtros")
-    # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
-    cidades_filtro = set()
-    for dados, campo in ((df_pontos, "Cidade"), (df_pocos, "MUNICIPIO"), (df_loggers, "MUNICIPIO")):
-        if campo in dados.columns and not dados.empty:
-            cidades_filtro.update(str(v).strip() for v in dados[campo].dropna() if str(v).strip())
-    cidades_filtro = sorted(cidades_filtro, key=normalizar_texto)
-    cidade_sel = st.selectbox("Cidade dos poços e loggers", ["Todas"] + cidades_filtro, key="farol_filtro_cidade_sidebar")
-    cidade_especifica = cidade_sel != "Todas"
-    mostrar_pocos_cidade = st.checkbox(
-        "Mostrar poços / ativos da cidade", value=False,
-        disabled=not cidade_especifica, key="farol_mostrar_pocos_cidade",
-    )
-    mostrar_loggers_cidade = st.checkbox(
-        "Mostrar loggers da cidade", value=False,
-        disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
-    )
-    if not cidade_especifica:
-        st.caption("Os equipamentos próximos às concentrações continuam visíveis. Selecione uma cidade para acrescentar outros equipamentos.")
-
-    st.divider()
     st.markdown("### ⚙️ Configuração")
     raio_operacional = st.number_input(
         "Raio operacional (m)", min_value=50, max_value=5000,
@@ -3155,8 +3134,9 @@ def ativos_da_cidade(df, campo, cidade, habilitado):
         return df.iloc[0:0].copy()
     return df.loc[normalizar_texto_series(df[campo]) == normalizar_texto(cidade)].copy()
 
-ativos_pocos_cidade = ativos_da_cidade(df_pocos, "MUNICIPIO", cidade_sel, mostrar_pocos_cidade)
-ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mostrar_loggers_cidade)
+# Camadas adicionais por cidade removidas da sidebar; permanecem os equipamentos próximos.
+ativos_pocos_cidade = df_pocos.iloc[0:0].copy()
+ativos_loggers_cidade = df_loggers.iloc[0:0].copy()
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
