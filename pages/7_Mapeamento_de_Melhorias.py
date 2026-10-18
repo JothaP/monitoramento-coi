@@ -2101,7 +2101,7 @@ def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
     raio_grupo = RAIO_CONCENTRACAO_PADRAO
     folium.Circle([lat, lon], radius=raio_grupo, color="#8522a5", weight=3,
                   fill=True, fill_color="#8522a5", fill_opacity=0.07).add_to(mapa)
-    folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+    folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
     for _, registro in os_grupo.iterrows():
         y = normalizar_coordenada(registro.get("Latitude"), "lat")
         x = normalizar_coordenada(registro.get("Longitude"), "lon")
@@ -2633,7 +2633,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
         if not panoramico:
             folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
                           fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
-            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
         coordenadas.append((lat, lon))
         if "_grupo" not in pontos_cluster.columns:
             continue
@@ -2701,7 +2701,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             folium.Circle([lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
                           color="#8522A5", weight=3.2, fill=True,
                           fill_color="#8522A5", fill_opacity=.055).add_to(mapa)
-            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
     if coordenadas:
         if concentracao is not None:
             lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
