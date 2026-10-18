@@ -1908,6 +1908,47 @@ def invalidar_cache_dados():
 # RELATÓRIOS INDIVIDUAIS DAS CONCENTRAÇÕES
 # ============================================================
 
+def evento_pertinente_data_analise(evento):
+    """Mantém apenas eventos que estiveram ativos na data consultada.
+
+    Na visão de 8 dias, a referência é hoje. Na consulta de um dia,
+    a referência é a data escolhida no calendário.
+    """
+    hoje = datetime.now(FUSO_FAROL).date()
+    if st.session_state.get("farol_v2_modo_historico") == "Data específica":
+        referencia = st.session_state.get("farol_v2_data_consulta", hoje)
+        if isinstance(referencia, datetime):
+            referencia = referencia.date()
+        if not isinstance(referencia, date):
+            referencia = hoje
+    else:
+        referencia = hoje
+
+    def data_evento(valor):
+        if valor is None or str(valor).strip().lower() in ("", "nan", "none", "nat", "-"):
+            return None
+        if isinstance(valor, (date, datetime, pd.Timestamp)):
+            return valor.date() if isinstance(valor, (datetime, pd.Timestamp)) else valor
+        try:
+            resultado = pd.to_datetime(str(valor).strip(), dayfirst=True, errors="coerce")
+            return resultado.date() if pd.notna(resultado) else None
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    inicio = data_evento(evento.get("Início", ""))
+    termino = data_evento(evento.get("Término Real", ""))
+    encerrado = classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado"
+    if inicio is not None and inicio > referencia:
+        return False
+    if termino is not None and termino < referencia:
+        return False
+    # Um evento finalizado sem data de término não pode ser considerado ativo
+    # na data consultada sem evidência temporal de seu encerramento.
+    if encerrado and termino is None:
+        return False
+    return True
+
+
 def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos=None):
     """Associa O.S. pelo identificador real do grupo, não pelo ID reordenado."""
     grupo = concentracao["GRUPO"]
@@ -1925,7 +1966,10 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
     eventos_relacionados = []
     if not eventos.empty:
         for _, evento in eventos.iterrows():
-            # Preservar histórico de eventos encerrados no relatório; somente o mapa os oculta.
+            # Eventos encerrados antes da data consultada não pertencem à análise.
+            # Eventos concluídos na própria data continuam disponíveis no histórico.
+            if not evento_pertinente_data_analise(evento):
+                continue
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
