@@ -16,7 +16,7 @@ from xml.sax.saxutils import escape as xml_escape
 from html import escape as html_escape
 from zoneinfo import ZoneInfo
 import unicodedata
-from datetime import datetime, date, time as horario
+from datetime import datetime, date, timedelta, time as horario
 import xml.etree.ElementTree as ET
 
 import gspread
@@ -76,7 +76,7 @@ def exigir_edicao_farol():
 # Definir em Streamlit Cloud > App settings > Secrets:
 # farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
 # Não utilizar a planilha de produção como fallback.
-SPREADSHEET_ID_PRODUCAO = "1plvaCyZ23zAIjasrFnJxZm9Q-jB85AbCtSjIizhuoKg"
+SPREADSHEET_ID_PRODUCAO = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
 SPREADSHEET_ID = str(st.secrets.get("farol_v2_spreadsheet_id", "")).strip()
 if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_PRODUCAO:
     st.error("Módulo 7 protegido: configure farol_v2_spreadsheet_id com o ID de uma CÓPIA independente da planilha de produção em Secrets.")
@@ -90,6 +90,9 @@ NOME_ABA_CONTROLE = "CONTROLE_FAROL"
 NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
 NOME_ABA_AREAS_PROTEGIDAS = "FAROL_AREAS_EDITADAS"
 NOME_ABA_ATUALIZACOES = "FAROL_ATUALIZACOES"
+NOME_ABA_HISTORICO_V2 = "FAROL_HISTORICO_V2"
+CABECALHO_HISTORICO_V2 = ["Chave", "Valor"]
+DIAS_HISTORICO_V2 = 8
 FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
@@ -647,6 +650,122 @@ def substituir_aba(nome, cabecalho, df):
     aba.update("A1", linhas, value_input_option=modo_escrita)
     invalidar_cache()
 
+
+# ============================================================
+# HISTÓRICO V2 — ETAPA 1 (apenas O.S.; eventos preservados)
+# ============================================================
+
+def data_os_historico(valor):
+    """Lê Dt. Emissão sem descartar datas sem hora; não inventa datas ausentes."""
+    if isinstance(valor, (datetime, date, pd.Timestamp)):
+        try:
+            return pd.Timestamp(valor).date()
+        except (ValueError, TypeError):
+            return None
+    texto = str(valor or "").strip()
+    if not texto or texto.lower() in {"nan", "none", "nat", "-"}:
+        return None
+    for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+    try:
+        valor_data = pd.to_datetime(texto, dayfirst=True, errors="coerce")
+        return valor_data.date() if pd.notna(valor_data) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def janela_historico_v2(hoje=None):
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    return hoje - timedelta(days=DIAS_HISTORICO_V2 - 1), hoje
+
+
+def ler_controle_historico_v2():
+    """Aba de controle pequena; sem criar abas na simples visualização."""
+    try:
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_HISTORICO_V2)
+        linhas = aba.get_all_values()
+        return {r[0]: r[1] for r in linhas[1:] if len(r) >= 2}
+    except gspread.exceptions.WorksheetNotFound:
+        return {}
+
+
+def gravar_controle_historico_v2(controle):
+    exigir_edicao_farol()
+    planilha = obter_planilha(SPREADSHEET_ID)
+    try:
+        aba = planilha.worksheet(NOME_ABA_HISTORICO_V2)
+    except gspread.exceptions.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_HISTORICO_V2, rows=30, cols=3)
+    linhas = [CABECALHO_HISTORICO_V2] + [[k, str(v)] for k, v in sorted(controle.items())]
+    aba.update("A1", linhas, value_input_option="RAW")
+
+
+def validar_importacao_diaria_v2(df, hoje=None):
+    """Etapa 1: importação do dia, sem mistura acidental de datas."""
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    if df.empty:
+        raise ValueError("O arquivo não contém O.S. para importar.")
+    datas = df["Dt. Emissão"].map(data_os_historico)
+    invalidas = int(datas.isna().sum())
+    fora = int(((datas.notna()) & (datas != hoje)).sum())
+    if invalidas or fora:
+        raise ValueError(
+            f"Importação interrompida: {invalidas} O.S. sem data válida e {fora} "
+            f"O.S. com emissão diferente de {hoje:%d/%m/%Y}. "
+            "Nesta etapa, importe apenas O.S. abertas hoje."
+        )
+    return df
+
+
+def filtrar_pontos_historico_v2(df, inicio, fim):
+    if df.empty:
+        return df.copy()
+    datas = df["Dt. Emissão"].map(data_os_historico)
+    return df.loc[datas.map(lambda d: d is not None and inicio <= d <= fim)].copy()
+
+
+def executar_limpeza_historico_v2(controle, hoje=None):
+    """Executa no máximo uma vez por dia lógico, sem apagar datas inválidas.
+
+    Em caso de dados sem data válida, falha fechado: não exclui nada.
+    EVENTOS nunca são excluídos nesta etapa.
+    """
+    exigir_edicao_farol()
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    if controle.get("ativo") != "SIM" or controle.get("ultima_limpeza") == hoje.isoformat():
+        return 0
+    inicio, _ = janela_historico_v2(hoje)
+    base = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
+    if base.empty:
+        removidos = 0
+    else:
+        datas = base["Dt. Emissão"].map(data_os_historico)
+        if datas.isna().any():
+            raise ValueError("Existem O.S. sem data válida em PONTOS; limpeza suspensa para evitar perda de dados.")
+        manter = datas.map(lambda d: inicio <= d <= hoje)
+        removidos = int((~manter).sum())
+        if removidos:
+            substituir_aba(NOME_ABA_PONTOS, list(base.columns), base.loc[manter].copy())
+    controle = dict(controle)
+    controle["ultima_limpeza"] = hoje.isoformat()
+    gravar_controle_historico_v2(controle)
+    return removidos
+
+
+def ativar_historico_v2():
+    """Ativação explícita: registra marco inicial, sem excluir legado de imediato."""
+    exigir_edicao_farol()
+    hoje = datetime.now(FUSO_FAROL).date()
+    controle = ler_controle_historico_v2()
+    if controle.get("ativo") == "SIM":
+        return
+    controle.update({"ativo": "SIM", "inicio_operacao": hoje.isoformat(),
+                     "ultima_limpeza": hoje.isoformat()})
+    gravar_controle_historico_v2(controle)
 
 # ============================================================
 # LEITURA DE ARQUIVOS
@@ -2138,7 +2257,7 @@ def modal_importacao():
         st.error("Acesso somente para visualização.")
         return
     st.subheader("Importação das bases")
-    st.info("PONTOS e EVENTOS não são apagados automaticamente. A limpeza manual está disponível somente ao administrador, na barra lateral do mapa.")
+    st.info("O histórico de 8 dias só entra em vigor após ativação explícita. Após ativado, a importação de O.S. aceita apenas emissões do dia; EVENTOS são preservados nesta etapa.")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2150,6 +2269,8 @@ def modal_importacao():
                 st.dataframe(previa.head(10), width="stretch", hide_index=True)
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
+                    if ler_controle_historico_v2().get("ativo") == "SIM":
+                        preparados = validar_importacao_diaria_v2(preparados)
                     inseridas, total = upsert_pontos(preparados)
                     registrar_atualizacao_base("PONTOS")
                     st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
@@ -2775,7 +2896,17 @@ _inicio_geometria = tempo_execucao.perf_counter()
 bairros = descobrir_kmz()
 _tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
-# PONTOS e EVENTOS são mantidos sem limpeza automática.
+# A ativação inicial é explícita. Depois disso, limpeza na primeira execução do dia.
+controle_historico_v2 = ler_controle_historico_v2()
+historico_v2_ativo = controle_historico_v2.get("ativo") == "SIM"
+if historico_v2_ativo and PODE_EDITAR_FAROL:
+    try:
+        removidos_historico_v2 = executar_limpeza_historico_v2(controle_historico_v2)
+        if removidos_historico_v2:
+            st.toast(f"Histórico atualizado: {removidos_historico_v2} O.S. fora da janela excluídas.")
+    except Exception as erro_historico:
+        st.error(f"Limpeza automática suspensa: {erro_historico}")
+# EVENTOS permanecem intactos na Etapa 1.
 
 # Os cadastros são lidos localmente; apenas PONTOS e EVENTOS usam Google Sheets.
 _inicio_planilhas = tempo_execucao.perf_counter()
@@ -2805,12 +2936,18 @@ if not df_pocos.empty:
 if not df_loggers.empty:
     df_loggers = df_loggers.reindex(columns=CABECALHO_LOGGERS).fillna("")
 
+# Conserva a base original somente para contagem e indicadores da importação.
+df_pontos_armazenados_v2 = df_pontos
+inicio_historico_v2, hoje_historico_v2 = janela_historico_v2()
+if historico_v2_ativo:
+    df_pontos = filtrar_pontos_historico_v2(df_pontos, inicio_historico_v2, hoje_historico_v2)
+
 # ============================================================
 # ABAS
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### 🚰 Farol Operacional — Módulo 3")
+    st.markdown("### 🚰 Farol V2 — Módulo 7")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -2828,6 +2965,46 @@ with st.sidebar:
     if not PODE_EDITAR_FAROL:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
 
+    st.divider()
+    st.markdown("### 📅 Histórico de 8 dias")
+    if historico_v2_ativo:
+        inicio_operacao_str = controle_historico_v2.get("inicio_operacao", hoje_historico_v2.isoformat())
+        try:
+            inicio_operacao = date.fromisoformat(inicio_operacao_str)
+        except ValueError:
+            inicio_operacao = hoje_historico_v2
+        primeira_data = max(inicio_operacao, inicio_historico_v2)
+        modo_historico_v2 = st.radio(
+            "Período de consulta", ["Últimos 8 dias", "Data específica"],
+            key="farol_v2_modo_historico", horizontal=False,
+        )
+        if modo_historico_v2 == "Data específica":
+            data_consulta_v2 = st.date_input(
+                "Consultar data", value=hoje_historico_v2,
+                min_value=primeira_data, max_value=hoje_historico_v2,
+                key="farol_v2_data_consulta",
+            )
+            df_pontos = filtrar_pontos_historico_v2(df_pontos, data_consulta_v2, data_consulta_v2)
+        else:
+            st.caption(f"{primeira_data:%d/%m/%Y} a {hoje_historico_v2:%d/%m/%Y}")
+        datas_importadas_v2 = set(df_pontos_armazenados_v2["Dt. Emissão"].map(data_os_historico)) if not df_pontos_armazenados_v2.empty else set()
+        st.caption(f"Dias com O.S. armazenadas na janela: {sum(primeira_data <= d <= hoje_historico_v2 for d in datas_importadas_v2 if d is not None)}")
+        st.caption("Etapa 1: consultas por O.S. As feições históricas e as pendências entre dias serão implementadas nas próximas etapas.")
+    else:
+        st.caption("Histórico ainda não ativado. A base atual permanece inalterada.")
+        if PODE_EDITAR_FAROL:
+            confirmar_inicio_v2 = st.checkbox(
+                "Confirmo o início do histórico a partir de hoje",
+                key="farol_v2_confirmar_inicio_historico",
+            )
+            if st.button("Ativar histórico de 8 dias", disabled=not confirmar_inicio_v2,
+                         key="farol_v2_ativar_historico"):
+                try:
+                    ativar_historico_v2()
+                    st.success("Histórico ativado. A limpeza começa na primeira execução dos próximos dias.")
+                    st.rerun()
+                except Exception as erro:
+                    st.error(f"Não foi possível ativar o histórico: {erro}")
     st.divider()
     st.markdown("### 🔎 Filtros")
     # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
