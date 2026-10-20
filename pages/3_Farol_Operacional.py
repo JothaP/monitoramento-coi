@@ -3521,6 +3521,15 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             observacoes_df = carregar_observacoes_concentracoes()
             resumo_pdf = concentracoes.copy()
             grupos_os = {chave: quadro for chave, quadro in pontos_cluster.groupby("_grupo", sort=False)} if not pontos_cluster.empty else {}
+            # Uma consulta compartilhada para todas as concentrações, em vez de
+            # repetir uma leitura para cada cartão na tela.
+            try:
+                vinculos_acomp_visiveis = {v["chave"]: v for v in listar_vinculos()}
+                erro_acomp_visivel = None
+            except Exception as erro:
+                vinculos_acomp_visiveis = {}
+                erro_acomp_visivel = erro
+                st.warning(f"Acompanhamentos temporariamente indisponíveis: {erro}")
             # Mesma divisão geográfica adotada nos relatórios PDF.
             aba_api, aba_the = st.tabs(["🌐 API — Demais municípios", "📍 THE — Teresina"])
             for aba, abrangencia in ((aba_api, "API"), (aba_the, "THE")):
@@ -3556,11 +3565,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         chave_acomp = chave_concentracao(municipio_acomp, concentracao["LATITUDE"], concentracao["LONGITUDE"], numeros_os)
                         concentracoes.loc[concentracoes["ID_CONCENTRACAO"] == codigo, "CHAVE_ACOMPANHAMENTO"] = chave_acomp
                         resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "CHAVE_ACOMPANHAMENTO"] = chave_acomp
-                        try:
-                            vinculo_acomp = localizar_vinculo(chave_acomp, municipio_acomp, concentracao["LATITUDE"], concentracao["LONGITUDE"], numeros_os)
-                        except Exception as erro:
-                            vinculo_acomp = None
-                            st.warning(f"Acompanhamentos indisponíveis: {erro}")
+                        vinculo_acomp = vinculos_acomp_visiveis.get(chave_acomp)
                         resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
                         indicador_nota = "📋 Acompanhamento iniciado" if vinculo_acomp else "Acompanhamento não iniciado"
                         bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
