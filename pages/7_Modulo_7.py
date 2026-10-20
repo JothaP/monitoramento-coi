@@ -13,7 +13,8 @@ import pandas as pd
 import streamlit as st
 from fpdf import FPDF
 from auth import verificar_autenticacao, tem_acesso_modulo
-from integracao_acompanhamento_teste import registrar_vinculo
+from integracao_acompanhamento_teste import registrar_vinculo as registrar_vinculo_teste
+from integracao_acompanhamento_producao import registrar_vinculo as registrar_vinculo_producao
 
 st.set_page_config(page_title="Acompanhamento Operacional | COI", page_icon="🌊", layout="wide")
 st.markdown("<style>[data-testid='stSidebarNav']{display:none!important;}</style>", unsafe_allow_html=True)
@@ -28,7 +29,10 @@ STATUS = ["Aguardando motivo", "Concluído - causa identificada", "Concluído - 
 UNIDADES = ["Águas do Piauí", "Águas de Teresina", "Águas de Timon"]
 REGIONAIS = ["Semiárido Norte", "Semiárido Sul", "Cerrado", "Litoral", "Meio Norte", "Teresina", "Timon"]
 SIM_NAO = ["Não", "Sim"]
-SPREADSHEET_ID = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "1nIs2qMlgZNj53zj8hg867O-NLpeDqHozSpCo_QBKUHY")).strip()
+SPREADSHEET_ID = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
+if not SPREADSHEET_ID or SPREADSHEET_ID == str(st.secrets.get("farol_producao_spreadsheet_id", "")).strip():
+    st.error("Configure acompanhamento_operacional_spreadsheet_id com a planilha exclusiva de acompanhamento, diferente da do Farol.")
+    st.stop()
 CAMPOS_EVENTOS = ["id", "titulo", "qtd_reclamacoes", "status", "ultima_atualizacao", "unidade", "regional", "municipio", "data_identificacao", "descricao", "arcgis", "sia", "loggers", "retorno_operacao", "finalizado", "data_finalizacao"]
 CAMPOS_MOVIMENTACOES = ["id", "evento_id", "data_hora", "descricao", "status_momento"]
 # Protege gravações concorrentes dentro de um mesmo processo Streamlit.
@@ -234,10 +238,11 @@ except Exception as exc:
 
 contexto_farol = st.session_state.get("acomp_farol_contexto")
 if contexto_farol:
-    st.info(f"Origem: Ambiente de Teste · {contexto_farol['codigo']} · {contexto_farol['municipio']} · {contexto_farol['bairros']}")
+    origem_producao = contexto_farol.get("origem") == "producao"
+    st.info(f"Origem: {'Farol Operacional' if origem_producao else 'Ambiente de Teste'} · {contexto_farol['codigo']} · {contexto_farol['municipio']} · {contexto_farol['bairros']}")
     if st.button("← Voltar à análise das concentrações"):
         st.session_state.pop("acomp_farol_contexto", None)
-        st.switch_page("pages/Ambiente_de_Teste.py")
+        st.switch_page("pages/3_Farol_Operacional.py" if origem_producao else "pages/Ambiente_de_Teste.py")
 
 st.title("🌊 Módulo 7 — Acompanhamento Operacional")
 st.caption("Plataforma COI | Registro, acompanhamento de anomalias e relatórios executivos")
@@ -280,7 +285,7 @@ with aba_novo:
                             "" if ident_auto else data_ident.strip(),descricao,arcgis,sia,loggers,retorno,
                             finalizado,data_fim.strip())
             if contexto_farol:
-                registrar_vinculo(contexto_farol, eid)
+                (registrar_vinculo_producao if contexto_farol.get("origem") == "producao" else registrar_vinculo_teste)(contexto_farol, eid)
                 st.session_state["acomp_farol_contexto"]["evento_id"] = str(eid)
             st.success(f"Evento #{eid} registrado com sucesso!")
         except (ValueError, gspread.exceptions.GSpreadException) as exc:
