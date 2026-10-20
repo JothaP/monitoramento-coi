@@ -21,10 +21,10 @@ COOKIE_NAME = "coi_auth_token"
 # ============================================================
 #
 # ADMIN
-# Acesso total aos módulos disponíveis.
+# Acesso aos módulos disponíveis e ao Ambiente de Teste.
 #
 # USUARIO
-# Acesso aos módulos 1 a 7 e ao Ambiente de Teste.
+# Acesso aos módulos 1 a 6 e ao acompanhamento integrado ao Farol.
 #
 # OPERADOR
 # Acesso aos módulos 1 e 3 (Farol somente leitura).
@@ -52,7 +52,6 @@ PERMISSOES_PERFIS = {
         "5",
         "6",
         "7",
-        "teste",
     ],
 
     "operador": [
