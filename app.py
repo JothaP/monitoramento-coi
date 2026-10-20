@@ -336,7 +336,6 @@ modulo_3 = tem_acesso_modulo("3")
 modulo_4 = tem_acesso_modulo("4")
 modulo_5 = tem_acesso_modulo("5")
 modulo_6 = tem_acesso_modulo("6")
-modulo_7 = tem_acesso_modulo("7")
 ambiente_teste = tem_acesso_modulo("teste")
 
 
@@ -510,38 +509,16 @@ with col6:
 # TERCEIRA LINHA
 # ------------------------------------------------------------
 
-if modulo_7 or ambiente_teste:
-
+if ambiente_teste:
     st.markdown("")
     col7, col8, col9 = st.columns(3)
-
-    with col7:
-        if modulo_7:
-            st.markdown("#### 🧩 Módulo 7")
-            st.markdown("**Novo Módulo**")
-            st.caption("Status: Em preparação")
-
-            if st.button(
-                "Acessar Módulo 7",
-                type="primary",
-                use_container_width=True,
-                key="acessar_modulo_7",
-            ):
-                st.switch_page("pages/7_Modulo_7.py")
-
     with col8:
-        if ambiente_teste:
-            st.markdown("#### 🧪 Ambiente de Teste")
-            st.markdown("**Ferramentas em Desenvolvimento**")
-            st.caption("Status: Ambiente Privado")
-
-            if st.button(
-                "Acessar Ambiente de Teste",
-                type="primary",
-                use_container_width=True,
-                key="acessar_ambiente_teste",
-            ):
-                st.switch_page("pages/Ambiente_de_Teste.py")
+        st.markdown("#### 🧪 Ambiente de Teste")
+        st.markdown("**Ferramentas em desenvolvimento**")
+        st.caption("Acesso exclusivo do administrador")
+        if st.button("Acessar Ambiente de Teste", type="primary",
+                     use_container_width=True, key="acessar_ambiente_teste"):
+            st.switch_page("pages/Ambiente_de_Teste.py")
 
 
 # ============================================================
