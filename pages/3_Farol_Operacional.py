@@ -2150,55 +2150,120 @@ def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
 
 
 def secao_pdf_acompanhamento(concentracao, largura=26.6*cm):
-    """Ficha visual reutilizável nos relatórios individual e panorâmico."""
+    """Acompanhamento compacto abaixo da ficha com mapa, sem alterar a cartografia.
+
+    Organização em grade aproveita a largura do A4 paisagem, com fonte legível.
+    Documentos com histórico realmente longo podem continuar em outra página;
+    nenhum registro é ocultado nem a fonte global do PDF é encolhida.
+    """
     chave = str(concentracao.get("CHAVE_ACOMPANHAMENTO", "") or "")
     vinculo = next((v for v in listar_vinculos() if v["chave"] == chave), None) if chave else None
     dados = dados_acompanhamento().get(str(vinculo["evento_id"])) if vinculo else None
-    estilo = ParagraphStyle("AcompCorpo", fontName="Helvetica", fontSize=8, leading=11, textColor=colors.HexColor("#25354B"))
-    branco = ParagraphStyle("AcompCabecalho", parent=estilo, fontName="Helvetica-Bold", fontSize=11, leading=15, textColor=colors.white)
-    rotulo = ParagraphStyle("AcompRotulo", parent=estilo, fontName="Helvetica-Bold", fontSize=7, textColor=colors.HexColor("#52637B"))
-    texto = ParagraphStyle("AcompTexto", parent=estilo, fontSize=8, leading=12)
+
+    azul = colors.HexColor("#193C65")
+    azul_escuro = colors.HexColor("#25354B")
+    cinza = colors.HexColor("#53657C")
+    fundo = colors.HexColor("#F1F5FA")
+    borda = colors.HexColor("#DCE4EE")
+    corpo = ParagraphStyle("AcompCompactoCorpo", fontName="Helvetica", fontSize=9.0,
+                           leading=12, textColor=azul_escuro, splitLongWords=True)
+    titulo = ParagraphStyle("AcompCompactoTitulo", parent=corpo, fontName="Helvetica-Bold",
+                            fontSize=10.5, leading=13, textColor=colors.white)
+    nome = ParagraphStyle("AcompCompactoNome", parent=corpo, fontName="Helvetica-Bold",
+                          fontSize=8, leading=10, textColor=cinza)
+    texto = ParagraphStyle("AcompCompactoTexto", parent=corpo, fontSize=9.0, leading=12)
+    meta = ParagraphStyle("AcompCompactoMeta", parent=corpo, fontName="Helvetica-Bold",
+                         fontSize=8.4, leading=11, textColor=azul)
+
     def par(v, estilo=texto):
-        return Paragraph(xml_escape(str(v if v not in (None, "") else "Não informado")), estilo)
-    topo = Table([[Paragraph("ACOMPANHAMENTO OPERACIONAL", branco)]], colWidths=[largura])
-    topo.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#193C65")),("TOPPADDING",(0,0),(-1,-1),11),("BOTTOMPADDING",(0,0),(-1,-1),11),("LEFTPADDING",(0,0),(-1,-1),12)]))
-    saida = [Spacer(1,12), topo, Spacer(1,8)]
+        if v is None or str(v).strip() == "":
+            v = "Não informado"
+        return Paragraph(xml_escape(str(v)).replace("\n", "<br/>"), estilo)
+
+    def campo(rotulo, valor):
+        return [par(rotulo, nome), par(valor)]
+
+    def faixa(rotulo):
+        tabela = Table([[par(rotulo, titulo)]], colWidths=[largura], hAlign="LEFT")
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), azul),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ]))
+        return tabela
+
+    saida = [Spacer(1, 4), faixa("ACOMPANHAMENTO OPERACIONAL"), Spacer(1, 3)]
     if not vinculo or not dados:
-        saida.append(par("Nenhum acompanhamento operacional iniciado para esta concentração." if not vinculo else "Ficha vinculada não localizada."))
+        saida.append(par("Nenhum acompanhamento operacional iniciado para esta concentração."
+                         if not vinculo else "Ficha vinculada não localizada."))
         return saida
-    campos = [
-        ("Nº do acompanhamento", "#"+str(dados.get("id", ""))),
-        ("Status atual", dados.get("status", "")),
-        ("Título", dados.get("titulo", "")),
-        ("Última atualização", dados.get("ultima_atualizacao", "")),
-        ("Município", dados.get("municipio", "")),
-        ("Reclamações", dados.get("qtd_reclamacoes", "")),
-        ("Unidade", dados.get("unidade", "")),
-        ("Regional", dados.get("regional", "")),
-        ("Identificação", dados.get("data_identificacao", "")),
-        ("Finalizado", dados.get("finalizado", "")),
-        ("Data de finalização", dados.get("data_finalizacao", "")),
+
+    # 4 colunas na mesma linha, aproveitando a largura da página e evitando
+    # a antiga tabela vertical de 11 linhas, que desperdiçava quase uma página.
+    linhas = [
+        [("Nº acompanhamento", "#" + str(dados.get("id", ""))),
+         ("Status / Finalizado", f"{dados.get('status', '')} · {dados.get('finalizado', '')}"),
+         ("Município / Regional", f"{dados.get('municipio', '')} · {dados.get('regional', '')}"),
+         ("Reclamações / Unidade", f"{dados.get('qtd_reclamacoes', '')} · {dados.get('unidade', '')}")],
+        [("Identificação", dados.get("data_identificacao", "")),
+         ("Última atualização", dados.get("ultima_atualizacao", "")),
+         ("Data de finalização", dados.get("data_finalizacao", "")),
+         ("Título", dados.get("titulo", ""))],
     ]
-    celulas = [[par(nome,rotulo),par(valor)] for nome,valor in campos]
-    tabela = Table(celulas, colWidths=[largura*.29, largura*.71], hAlign="LEFT")
-    tabela.setStyle(TableStyle([("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.HexColor("#F1F5FA"),colors.white]),("LINEBELOW",(0,0),(-1,-1),.25,colors.HexColor("#DCE4EE")),("VALIGN",(0,0),(-1,-1),"TOP"),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),9)]))
-    saida.extend([tabela,Spacer(1,9)])
-    def titulo_secao(t):
-        return Paragraph("<b>"+xml_escape(t)+"</b>",ParagraphStyle("AcompSec",parent=estilo,fontName="Helvetica-Bold",fontSize=9,textColor=colors.HexColor("#193C65"),spaceBefore=5,spaceAfter=5))
-    saida.extend([titulo_secao("DESCRIÇÃO DA OCORRÊNCIA"),par(dados.get("descricao", "")),Spacer(1,8),titulo_secao("VALIDAÇÕES OPERACIONAIS")])
-    validacoes = [("ArcGIS",dados.get("arcgis","")),("SIA",dados.get("sia","")),("Loggers",dados.get("loggers","")),("Retorno Operação/Controle",dados.get("retorno_operacao",""))]
-    tval = Table([[par(k,rotulo),par(v)] for k,v in validacoes],colWidths=[largura*.42,largura*.58])
-    tval.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EDF3F9")),("LINEBELOW",(0,0),(-1,-1),.3,colors.HexColor("#D7E0EC")),("VALIGN",(0,0),(-1,-1),"TOP"),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),9)]))
-    saida.extend([tval,Spacer(1,9),titulo_secao("HISTÓRICO DE MOVIMENTAÇÕES")])
+    celulas = [[campo(k, v) for k, v in linha] for linha in linhas]
+    grade = Table(celulas, colWidths=[largura/4]*4, hAlign="LEFT")
+    grade.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [fundo, colors.white]),
+        ("LINEBELOW", (0, 0), (-1, -1), .3, borda),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    saida.extend([grade, Spacer(1, 4)])
+
+    validacoes = [("ArcGIS", dados.get("arcgis", "")),
+                  ("SIA", dados.get("sia", "")),
+                  ("Loggers", dados.get("loggers", "")),
+                  ("Retorno Operação/Controle", dados.get("retorno_operacao", ""))]
+    val = Table([[campo(k, v) for k, v in validacoes]],
+                colWidths=[largura/4]*4, hAlign="LEFT")
+    val.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BACKGROUND", (0, 0), (-1, -1), fundo),
+        ("LINEBELOW", (0, 0), (-1, -1), .3, borda),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    saida.extend([par("VALIDAÇÕES OPERACIONAIS", meta), Spacer(1, 2), val, Spacer(1, 4),
+                  par("DESCRIÇÃO DA OCORRÊNCIA", meta), Spacer(1, 2),
+                  par(dados.get("descricao", "")), Spacer(1, 4),
+                  par("HISTÓRICO DE MOVIMENTAÇÕES", meta), Spacer(1, 2)])
+
     movimentos = historico_evento(vinculo["evento_id"])
-    # O movimento de criação reproduz o relato inicial acima; não duplicar no PDF.
+    # Registro inicial repete a descrição acima. Preservado no Sheets,
+    # mas não repetido na apresentação do relatório.
     movimentos = [m for m in movimentos if not str(m.get("descricao", "")).startswith("Registro inicial criado. Relato:")]
     if movimentos:
-        for m in movimentos:
-            cab = f"{m.get('data_hora','')}  |  {m.get('status_momento','')}"
-            bloco = Table([[par(cab,rotulo)],[par(m.get("descricao", ""))]],colWidths=[largura])
-            bloco.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#F4F7FB")),("LINEBEFORE",(0,0),(0,-1),3,colors.HexColor("#3975AC")),("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),("LEFTPADDING",(0,0),(-1,-1),10)]))
-            saida.extend([KeepTogether([bloco,Spacer(1,5)])])
+        for movimento in movimentos:
+            detalhes = par(f"{movimento.get('data_hora', '')}  |  {movimento.get('status_momento', '')}", meta)
+            descricao = par(movimento.get("descricao", ""))
+            bloco = Table([[detalhes, descricao]],
+                          colWidths=[largura*.29, largura*.71], hAlign="LEFT")
+            bloco.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 0), (-1, -1), fundo),
+                ("LINEBEFORE", (0, 0), (0, 0), 2.5, colors.HexColor("#3975AC")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            saida.extend([KeepTogether([bloco, Spacer(1, 3)])])
     else:
         saida.append(par("Sem movimentações posteriores ao registro inicial."))
     return saida
@@ -2840,8 +2905,8 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             imagem_foco = capturar_mapa_folium(
                 mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=c,
                                             pocos=pocos, loggers=loggers, raio_ativos=raio),
-                largura=760, altura=560)
-            imagem = Image(io.BytesIO(imagem_foco), width=13.4*cm, height=9.87*cm)
+                largura=760, altura=515)
+            imagem = Image(io.BytesIO(imagem_foco), width=13.4*cm, height=9.08*cm)
             resumo = [
                 Paragraph(xml_escape(f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas distintas"), normal),
                 Spacer(1, 5),
@@ -2905,7 +2970,7 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             # Medir o conteúdo com o próprio motor de layout do ReportLab.
             # Reservar alguns pontos para as margens internas da célula.
             largura_painel = 12.8*cm - 16
-            altura_painel = 9.87*cm - 12
+            altura_painel = 9.08*cm - 12
             def altura_resumo(elementos):
                 altura = 0
                 for elemento in elementos:
@@ -2937,7 +3002,6 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             ]))
             historia.append(ficha)
             historia.append(Spacer(1, 7))
-            historia.extend(secao_pdf_acompanhamento(c, largura=26.6*cm))
 
             # Se houver excedente, continuar abaixo do mapa com o mesmo
             # fundo cinza, cabeçalho azul-claro e listras da tabela lateral.
@@ -2957,6 +3021,9 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 ]))
                 historia.append(Spacer(1, 6))
                 historia.append(painel_extra)
+            # O acompanhamento vem DEPOIS de todo o conteúdo original,
+            # preservando o mapa e as O.S. que continuam abaixo dele.
+            historia.extend(secao_pdf_acompanhamento(c, largura=26.6*cm))
             if indice < len(concentracoes) - 1:
                 historia.append(PageBreak())
     doc.build(historia)
