@@ -1926,19 +1926,12 @@ def invalidar_cache_dados():
 # ============================================================
 
 def evento_pertinente_data_analise(evento):
-    """Mantém apenas eventos que estiveram ativos na data consultada.
-
-    Na visão de 8 dias, a referência é hoje. Na consulta de um dia,
-    a referência é a data escolhida no calendário.
-    """
+    """Verifica se o evento esteve ativo no dia selecionado no calendário."""
     hoje = datetime.now(FUSO_FAROL).date()
-    if st.session_state.get("farol_v2_modo_historico") == "Data específica":
-        referencia = st.session_state.get("farol_v2_data_consulta", hoje)
-        if isinstance(referencia, datetime):
-            referencia = referencia.date()
-        if not isinstance(referencia, date):
-            referencia = hoje
-    else:
+    referencia = st.session_state.get("farol_v2_data_consulta", hoje)
+    if isinstance(referencia, datetime):
+        referencia = referencia.date()
+    if not isinstance(referencia, date):
         referencia = hoje
 
     def data_evento(valor):
@@ -3029,7 +3022,7 @@ with st.sidebar:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
 
     st.divider()
-    st.markdown("### 📅 Histórico de 8 dias")
+    st.markdown("### 📅 Calendário")
     if historico_v2_ativo:
         inicio_operacao_str = controle_historico_v2.get("inicio_operacao", hoje_historico_v2.isoformat())
         try:
@@ -3037,30 +3030,29 @@ with st.sidebar:
         except ValueError:
             inicio_operacao = hoje_historico_v2
         primeira_data = max(inicio_operacao, inicio_historico_v2)
-        modo_historico_v2 = st.radio(
-            "Período de consulta", ["Últimos 8 dias", "Data específica"],
-            key="farol_v2_modo_historico", horizontal=False,
+        # Ao entrar no módulo, a data padrão é hoje. Se o usuário escolher
+        # outro dia, a escolha é mantida enquanto estiver dentro da janela.
+        data_anterior = st.session_state.get("farol_v2_data_consulta")
+        if isinstance(data_anterior, datetime):
+            data_anterior = data_anterior.date()
+        if not isinstance(data_anterior, date) or not (primeira_data <= data_anterior <= hoje_historico_v2):
+            st.session_state["farol_v2_data_consulta"] = hoje_historico_v2
+        data_consulta_v2 = st.date_input(
+            "Data de consulta",
+            min_value=primeira_data,
+            max_value=hoje_historico_v2,
+            key="farol_v2_data_consulta",
+            format="DD/MM/YYYY",
         )
-        if modo_historico_v2 == "Data específica":
-            data_consulta_v2 = st.date_input(
-                "Consultar data", value=hoje_historico_v2,
-                min_value=primeira_data, max_value=hoje_historico_v2,
-                key="farol_v2_data_consulta",
-            )
-            df_pontos = filtrar_pontos_historico_v2(df_pontos, data_consulta_v2, data_consulta_v2)
-        else:
-            st.caption(f"{primeira_data:%d/%m/%Y} a {hoje_historico_v2:%d/%m/%Y}")
-        datas_importadas_v2 = set(df_pontos_armazenados_v2["Dt. Emissão"].map(data_os_historico)) if not df_pontos_armazenados_v2.empty else set()
-        st.caption(f"Dias com O.S. armazenadas na janela: {sum(primeira_data <= d <= hoje_historico_v2 for d in datas_importadas_v2 if d is not None)}")
-        st.caption("Etapa 1: consultas por O.S. As feições históricas e as pendências entre dias serão implementadas nas próximas etapas.")
+        df_pontos = filtrar_pontos_historico_v2(df_pontos, data_consulta_v2, data_consulta_v2)
     else:
-        st.caption("Histórico ainda não ativado. A base atual permanece inalterada.")
+        st.caption("O calendário estará disponível após a ativação do histórico.")
         if PODE_EDITAR_FAROL:
             confirmar_inicio_v2 = st.checkbox(
                 "Confirmo o início do histórico a partir de hoje",
                 key="farol_v2_confirmar_inicio_historico",
             )
-            if st.button("Ativar histórico de 8 dias", disabled=not confirmar_inicio_v2,
+            if st.button("Ativar histórico", disabled=not confirmar_inicio_v2,
                          key="farol_v2_ativar_historico"):
                 try:
                     ativar_historico_v2()
