@@ -241,7 +241,8 @@ def gerar_pdf(eid):
         pdf.set_text_color(0,0,0)
     def linha(rotulo, valor):
         pdf.set_font("Helvetica",size=9)
-        pdf.multi_cell(0,6,seguro(f"{rotulo}: {valor if valor not in (None,'') else 'N/A'}"))
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(pdf.w - pdf.l_margin - pdf.r_margin, 6, seguro(f"{rotulo}: {valor if valor not in (None,'') else 'N/A'}"), new_x="LMARGIN", new_y="NEXT")
     secao("1. RESUMO EXECUTIVO")
     for k, label in [("municipio","Municipio"),("regional","Regional"),("unidade","Unidade"),
                      ("qtd_reclamacoes","Qtd. reclamacoes")]:
@@ -266,10 +267,12 @@ def gerar_pdf(eid):
             pdf.add_page()
         pdf.set_font("Helvetica","B",9)
         pdf.set_text_color(26,54,93)
-        pdf.multi_cell(0,5,seguro(f"{data} - Status: {status}"))
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(pdf.w - pdf.l_margin - pdf.r_margin, 5, seguro(f"{data} - Status: {status}"), new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica",size=9)
         pdf.set_text_color(50,50,50)
-        pdf.multi_cell(0,5,seguro(desc))
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(pdf.w - pdf.l_margin - pdf.r_margin, 5, seguro(desc), new_x="LMARGIN", new_y="NEXT")
         pdf.ln(4)
     resultado = pdf.output(dest="S")
     return bytes(resultado) if not isinstance(resultado,str) else resultado.encode("latin-1")
