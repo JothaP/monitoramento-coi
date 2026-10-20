@@ -512,7 +512,7 @@ with col6:
 if ambiente_teste:
     st.markdown("")
     col7, col8, col9 = st.columns(3)
-    with col8:
+    with col7:
         st.markdown("#### 🧪 Ambiente de Teste")
         st.markdown("**Ferramentas em desenvolvimento**")
         st.caption("Acesso exclusivo do administrador")
