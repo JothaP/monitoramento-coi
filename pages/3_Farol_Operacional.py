@@ -16,7 +16,7 @@ from xml.sax.saxutils import escape as xml_escape
 from html import escape as html_escape
 from zoneinfo import ZoneInfo
 import unicodedata
-from datetime import datetime, date, time as horario
+from datetime import datetime, date, timedelta, time as horario
 import xml.etree.ElementTree as ET
 
 import gspread
@@ -50,36 +50,35 @@ from auth import verificar_autenticacao, tem_acesso_modulo
 # ============================================================
 
 st.set_page_config(
-    page_title="Farol Operacional V2 - Demonstração (Módulo 7)",
+    page_title="Farol Operacional — Módulo 3",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Módulo 7 de demonstração: apenas admin e usuario.
-# Dados totalmente separados da planilha de produção.
+# Módulo 3 — produção. Perfil operador: somente leitura.
 if not verificar_autenticacao():
     st.error("Sessão não autenticada. Entre pelo Hub Central.")
     st.stop()
 
 PERFIL_FAROL = str(st.session_state.get("perfil", "")).strip().lower()
-if PERFIL_FAROL not in {"admin", "usuario"}:
+if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
     st.error("Seu perfil não está autorizado a acessar o Farol Operacional.")
     st.stop()
 
 PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
 
 def exigir_edicao_farol():
-    """Bloqueia mutações mesmo quando funções são chamadas sem seus botões."""
+    """Impede mutações de dados por perfis de somente leitura."""
     if not PODE_EDITAR_FAROL:
         raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
-# Definir em Streamlit Cloud > App settings > Secrets:
-# farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
-# Não utilizar a planilha de produção como fallback.
-SPREADSHEET_ID_PRODUCAO = "1l0IcsO1GgPYcs8DPRPI6_lKdSCM9vWOypcrwIMJ96QY"
-SPREADSHEET_ID = str(st.secrets.get("farol_v2_spreadsheet_id", "")).strip()
-if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_PRODUCAO:
-    st.error("Módulo 7 protegido: configure farol_v2_spreadsheet_id com o ID de uma CÓPIA independente da planilha de produção em Secrets.")
+# Produção exige identificação explícita para evitar exclusões na base errada.
+# Definir em Streamlit Cloud > Secrets:
+# farol_producao_spreadsheet_id = "ID_DA_PLANILHA_DE_PRODUCAO"
+SPREADSHEET_ID = str(st.secrets.get("farol_producao_spreadsheet_id", "")).strip()
+SPREADSHEET_ID_DEMO_CONHECIDO = "1plvaCyZ23zAIjasrFnJxZm9Q-jB85AbCtSjIizhuoKg"
+if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_DEMO_CONHECIDO:
+    st.error("Configure farol_producao_spreadsheet_id em Secrets com o ID da planilha de produção. A base de demonstração não pode ser utilizada.")
     st.stop()
 
 NOME_ABA_POCOS = "POCOS"
@@ -90,6 +89,9 @@ NOME_ABA_CONTROLE = "CONTROLE_FAROL"
 NOME_ABA_OBSERVACOES = "OBS_CONCENTRACOES"
 NOME_ABA_AREAS_PROTEGIDAS = "FAROL_AREAS_EDITADAS"
 NOME_ABA_ATUALIZACOES = "FAROL_ATUALIZACOES"
+NOME_ABA_HISTORICO_V2 = "FAROL_HISTORICO_V2"
+CABECALHO_HISTORICO_V2 = ["Chave", "Valor"]
+DIAS_HISTORICO_V2 = 8
 FUSO_FAROL = ZoneInfo("America/Fortaleza")  # Teresina: UTC-3
 RESET_HORARIO = horario(0, 1)
 _RESET_LOCK = threading.Lock()
@@ -647,6 +649,122 @@ def substituir_aba(nome, cabecalho, df):
     aba.update("A1", linhas, value_input_option=modo_escrita)
     invalidar_cache()
 
+
+# ============================================================
+# HISTÓRICO V2 — ETAPA 1 (apenas O.S.; eventos preservados)
+# ============================================================
+
+def data_os_historico(valor):
+    """Lê Dt. Emissão sem descartar datas sem hora; não inventa datas ausentes."""
+    if isinstance(valor, (datetime, date, pd.Timestamp)):
+        try:
+            return pd.Timestamp(valor).date()
+        except (ValueError, TypeError):
+            return None
+    texto = str(valor or "").strip()
+    if not texto or texto.lower() in {"nan", "none", "nat", "-"}:
+        return None
+    for formato in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+    try:
+        valor_data = pd.to_datetime(texto, dayfirst=True, errors="coerce")
+        return valor_data.date() if pd.notna(valor_data) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def janela_historico_v2(hoje=None):
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    return hoje - timedelta(days=DIAS_HISTORICO_V2 - 1), hoje
+
+
+def ler_controle_historico_v2():
+    """Aba de controle pequena; sem criar abas na simples visualização."""
+    try:
+        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_HISTORICO_V2)
+        linhas = aba.get_all_values()
+        return {r[0]: r[1] for r in linhas[1:] if len(r) >= 2}
+    except gspread.exceptions.WorksheetNotFound:
+        return {}
+
+
+def gravar_controle_historico_v2(controle):
+    exigir_edicao_farol()
+    planilha = obter_planilha(SPREADSHEET_ID)
+    try:
+        aba = planilha.worksheet(NOME_ABA_HISTORICO_V2)
+    except gspread.exceptions.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=NOME_ABA_HISTORICO_V2, rows=30, cols=3)
+    linhas = [CABECALHO_HISTORICO_V2] + [[k, str(v)] for k, v in sorted(controle.items())]
+    aba.update("A1", linhas, value_input_option="RAW")
+
+
+def validar_importacao_diaria_v2(df, hoje=None):
+    """Etapa 1: importação do dia, sem mistura acidental de datas."""
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    if df.empty:
+        raise ValueError("O arquivo não contém O.S. para importar.")
+    datas = df["Dt. Emissão"].map(data_os_historico)
+    invalidas = int(datas.isna().sum())
+    fora = int(((datas.notna()) & (datas != hoje)).sum())
+    if invalidas or fora:
+        raise ValueError(
+            f"Importação interrompida: {invalidas} O.S. sem data válida e {fora} "
+            f"O.S. com emissão diferente de {hoje:%d/%m/%Y}. "
+            "Nesta etapa, importe apenas O.S. abertas hoje."
+        )
+    return df
+
+
+def filtrar_pontos_historico_v2(df, inicio, fim):
+    if df.empty:
+        return df.copy()
+    datas = df["Dt. Emissão"].map(data_os_historico)
+    return df.loc[datas.map(lambda d: d is not None and inicio <= d <= fim)].copy()
+
+
+def executar_limpeza_historico_v2(controle, hoje=None):
+    """Executa no máximo uma vez por dia lógico, sem apagar datas inválidas.
+
+    Em caso de dados sem data válida, falha fechado: não exclui nada.
+    EVENTOS nunca são excluídos nesta etapa.
+    """
+    exigir_edicao_farol()
+    hoje = hoje or datetime.now(FUSO_FAROL).date()
+    if controle.get("ativo") != "SIM" or controle.get("ultima_limpeza") == hoje.isoformat():
+        return 0
+    inicio, _ = janela_historico_v2(hoje)
+    base = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
+    if base.empty:
+        removidos = 0
+    else:
+        datas = base["Dt. Emissão"].map(data_os_historico)
+        if datas.isna().any():
+            raise ValueError("Existem O.S. sem data válida em PONTOS; limpeza suspensa para evitar perda de dados.")
+        manter = datas.map(lambda d: inicio <= d <= hoje)
+        removidos = int((~manter).sum())
+        if removidos:
+            substituir_aba(NOME_ABA_PONTOS, list(base.columns), base.loc[manter].copy())
+    controle = dict(controle)
+    controle["ultima_limpeza"] = hoje.isoformat()
+    gravar_controle_historico_v2(controle)
+    return removidos
+
+
+def ativar_historico_v2():
+    """Ativação explícita: registra marco inicial, sem excluir legado de imediato."""
+    exigir_edicao_farol()
+    hoje = datetime.now(FUSO_FAROL).date()
+    controle = ler_controle_historico_v2()
+    if controle.get("ativo") == "SIM":
+        return
+    controle.update({"ativo": "SIM", "inicio_operacao": hoje.isoformat(),
+                     "ultima_limpeza": hoje.isoformat()})
+    gravar_controle_historico_v2(controle)
 
 # ============================================================
 # LEITURA DE ARQUIVOS
@@ -1353,6 +1471,8 @@ def classificar_status_evento(valor):
     status = normalizar_texto(valor)
     if any(p in status for p in ("FINALIZ", "ENCERR", "CONCLUI", "CONCLUID", "NORMALIZ", "RESOLVID", "CANCELAD")):
         return "Finalizado", "#2eaa59"
+    if "PENDENTE" in status:
+        return "Pendente", "#FDE68A"  # Amarelo claro para eventos pendentes.
     if any(p in status for p in ("PROGRAM", "AGEND", "PREVIST", "PLANEJ")):
         return "Programado", "#f2b233"
     if any(p in status for p in ("ANDAMENTO", "EXECU", "INICIAD", "ATIVO", "ABERTO", "OCORRENCIA", "EM CURSO")):
@@ -1487,6 +1607,23 @@ def icone_bandeira_concentracao():
     )
 
 
+def icone_alvo_concentracao_panorama():
+    """Marcador circular vermelho compacto, exclusivo do mapa panorâmico."""
+    return folium.DivIcon(
+        html=(
+            '<div style="width:28px;height:28px;display:flex;align-items:center;'
+            'justify-content:center;border-radius:50%;border:3px solid #DC2626;'
+            'background:transparent;box-sizing:border-box;'
+            'filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));">'
+            '<div style="width:16px;height:16px;border-radius:50%;'
+            'background:#DC2626;"></div></div>'
+        ),
+        icon_size=(28, 28),
+        icon_anchor=(14, 14),
+        class_name="farol-alvo-concentracao-panorama",
+    )
+
+
 def municipios_das_concentracoes(concentracoes, pontos_cluster):
     """Municípios reais por grupo; o cadastro de concentrações não possui cidade."""
     resultado = {}
@@ -1552,7 +1689,7 @@ def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mape
         folium.Circle([lat, lon], radius=float(raio_m), color="#7c3aed",
                       weight=2, fill=True, fill_opacity=.07,
                       tooltip=f"{codigo} · {int(c['QTD_OS'])} O.S.").add_to(mapa)
-        folium.Marker([lat, lon], icon=icone_bandeira_concentracao(),
+        folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama(),
                       popup=folium.Popup(resumo, max_width=320),
                       tooltip=f"{codigo} — Abrir concentração").add_to(mapa)
         limites.append([lat, lon])
@@ -1787,6 +1924,40 @@ def invalidar_cache_dados():
 # RELATÓRIOS INDIVIDUAIS DAS CONCENTRAÇÕES
 # ============================================================
 
+def evento_pertinente_data_analise(evento):
+    """Verifica se o evento esteve ativo no dia selecionado no calendário."""
+    hoje = datetime.now(FUSO_FAROL).date()
+    referencia = st.session_state.get("farol_v2_data_consulta", hoje)
+    if isinstance(referencia, datetime):
+        referencia = referencia.date()
+    if not isinstance(referencia, date):
+        referencia = hoje
+
+    def data_evento(valor):
+        if valor is None or str(valor).strip().lower() in ("", "nan", "none", "nat", "-"):
+            return None
+        if isinstance(valor, (date, datetime, pd.Timestamp)):
+            return valor.date() if isinstance(valor, (datetime, pd.Timestamp)) else valor
+        try:
+            resultado = pd.to_datetime(str(valor).strip(), dayfirst=True, errors="coerce")
+            return resultado.date() if pd.notna(resultado) else None
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+    inicio = data_evento(evento.get("Início", ""))
+    termino = data_evento(evento.get("Término Real", ""))
+    encerrado = classificar_status_evento(evento.get("Status", ""))[0] == "Finalizado"
+    if inicio is not None and inicio > referencia:
+        return False
+    if termino is not None and termino < referencia:
+        return False
+    # Um evento finalizado sem data de término não pode ser considerado ativo
+    # na data consultada sem evidência temporal de seu encerramento.
+    if encerrado and termino is None:
+        return False
+    return True
+
+
 def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eventos, bairros_geograficos=None):
     """Associa O.S. pelo identificador real do grupo, não pelo ID reordenado."""
     grupo = concentracao["GRUPO"]
@@ -1804,7 +1975,10 @@ def dados_relatorio_concentracao(concentracao, pontos_cluster, proximidades, eve
     eventos_relacionados = []
     if not eventos.empty:
         for _, evento in eventos.iterrows():
-            # Preservar histórico de eventos encerrados no relatório; somente o mapa os oculta.
+            # Eventos encerrados antes da data consultada não pertencem à análise.
+            # Eventos concluídos na própria data continuam disponíveis no histórico.
+            if not evento_pertinente_data_analise(evento):
+                continue
             cidade_evento = normalizar_municipio(evento.get("Cidade", ""))
             if not cidade_evento:
                 continue
@@ -1919,7 +2093,7 @@ def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
     raio_grupo = RAIO_CONCENTRACAO_PADRAO
     folium.Circle([lat, lon], radius=raio_grupo, color="#8522a5", weight=3,
                   fill=True, fill_color="#8522a5", fill_opacity=0.07).add_to(mapa)
-    folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+    folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
     for _, registro in os_grupo.iterrows():
         y = normalizar_coordenada(registro.get("Latitude"), "lat")
         x = normalizar_coordenada(registro.get("Longitude"), "lon")
@@ -2138,7 +2312,7 @@ def modal_importacao():
         st.error("Acesso somente para visualização.")
         return
     st.subheader("Importação das bases")
-    st.info("PONTOS e EVENTOS não são apagados automaticamente. A limpeza manual está disponível somente ao administrador, na barra lateral do mapa.")
+    st.info("O histórico de 8 dias só entra em vigor após ativação explícita. Após ativado, a importação de O.S. aceita apenas emissões do dia; EVENTOS são preservados nesta etapa.")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2150,6 +2324,8 @@ def modal_importacao():
                 st.dataframe(previa.head(10), width="stretch", hide_index=True)
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
+                    if ler_controle_historico_v2().get("ativo") == "SIM":
+                        preparados = validar_importacao_diaria_v2(preparados)
                     inseridas, total = upsert_pontos(preparados)
                     registrar_atualizacao_base("PONTOS")
                     st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
@@ -2449,7 +2625,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
         if not panoramico:
             folium.Circle([lat, lon], radius=raio, color="#8522A5", weight=2.5,
                           fill=True, fill_color="#8522A5", fill_opacity=.09).add_to(mapa)
-            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
         coordenadas.append((lat, lon))
         if "_grupo" not in pontos_cluster.columns:
             continue
@@ -2517,7 +2693,7 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
             folium.Circle([lat, lon], radius=RAIO_CONCENTRACAO_PADRAO,
                           color="#8522A5", weight=3.2, fill=True,
                           fill_color="#8522A5", fill_opacity=.055).add_to(mapa)
-            folium.Marker([lat, lon], icon=icone_bandeira_concentracao()).add_to(mapa)
+            folium.Marker([lat, lon], icon=icone_alvo_concentracao_panorama()).add_to(mapa)
     if coordenadas:
         if concentracao is not None:
             lat, lon = float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"])
@@ -2767,7 +2943,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
 # ============================================================
 
 st.title("Farol Operacional")
-st.caption("🧪 AMBIENTE DE DEMONSTRAÇÃO — dados isolados do Módulo 3 | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
+st.caption("MÓDULO 3 — PRODUÇÃO | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
@@ -2775,7 +2951,17 @@ _inicio_geometria = tempo_execucao.perf_counter()
 bairros = descobrir_kmz()
 _tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
-# PONTOS e EVENTOS são mantidos sem limpeza automática.
+# A ativação inicial é explícita. Depois disso, limpeza na primeira execução do dia.
+controle_historico_v2 = ler_controle_historico_v2()
+historico_v2_ativo = controle_historico_v2.get("ativo") == "SIM"
+if historico_v2_ativo and PODE_EDITAR_FAROL:
+    try:
+        removidos_historico_v2 = executar_limpeza_historico_v2(controle_historico_v2)
+        if removidos_historico_v2:
+            st.toast(f"Histórico atualizado: {removidos_historico_v2} O.S. fora da janela excluídas.")
+    except Exception as erro_historico:
+        st.error(f"Limpeza automática suspensa: {erro_historico}")
+# EVENTOS permanecem intactos na Etapa 1.
 
 # Os cadastros são lidos localmente; apenas PONTOS e EVENTOS usam Google Sheets.
 _inicio_planilhas = tempo_execucao.perf_counter()
@@ -2805,6 +2991,12 @@ if not df_pocos.empty:
 if not df_loggers.empty:
     df_loggers = df_loggers.reindex(columns=CABECALHO_LOGGERS).fillna("")
 
+# Conserva a base original somente para contagem e indicadores da importação.
+df_pontos_armazenados_v2 = df_pontos
+inicio_historico_v2, hoje_historico_v2 = janela_historico_v2()
+if historico_v2_ativo:
+    df_pontos = filtrar_pontos_historico_v2(df_pontos, inicio_historico_v2, hoje_historico_v2)
+
 # ============================================================
 # ABAS
 # ============================================================
@@ -2829,26 +3021,44 @@ with st.sidebar:
         st.caption("🔒 Perfil Operador: somente visualização e downloads.")
 
     st.divider()
-    st.markdown("### 🔎 Filtros")
-    # Este seletor controla apenas as camadas de poços e loggers; não filtra O.S. nem concentrações.
-    cidades_filtro = set()
-    for dados, campo in ((df_pontos, "Cidade"), (df_pocos, "MUNICIPIO"), (df_loggers, "MUNICIPIO")):
-        if campo in dados.columns and not dados.empty:
-            cidades_filtro.update(str(v).strip() for v in dados[campo].dropna() if str(v).strip())
-    cidades_filtro = sorted(cidades_filtro, key=normalizar_texto)
-    cidade_sel = st.selectbox("Cidade dos poços e loggers", ["Todas"] + cidades_filtro, key="farol_filtro_cidade_sidebar")
-    cidade_especifica = cidade_sel != "Todas"
-    mostrar_pocos_cidade = st.checkbox(
-        "Mostrar poços / ativos da cidade", value=False,
-        disabled=not cidade_especifica, key="farol_mostrar_pocos_cidade",
-    )
-    mostrar_loggers_cidade = st.checkbox(
-        "Mostrar loggers da cidade", value=False,
-        disabled=not cidade_especifica, key="farol_mostrar_loggers_cidade",
-    )
-    if not cidade_especifica:
-        st.caption("Os equipamentos próximos às concentrações continuam visíveis. Selecione uma cidade para acrescentar outros equipamentos.")
-
+    st.markdown("### 📅 Calendário")
+    if historico_v2_ativo:
+        inicio_operacao_str = controle_historico_v2.get("inicio_operacao", hoje_historico_v2.isoformat())
+        try:
+            inicio_operacao = date.fromisoformat(inicio_operacao_str)
+        except ValueError:
+            inicio_operacao = hoje_historico_v2
+        primeira_data = max(inicio_operacao, inicio_historico_v2)
+        # Ao entrar no módulo, a data padrão é hoje. Se o usuário escolher
+        # outro dia, a escolha é mantida enquanto estiver dentro da janela.
+        data_anterior = st.session_state.get("farol_v2_data_consulta")
+        if isinstance(data_anterior, datetime):
+            data_anterior = data_anterior.date()
+        if not isinstance(data_anterior, date) or not (primeira_data <= data_anterior <= hoje_historico_v2):
+            st.session_state["farol_v2_data_consulta"] = hoje_historico_v2
+        data_consulta_v2 = st.date_input(
+            "Data de consulta",
+            min_value=primeira_data,
+            max_value=hoje_historico_v2,
+            key="farol_v2_data_consulta",
+            format="DD/MM/YYYY",
+        )
+        df_pontos = filtrar_pontos_historico_v2(df_pontos, data_consulta_v2, data_consulta_v2)
+    else:
+        st.caption("O calendário estará disponível após a ativação do histórico.")
+        if PODE_EDITAR_FAROL:
+            confirmar_inicio_v2 = st.checkbox(
+                "Confirmo o início do histórico a partir de hoje",
+                key="farol_v2_confirmar_inicio_historico",
+            )
+            if st.button("Ativar histórico", disabled=not confirmar_inicio_v2,
+                         key="farol_v2_ativar_historico"):
+                try:
+                    ativar_historico_v2()
+                    st.success("Histórico ativado. A limpeza começa na primeira execução dos próximos dias.")
+                    st.rerun()
+                except Exception as erro:
+                    st.error(f"Não foi possível ativar o histórico: {erro}")
     st.divider()
     st.markdown("### ⚙️ Configuração")
     raio_operacional = st.number_input(
@@ -2915,8 +3125,9 @@ def ativos_da_cidade(df, campo, cidade, habilitado):
         return df.iloc[0:0].copy()
     return df.loc[normalizar_texto_series(df[campo]) == normalizar_texto(cidade)].copy()
 
-ativos_pocos_cidade = ativos_da_cidade(df_pocos, "MUNICIPIO", cidade_sel, mostrar_pocos_cidade)
-ativos_loggers_cidade = ativos_da_cidade(df_loggers, "MUNICIPIO", cidade_sel, mostrar_loggers_cidade)
+# Camadas adicionais por cidade removidas da sidebar; permanecem os equipamentos próximos.
+ativos_pocos_cidade = df_pocos.iloc[0:0].copy()
+ativos_loggers_cidade = df_loggers.iloc[0:0].copy()
 
 
 if st.session_state.get("farol_tela", "mapa") == "mapa":
@@ -2952,40 +3163,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             if estado_mapa.get("zoom") is not None:
                 st.session_state["farol_ultimo_zoom_mapa"] = estado_mapa["zoom"]
     else:
-        # Filtros.
-        f1, f2, f3 = st.columns(3)
-        bairros_os = sorted([x for x in df_pontos["Bairro"].dropna().astype(str).unique() if x.strip()])
-        status_os = sorted([x for x in df_pontos["Status OS"].dropna().astype(str).unique() if x.strip()])
-
-        with f1:
-            bairro_sel = st.multiselect("Bairro", bairros_os)
-        with f2:
-            status_sel = st.multiselect("Status", status_os)
-        with f3:
-            apenas_com_coord = st.checkbox("Somente O.S. georreferenciada", value=True)
-
-        servicos_os = sorted({str(x).strip() for x in df_pontos["Serviço Executado"].fillna("")
-                              if str(x).strip()})
-        servico_sel = st.multiselect(
-            "Tipo da O.S",
-            options=servicos_os,
-            placeholder="Todos os tipos",
-            help="Selecione um ou mais serviços; sem seleção, todos são exibidos.",
-            key="farol_filtro_servico_executado",
-        )
-
-        analise = df_pontos.copy()
-        if bairro_sel:
-            bairros_norm = {limpar_nome_bairro(x) for x in bairro_sel}
-            analise = analise[analise["Bairro"].map(limpar_nome_bairro).isin(bairros_norm)]
-        if status_sel:
-            status_norm = {normalizar_texto(x) for x in status_sel}
-            analise = analise[analise["Status OS"].map(normalizar_texto).isin(status_norm)]
-        if servico_sel:
-            servicos_norm = {normalizar_texto(x) for x in servico_sel}
-            analise = analise[analise["Serviço Executado"].map(normalizar_texto).isin(servicos_norm)]
-        if apenas_com_coord:
-            analise = analise.dropna(subset=["Latitude", "Longitude"])
+        # Filtros manuais removidos: o panorama utiliza todas as O.S.
+        # georreferenciadas do período selecionado no histórico.
+        # Preserva o comportamento anterior de exigir coordenadas válidas.
+        analise = df_pontos.dropna(subset=["Latitude", "Longitude"]).copy()
 
         _inicio_analise = tempo_execucao.perf_counter()
         concentracoes, pontos_cluster = criar_concentracoes(
@@ -3016,7 +3197,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
         # Panorama sem O.S./equipamentos, mas com bairros e eventos de todos os municípios analisados.
-        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione uma bandeira 🚩 para abrir a concentração.")
+        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular azul para abrir a concentração.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
         codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
         selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
