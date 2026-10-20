@@ -1,15 +1,13 @@
 """Módulo 7 — Acompanhamento Operacional | Plataforma COI.
 Conversão Streamlit do aplicativo Gradio/Colab fornecido pelo usuário.
-ATENÇÃO: SQLite em disco local do Streamlit Cloud NÃO garante persistência.
-Configure COI_ACOMPANHAMENTO_DB_PATH para um caminho em volume persistente,
-ou migre o armazenamento antes de usar dados reais.
+Persistência: Google Sheets dedicado, separado dos demais módulos.
 """
-import os
-import sqlite3
-from contextlib import contextmanager
+import json
+import threading
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -29,46 +27,52 @@ STATUS = ["Aguardando motivo", "Concluído - causa identificada", "Concluído - 
 UNIDADES = ["Águas do Piauí", "Águas de Teresina", "Águas de Timon"]
 REGIONAIS = ["Semiárido Norte", "Semiárido Sul", "Cerrado", "Litoral", "Meio Norte", "Teresina", "Timon"]
 SIM_NAO = ["Não", "Sim"]
-DB_PATH = str(st.secrets.get("COI_ACOMPANHAMENTO_DB_PATH", "cco_monitoramento_v2.db"))
+SPREADSHEET_ID = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "1nIs2qMlgZNj53zj8hg867O-NLpeDqHozSpCo_QBKUHY")).strip()
+CAMPOS_EVENTOS = ["id", "titulo", "qtd_reclamacoes", "status", "ultima_atualizacao", "unidade", "regional", "municipio", "data_identificacao", "descricao", "arcgis", "sia", "loggers", "retorno_operacao", "finalizado", "data_finalizacao"]
+CAMPOS_MOVIMENTACOES = ["id", "evento_id", "data_hora", "descricao", "status_momento"]
+# Protege gravações concorrentes dentro de um mesmo processo Streamlit.
+_GRAVACAO_LOCK = threading.RLock()
 
-@contextmanager
-def conectar():
-    caminho = Path(DB_PATH).expanduser()
-    caminho.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(caminho), timeout=30)
-    conn.execute("PRAGMA foreign_keys=ON")
+@st.cache_resource(show_spinner=False)
+def cliente_google():
+    dados = st.secrets["gcp_json"]
+    dados = json.loads(dados) if isinstance(dados, str) else dict(dados)
+    credenciais = Credentials.from_service_account_info(dados, scopes=[
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ])
+    return gspread.authorize(credenciais)
+
+@st.cache_resource(show_spinner=False)
+def planilha_google():
+    return cliente_google().open_by_key(SPREADSHEET_ID)
+
+@st.cache_resource(show_spinner=False)
+def aba_google(nome):
+    planilha = planilha_google()
+    colunas = CAMPOS_EVENTOS if nome == "eventos" else CAMPOS_MOVIMENTACOES
     try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        aba = planilha.worksheet(nome)
+    except gspread.WorksheetNotFound:
+        aba = planilha.add_worksheet(title=nome, rows=1000, cols=len(colunas))
+    primeira = aba.row_values(1)
+    if not primeira:
+        aba.update(range_name="A1", values=[colunas])
+    elif primeira != colunas:
+        raise ValueError(f"A aba '{nome}' possui cabeçalhos diferentes dos esperados. Faça backup e confira a estrutura antes de continuar.")
+    return aba
 
-def inicializar():
-    with conectar() as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS eventos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, titulo TEXT NOT NULL,
-            qtd_reclamacoes INTEGER DEFAULT 0, status TEXT NOT NULL,
-            ultima_atualizacao TEXT NOT NULL, unidade TEXT NOT NULL,
-            regional TEXT NOT NULL, municipio TEXT NOT NULL,
-            data_identificacao TEXT NOT NULL, descricao TEXT,
-            arcgis TEXT DEFAULT 'Não', sia TEXT DEFAULT 'Não',
-            loggers TEXT DEFAULT 'Não', retorno_operacao TEXT DEFAULT 'Não',
-            finalizado TEXT DEFAULT 'Não', data_finalizacao TEXT)""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS movimentacoes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, evento_id INTEGER NOT NULL,
-            data_hora TEXT NOT NULL, descricao TEXT NOT NULL,
-            status_momento TEXT NOT NULL,
-            FOREIGN KEY(evento_id) REFERENCES eventos(id) ON DELETE CASCADE)""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_mov_evento ON movimentacoes(evento_id)")
+def ler_registros(nome):
+    aba = aba_google(nome)
+    colunas = CAMPOS_EVENTOS if nome == "eventos" else CAMPOS_MOVIMENTACOES
+    linhas = aba.get_all_values()
+    return [dict(zip(colunas, (linha + [""] * len(colunas))[:len(colunas)])) for linha in linhas[1:] if linha and str(linha[0]).strip()]
+
+def novo_id(registros):
+    return max((int(r["id"]) for r in registros if str(r.get("id", "")).isdigit()), default=0) + 1
 
 def agora():
     return datetime.now().strftime("%d/%m/%Y %H:%M")
-
-def data_texto(valor):
-    return valor.strftime("%d/%m/%Y %H:%M") if isinstance(valor, datetime) else str(valor or "").strip()
 
 def cadastrar(titulo, qtd, status, unidade, regional, municipio, data_ident, descricao,
               arcgis, sia, loggers, retorno, finalizado, data_fim):
@@ -78,58 +82,59 @@ def cadastrar(titulo, qtd, status, unidade, regional, municipio, data_ident, des
     if "Concluído" in status or finalizado == "Sim":
         finalizado = "Sim"
         data_fim = data_fim or momento
-    with conectar() as conn:
-        cursor = conn.execute("""INSERT INTO eventos
-            (titulo,qtd_reclamacoes,status,ultima_atualizacao,unidade,regional,municipio,
-             data_identificacao,descricao,arcgis,sia,loggers,retorno_operacao,finalizado,data_finalizacao)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (titulo.strip(), int(qtd), status, momento, unidade, regional, municipio.strip(),
-             data_ident or momento, descricao, arcgis, sia, loggers, retorno, finalizado, data_fim))
-        eid = cursor.lastrowid
-        conn.execute("INSERT INTO movimentacoes(evento_id,data_hora,descricao,status_momento) VALUES(?,?,?,?)",
-                     (eid, momento, f"Registro inicial criado. Relato: {descricao}", status))
+    with _GRAVACAO_LOCK:
+        ev_aba = aba_google("eventos")
+        mov_aba = aba_google("movimentacoes")
+        eid = novo_id(ler_registros("eventos"))
+        mid = novo_id(ler_registros("movimentacoes"))
+        dados = [eid, titulo.strip(), int(qtd), status, momento, unidade, regional, municipio.strip(),
+                 data_ident or momento, descricao, arcgis, sia, loggers, retorno, finalizado, data_fim]
+        ev_aba.append_row(dados, value_input_option="RAW")
+        mov_aba.append_row([mid, eid, momento, f"Registro inicial criado. Relato: {descricao}", status], value_input_option="RAW")
     return eid
 
 def listar(status="Todos", municipio="", regional="Todas", unidade="Todas", finalizado="Todos"):
-    sql = """SELECT id,titulo,status,municipio,regional,unidade,qtd_reclamacoes,
-             ultima_atualizacao,finalizado FROM eventos WHERE 1=1"""
-    params = []
+    df = pd.DataFrame(ler_registros("eventos"), columns=CAMPOS_EVENTOS)
+    colunas = ["id", "titulo", "status", "municipio", "regional", "unidade", "qtd_reclamacoes", "ultima_atualizacao", "finalizado"]
+    if df.empty:
+        return pd.DataFrame(columns=colunas)
     for campo, valor, ignorar in [("status",status,"Todos"),("regional",regional,"Todas"),
                                    ("unidade",unidade,"Todas"),("finalizado",finalizado,"Todos")]:
         if valor != ignorar:
-            sql += f" AND {campo}=?"
-            params.append(valor)
+            df = df[df[campo] == valor]
     if municipio.strip():
-        sql += " AND municipio LIKE ?"
-        params.append("%" + municipio.strip() + "%")
-    sql += " ORDER BY id DESC"
-    with conectar() as conn:
-        return pd.read_sql_query(sql, conn, params=params)
+        df = df[df["municipio"].str.contains(municipio.strip(), case=False, regex=False, na=False)]
+    df["id"] = pd.to_numeric(df["id"], errors="coerce")
+    df["qtd_reclamacoes"] = pd.to_numeric(df["qtd_reclamacoes"], errors="coerce").fillna(0).astype(int)
+    return df.sort_values("id", ascending=False)[colunas].reset_index(drop=True)
 
 def obter_evento(eid):
-    with conectar() as conn:
-        conn.row_factory = sqlite3.Row
-        r = conn.execute("SELECT * FROM eventos WHERE id=?", (eid,)).fetchone()
-        return dict(r) if r else None
+    return next((r for r in ler_registros("eventos") if str(r["id"]) == str(eid)), None)
 
 def obter_movimentacoes(eid):
-    with conectar() as conn:
-        return conn.execute("SELECT data_hora,descricao,status_momento FROM movimentacoes WHERE evento_id=? ORDER BY id", (eid,)).fetchall()
+    rows = [r for r in ler_registros("movimentacoes") if str(r["evento_id"]) == str(eid)]
+    rows.sort(key=lambda r: int(r["id"]) if str(r["id"]).isdigit() else 0)
+    return [(r["data_hora"], r["descricao"], r["status_momento"]) for r in rows]
 
 def atualizar(eid, status, observacao, finalizado, data_fim):
-    ev = obter_evento(eid)
-    if not ev:
-        raise ValueError("Evento não encontrado.")
     momento = agora()
     if "Concluído" in status or finalizado == "Sim":
         finalizado = "Sim"
         data_fim = data_fim or momento
     texto = observacao.strip() or f"Status atualizado para: {status}"
-    with conectar() as conn:
-        conn.execute("UPDATE eventos SET status=?,ultima_atualizacao=?,finalizado=?,data_finalizacao=? WHERE id=?",
-                     (status, momento, finalizado, data_fim or None, eid))
-        conn.execute("INSERT INTO movimentacoes(evento_id,data_hora,descricao,status_momento) VALUES(?,?,?,?)",
-                     (eid, momento, texto, status))
+    with _GRAVACAO_LOCK:
+        aba = aba_google("eventos")
+        celula = aba.find(str(eid), in_column=1)
+        if celula is None or celula.row == 1:
+            raise ValueError("Evento não encontrado.")
+        # Atualiza o intervalo D:E (status e data da última atualização) e O:P (finalização).
+        aba.batch_update([
+            {"range": f"D{celula.row}:E{celula.row}", "values": [[status, momento]]},
+            {"range": f"O{celula.row}:P{celula.row}", "values": [[finalizado, data_fim or ""]]},
+        ], value_input_option="RAW")
+        mov_aba = aba_google("movimentacoes")
+        mid = novo_id(ler_registros("movimentacoes"))
+        mov_aba.append_row([mid, eid, momento, texto, status], value_input_option="RAW")
 
 def seguro(texto):
     substituicoes = {'•':'-', '—':'-', '–':'-', '“':'"', '”':'"', '‘':"'", '’':"'", '⚠️':'!', '📌':'', '⏱️':''}
@@ -217,9 +222,11 @@ def gerar_pdf(eid):
     return bytes(resultado) if not isinstance(resultado,str) else resultado.encode("latin-1")
 
 try:
-    inicializar()
-except (sqlite3.Error, OSError) as exc:
-    st.error(f"Não foi possível abrir o banco de dados: {exc}")
+    aba_google("eventos")
+    aba_google("movimentacoes")
+except Exception as exc:
+    st.error(f"Não foi possível acessar a planilha do Módulo 7: {exc}")
+    st.info("Confira o Secret gcp_json, o compartilhamento com a conta de serviço e o ID da planilha.")
     st.stop()
 
 st.title("🌊 Módulo 7 — Acompanhamento Operacional")
@@ -229,7 +236,7 @@ with st.sidebar:
     if st.button("← Voltar ao Hub Central", use_container_width=True):
         st.switch_page("app.py")
     st.divider()
-    st.caption("Armazenamento atual: SQLite. Para produção no Streamlit Cloud, configure armazenamento persistente.")
+    st.caption("Armazenamento: Google Sheets exclusivo do Acompanhamento Operacional.")
 
 aba_novo, aba_consulta = st.tabs(["📝 Novo Registro Operacional", "🔍 Consulta, Histórico e PDF"])
 with aba_novo:
@@ -261,7 +268,7 @@ with aba_novo:
                             "" if ident_auto else data_ident.strip(),descricao,arcgis,sia,loggers,retorno,
                             finalizado,data_fim.strip())
             st.success(f"Evento #{eid} registrado com sucesso!")
-        except (ValueError,sqlite3.Error) as exc:
+        except (ValueError, gspread.exceptions.GSpreadException) as exc:
             st.error(str(exc))
 
 with aba_consulta:
@@ -318,5 +325,5 @@ with aba_consulta:
                     atualizar(eid,novo_status,observacao,fin_atual,data_fim_atual.strip())
                     st.success(f"Evento #{eid} atualizado com sucesso!")
                     st.rerun()
-                except (ValueError,sqlite3.Error) as exc:
+                except (ValueError, gspread.exceptions.GSpreadException) as exc:
                     st.error(str(exc))
