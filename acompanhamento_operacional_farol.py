@@ -1,6 +1,5 @@
-"""Módulo 7 — Acompanhamento Operacional | Plataforma COI.
-Conversão Streamlit do aplicativo Gradio/Colab fornecido pelo usuário.
-Persistência: Google Sheets dedicado, separado dos demais módulos.
+"""Acompanhamento Operacional integrado ao Farol (Módulo 3).
+Persistência: Google Sheets dedicado, separado dos dados do mapa.
 """
 import json
 import threading
@@ -122,6 +121,47 @@ def obter_movimentacoes(eid):
     rows.sort(key=lambda r: int(r["id"]) if str(r["id"]).isdigit() else 0)
     return [(r["data_hora"], r["descricao"], r["status_momento"]) for r in rows]
 
+def esta_concluido(evento):
+    """Impede edição tanto por status concluído quanto por finalização explícita."""
+    return (str(evento.get("status", "")).strip().casefold().startswith("concluído")
+            or str(evento.get("finalizado", "")).strip().casefold() == "sim")
+
+
+def editar_ficha(eid, titulo, qtd, unidade, regional, municipio, data_ident,
+                 descricao, arcgis, sia, loggers, retorno):
+    """Edita apenas a ficha ainda aberta, sem apagar o histórico nem alterar o ID."""
+    if not str(titulo).strip() or not str(municipio).strip():
+        raise ValueError("Título e município são obrigatórios.")
+    with _GRAVACAO_LOCK:
+        # Consulta atualizada para não sobrescrever uma ficha encerrada por outro usuário.
+        aba = aba_google("eventos")
+        linhas = aba.get_all_values()
+        matches = [(i, linha) for i, linha in enumerate(linhas[1:], start=2)
+                   if linha and str(linha[0]).strip() == str(eid)]
+        if len(matches) != 1:
+            raise ValueError("Acompanhamento não encontrado ou ID duplicado.")
+        numero_linha, linha = matches[0]
+        atual = dict(zip(CAMPOS_EVENTOS, (linha + [""] * len(CAMPOS_EVENTOS))[:len(CAMPOS_EVENTOS)]))
+        if esta_concluido(atual):
+            raise ValueError("Este acompanhamento já foi concluído e não pode ser editado.")
+        momento = agora()
+        # B:D = título, quantidade, status (mantido); E:N = atualização e campos editáveis.
+        aba.batch_update([
+            {"range": f"B{numero_linha}:C{numero_linha}",
+             "values": [[str(titulo).strip(), int(qtd)]]},
+            {"range": f"E{numero_linha}:N{numero_linha}",
+             "values": [[momento, unidade, regional, str(municipio).strip(),
+                         str(data_ident).strip() or atual.get("data_identificacao", ""),
+                         descricao, arcgis, sia, loggers, retorno]]},
+        ], value_input_option="RAW")
+        # Auditoria: edição é uma movimentação, mas não apaga as anteriores.
+        mov_aba = aba_google("movimentacoes")
+        mid = novo_id(ler_registros("movimentacoes"))
+        mov_aba.append_row([mid, eid, momento, "Dados da ficha atualizados (edição cadastral).",
+                            atual.get("status", "")], value_input_option="RAW")
+        ler_registros.clear()
+
+
 def atualizar(eid, status, observacao, finalizado, data_fim):
     momento = agora()
     if "Concluído" in status or finalizado == "Sim":
@@ -135,6 +175,10 @@ def atualizar(eid, status, observacao, finalizado, data_fim):
         if len(linhas_exatas) != 1:
             raise ValueError("Evento não encontrado ou ID duplicado.")
         numero_linha = linhas_exatas[0]
+        linha_atual = aba.row_values(numero_linha)
+        evento_atual = dict(zip(CAMPOS_EVENTOS, (linha_atual + [""] * len(CAMPOS_EVENTOS))[:len(CAMPOS_EVENTOS)]))
+        if esta_concluido(evento_atual):
+            raise ValueError("Este acompanhamento já foi concluído e não aceita novas movimentações.")
         # Atualiza o intervalo D:E (status e data da última atualização) e O:P (finalização).
         aba.batch_update([
             {"range": f"D{numero_linha}:E{numero_linha}", "values": [[status, momento]]},
@@ -348,18 +392,57 @@ def renderizar_acompanhamento_farol(pode_editar=True):
                     for dt, desc, stat in obter_movimentacoes(eid):
                         st.markdown(f"**⏱️ {dt} — {stat}**")
                         st.write(desc)
-                st.markdown("#### Registrar Nova Movimentação / Atualização")
-                with st.form(f"atualizar_evento_{eid}"):
-                    c1,c2,c3 = st.columns(3)
-                    novo_status = c1.selectbox("Novo Status",STATUS,index=STATUS.index(ev["status"]) if ev["status"] in STATUS else 0)
-                    fin_atual = c2.radio("Finalizado?",SIM_NAO,index=1 if ev["finalizado"]=="Sim" else 0,horizontal=True)
-                    data_fim_atual = c3.text_input("Data Finalização",value=ev["data_finalizacao"] or "")
-                    observacao = st.text_area("Descrição da Nova Atualização Operacional")
-                    gravar = st.form_submit_button("➕ Salvar Movimentação",type="primary")
-                if gravar:
-                    try:
-                        atualizar(eid,novo_status,observacao,fin_atual,data_fim_atual.strip())
-                        st.success(f"Evento #{eid} atualizado com sucesso!")
-                        st.rerun()
-                    except (ValueError, gspread.exceptions.GSpreadException) as exc:
-                        st.error(str(exc))
+                if esta_concluido(ev):
+                    st.info("🔒 Acompanhamento concluído: ficha e movimentações disponíveis somente para consulta.")
+                else:
+                    with st.expander("✏️ Editar dados da ficha (acompanhamento em aberto)", expanded=True):
+                        with st.form(f"editar_ficha_acomp_{eid}"):
+                            a,b,c = st.columns([2,1,2])
+                            titulo_edit = a.text_input("Título do Acompanhamento", value=ev["titulo"])
+                            qtd_edit = b.number_input("Nº de Reclamações", min_value=0,
+                                                      value=int(float(ev.get("qtd_reclamacoes") or 0)), step=1)
+                            municipio_edit = c.text_input("Município", value=ev["municipio"])
+                            a,b,c = st.columns(3)
+                            unidade_edit = a.selectbox("Unidade", UNIDADES,
+                                index=UNIDADES.index(ev["unidade"]) if ev["unidade"] in UNIDADES else 0)
+                            regional_edit = b.selectbox("Regional", REGIONAIS,
+                                index=REGIONAIS.index(ev["regional"]) if ev["regional"] in REGIONAIS else 0)
+                            identificacao_edit = c.text_input("Data de Identificação", value=ev["data_identificacao"])
+                            descricao_edit = st.text_area("Descrição / Relato Inicial", value=ev["descricao"], height=120)
+                            st.markdown("**Validações dos sistemas**")
+                            a,b,c,d = st.columns(4)
+                            arcgis_edit = a.radio("ArcGIS", SIM_NAO, index=1 if ev["arcgis"] == "Sim" else 0,
+                                                  horizontal=True, key=f"edit_arcgis_{eid}")
+                            sia_edit = b.radio("SIA", SIM_NAO, index=1 if ev["sia"] == "Sim" else 0,
+                                               horizontal=True, key=f"edit_sia_{eid}")
+                            loggers_edit = c.radio("Loggers", SIM_NAO, index=1 if ev["loggers"] == "Sim" else 0,
+                                                   horizontal=True, key=f"edit_loggers_{eid}")
+                            retorno_edit = d.radio("Retorno Operação/Controle", SIM_NAO,
+                                                    index=1 if ev["retorno_operacao"] == "Sim" else 0,
+                                                    horizontal=True, key=f"edit_retorno_{eid}")
+                            salvar_edicao = st.form_submit_button("💾 Salvar alterações da ficha", type="primary")
+                        if salvar_edicao:
+                            try:
+                                editar_ficha(eid, titulo_edit, qtd_edit, unidade_edit, regional_edit,
+                                            municipio_edit, identificacao_edit, descricao_edit,
+                                            arcgis_edit, sia_edit, loggers_edit, retorno_edit)
+                                st.success("Ficha atualizada com sucesso. Histórico preservado.")
+                                st.rerun()
+                            except (ValueError, gspread.exceptions.GSpreadException) as exc:
+                                st.error(str(exc))
+                if not esta_concluido(ev):
+                    st.markdown("#### Registrar Nova Movimentação / Atualização")
+                    with st.form(f"atualizar_evento_{eid}"):
+                        c1,c2,c3 = st.columns(3)
+                        novo_status = c1.selectbox("Novo Status",STATUS,index=STATUS.index(ev["status"]) if ev["status"] in STATUS else 0)
+                        fin_atual = c2.radio("Finalizado?",SIM_NAO,index=1 if ev["finalizado"]=="Sim" else 0,horizontal=True)
+                        data_fim_atual = c3.text_input("Data Finalização",value=ev["data_finalizacao"] or "")
+                        observacao = st.text_area("Descrição da Nova Atualização Operacional")
+                        gravar = st.form_submit_button("➕ Salvar Movimentação",type="primary")
+                    if gravar:
+                        try:
+                            atualizar(eid,novo_status,observacao,fin_atual,data_fim_atual.strip())
+                            st.success(f"Evento #{eid} atualizado com sucesso!")
+                            st.rerun()
+                        except (ValueError, gspread.exceptions.GSpreadException) as exc:
+                            st.error(str(exc))
