@@ -691,10 +691,16 @@ def janela_historico_v2(hoje=None):
     return hoje - timedelta(days=DIAS_HISTORICO_V2 - 1), hoje
 
 
+@st.cache_data(ttl=180, show_spinner=False)
 def ler_controle_historico_v2():
-    """Aba de controle pequena; sem criar abas na simples visualização."""
+    """Lê controle do histórico com cache para evitar exceder a quota do Sheets.
+
+    Não confunde erros de acesso/quota com a ausência da aba: retornar {}
+    em caso de falha poderia desabilitar indevidamente as regras de importação.
+    """
     try:
-        aba = obter_planilha(SPREADSHEET_ID).worksheet(NOME_ABA_HISTORICO_V2)
+        # Worksheet compartilhado em cache: evita consultar metadados a cada rerun.
+        aba = obter_aba_para_leitura(NOME_ABA_HISTORICO_V2, SPREADSHEET_ID)
         linhas = aba.get_all_values()
         return {r[0]: r[1] for r in linhas[1:] if len(r) >= 2}
     except gspread.exceptions.WorksheetNotFound:
@@ -710,6 +716,8 @@ def gravar_controle_historico_v2(controle):
         aba = planilha.add_worksheet(title=NOME_ABA_HISTORICO_V2, rows=30, cols=3)
     linhas = [CABECALHO_HISTORICO_V2] + [[k, str(v)] for k, v in sorted(controle.items())]
     aba.update("A1", linhas, value_input_option="RAW")
+    # A próxima consulta precisa refletir a mudança recém-gravada.
+    ler_controle_historico_v2.clear()
 
 
 def validar_importacao_diaria_v2(df, hoje=None):
@@ -3087,7 +3095,6 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
 # ============================================================
 
 st.title("Farol Operacional")
-st.caption("🧪 AMBIENTE DE DEMONSTRAÇÃO — dados isolados do Módulo 3 | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
@@ -3096,7 +3103,17 @@ bairros = descobrir_kmz()
 _tempo_geometria = tempo_execucao.perf_counter() - _inicio_geometria
 
 # A ativação inicial é explícita. Depois disso, limpeza na primeira execução do dia.
-controle_historico_v2 = ler_controle_historico_v2()
+try:
+    controle_historico_v2 = ler_controle_historico_v2()
+except gspread.exceptions.APIError as erro_historico:
+    # Falha fechada: sem controle confiável, não executar limpeza nem importar
+    # O.S. sob regras possivelmente incorretas.
+    codigo_http = getattr(getattr(erro_historico, "response", None), "status_code", None)
+    if codigo_http == 429:
+        st.error("O Google Sheets atingiu o limite temporário de consultas. Aguarde aproximadamente um minuto e atualize a página.")
+    else:
+        st.error("Não foi possível consultar o controle de histórico do Farol no Google Sheets. Verifique o acesso à planilha e os logs do aplicativo.")
+    st.stop()
 historico_v2_ativo = controle_historico_v2.get("ativo") == "SIM"
 if historico_v2_ativo and PODE_EDITAR_FAROL:
     try:
