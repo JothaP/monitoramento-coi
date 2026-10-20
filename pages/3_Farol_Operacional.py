@@ -44,6 +44,7 @@ from branca.element import Element
 
 from auth import verificar_autenticacao, tem_acesso_modulo
 from integracao_acompanhamento_producao import (chave_concentracao, localizar_vinculo, listar_vinculos, dados_acompanhamento, historico_evento, texto_pdf)
+from acompanhamento_operacional_farol import renderizar_acompanhamento_farol
 
 
 # ============================================================
@@ -82,6 +83,11 @@ if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_DEMO_CONHECIDO:
     st.stop()
 if not ID_PLANILHA_ACOMP or ID_PLANILHA_ACOMP == SPREADSHEET_ID:
     st.error("Configure acompanhamento_operacional_spreadsheet_id com uma OUTRA planilha Google Sheets, independente da planilha do Farol.")
+    st.stop()
+
+# A ficha é uma visualização interna do Farol; não depende mais de pages/7_Modulo_7.py.
+if st.session_state.get("farol_exibir_acompanhamento"):
+    renderizar_acompanhamento_farol(pode_editar=PODE_EDITAR_FAROL)
     st.stop()
 
 NOME_ABA_POCOS = "POCOS"
@@ -3518,7 +3524,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                                     "evento_id": str(vinculo_acomp["evento_id"]) if vinculo_acomp else "",
                                     "origem": "producao",
                                 }
-                                st.switch_page("pages/7_Modulo_7.py")
+                                st.session_state["farol_exibir_acompanhamento"] = True
+                                st.rerun()
                             if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
                                          key=f"farol_v2_foco_{abrangencia}_{codigo}", disabled=ativa):
                                 st.session_state["farol_v2_concentracao"] = str(codigo)
