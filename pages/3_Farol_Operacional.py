@@ -2199,23 +2199,23 @@ def secao_pdf_acompanhamento(concentracao, largura=26.6*cm):
                          if not vinculo else "Ficha vinculada não localizada."))
         return saida
 
-    # 4 colunas na mesma linha, aproveitando a largura da página e evitando
-    # a antiga tabela vertical de 11 linhas, que desperdiçava quase uma página.
-    linhas = [
-        [("Nº acompanhamento", "#" + str(dados.get("id", ""))),
-         ("Status / Finalizado", f"{dados.get('status', '')} · {dados.get('finalizado', '')}"),
-         ("Município / Regional", f"{dados.get('municipio', '')} · {dados.get('regional', '')}"),
-         ("Reclamações / Unidade", f"{dados.get('qtd_reclamacoes', '')} · {dados.get('unidade', '')}")],
-        [("Identificação", dados.get("data_identificacao", "")),
-         ("Última atualização", dados.get("ultima_atualizacao", "")),
-         ("Data de finalização", dados.get("data_finalizacao", "")),
-         ("Título", dados.get("titulo", ""))],
+    # Apenas dados essenciais na ficha impressa: os campos administrativos
+    # (número, título, identificação e atualização) continuam no Sheets,
+    # mas não ocupam espaço no PDF.
+    campos_resumo = [
+        ("Status / Finalizado", f"{dados.get('status', '')} · {dados.get('finalizado', '')}"),
+        ("Município / Regional", f"{dados.get('municipio', '')} · {dados.get('regional', '')}"),
+        ("Reclamações / Unidade", f"{dados.get('qtd_reclamacoes', '')} · {dados.get('unidade', '')}"),
     ]
-    celulas = [[campo(k, v) for k, v in linha] for linha in linhas]
-    grade = Table(celulas, colWidths=[largura/4]*4, hAlign="LEFT")
+    if str(dados.get("data_finalizacao", "") or "").strip():
+        campos_resumo.append(("Data de finalização", dados["data_finalizacao"]))
+
+    grade = Table([[campo(k, v) for k, v in campos_resumo]],
+                  colWidths=[largura / len(campos_resumo)] * len(campos_resumo),
+                  hAlign="LEFT")
     grade.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [fundo, colors.white]),
+        ("BACKGROUND", (0, 0), (-1, -1), fundo),
         ("LINEBELOW", (0, 0), (-1, -1), .3, borda),
         ("LEFTPADDING", (0, 0), (-1, -1), 7),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
