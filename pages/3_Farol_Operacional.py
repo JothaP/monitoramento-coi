@@ -43,6 +43,7 @@ from streamlit_folium import st_folium
 from branca.element import Element
 
 from auth import verificar_autenticacao, tem_acesso_modulo
+from integracao_acompanhamento_producao import (chave_concentracao, localizar_vinculo, listar_vinculos, dados_acompanhamento, historico_evento, texto_pdf)
 
 
 # ============================================================
@@ -68,17 +69,19 @@ if PERFIL_FAROL not in {"admin", "usuario", "operador"}:
 PODE_EDITAR_FAROL = PERFIL_FAROL in {"admin", "usuario"}
 
 def exigir_edicao_farol():
-    """Impede mutações de dados por perfis de somente leitura."""
+    """Bloqueia mutações mesmo quando funções são chamadas sem seus botões."""
     if not PODE_EDITAR_FAROL:
         raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
 
-# Produção exige identificação explícita para evitar exclusões na base errada.
-# Definir em Streamlit Cloud > Secrets:
-# farol_producao_spreadsheet_id = "ID_DA_PLANILHA_DE_PRODUCAO"
+# Fontes independentes: Farol (mapa/O.S./eventos) e Acompanhamento (fichas/histórico).
 SPREADSHEET_ID = str(st.secrets.get("farol_producao_spreadsheet_id", "")).strip()
 SPREADSHEET_ID_DEMO_CONHECIDO = "1plvaCyZ23zAIjasrFnJxZm9Q-jB85AbCtSjIizhuoKg"
+ID_PLANILHA_ACOMP = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
 if not SPREADSHEET_ID or SPREADSHEET_ID == SPREADSHEET_ID_DEMO_CONHECIDO:
-    st.error("Configure farol_producao_spreadsheet_id em Secrets com o ID da planilha de produção. A base de demonstração não pode ser utilizada.")
+    st.error("Configure farol_producao_spreadsheet_id com o ID da planilha de produção.")
+    st.stop()
+if not ID_PLANILHA_ACOMP or ID_PLANILHA_ACOMP == SPREADSHEET_ID:
+    st.error("Configure acompanhamento_operacional_spreadsheet_id com uma OUTRA planilha Google Sheets, independente da planilha do Farol.")
     st.stop()
 
 NOME_ABA_POCOS = "POCOS"
@@ -2140,6 +2143,73 @@ def mapa_exclusivo_concentracao(concentracao, os_grupo, ativos):
     return mapa
 
 
+def secao_pdf_acompanhamento(concentracao, largura=26.6*cm):
+    """Ficha visual reutilizável nos relatórios individual e panorâmico."""
+    chave = str(concentracao.get("CHAVE_ACOMPANHAMENTO", "") or "")
+    vinculo = next((v for v in listar_vinculos() if v["chave"] == chave), None) if chave else None
+    dados = dados_acompanhamento().get(str(vinculo["evento_id"])) if vinculo else None
+    estilo = ParagraphStyle("AcompCorpo", fontName="Helvetica", fontSize=8, leading=11, textColor=colors.HexColor("#25354B"))
+    branco = ParagraphStyle("AcompCabecalho", parent=estilo, fontName="Helvetica-Bold", fontSize=11, leading=15, textColor=colors.white)
+    rotulo = ParagraphStyle("AcompRotulo", parent=estilo, fontName="Helvetica-Bold", fontSize=7, textColor=colors.HexColor("#52637B"))
+    texto = ParagraphStyle("AcompTexto", parent=estilo, fontSize=8, leading=12)
+    def par(v, estilo=texto):
+        return Paragraph(xml_escape(str(v if v not in (None, "") else "Não informado")), estilo)
+    topo = Table([[Paragraph("ACOMPANHAMENTO OPERACIONAL", branco)]], colWidths=[largura])
+    topo.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#193C65")),("TOPPADDING",(0,0),(-1,-1),11),("BOTTOMPADDING",(0,0),(-1,-1),11),("LEFTPADDING",(0,0),(-1,-1),12)]))
+    saida = [Spacer(1,12), topo, Spacer(1,8)]
+    if not vinculo or not dados:
+        saida.append(par("Nenhum acompanhamento operacional iniciado para esta concentração." if not vinculo else "Ficha vinculada não localizada."))
+        return saida
+    campos = [
+        ("Nº do acompanhamento", "#"+str(dados.get("id", ""))),
+        ("Status atual", dados.get("status", "")),
+        ("Título", dados.get("titulo", "")),
+        ("Última atualização", dados.get("ultima_atualizacao", "")),
+        ("Município", dados.get("municipio", "")),
+        ("Reclamações", dados.get("qtd_reclamacoes", "")),
+        ("Unidade", dados.get("unidade", "")),
+        ("Regional", dados.get("regional", "")),
+        ("Identificação", dados.get("data_identificacao", "")),
+        ("Finalizado", dados.get("finalizado", "")),
+        ("Data de finalização", dados.get("data_finalizacao", "")),
+    ]
+    celulas = [[par(nome,rotulo),par(valor)] for nome,valor in campos]
+    tabela = Table(celulas, colWidths=[largura*.29, largura*.71], hAlign="LEFT")
+    tabela.setStyle(TableStyle([("ROWBACKGROUNDS",(0,0),(-1,-1),[colors.HexColor("#F1F5FA"),colors.white]),("LINEBELOW",(0,0),(-1,-1),.25,colors.HexColor("#DCE4EE")),("VALIGN",(0,0),(-1,-1),"TOP"),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),9)]))
+    saida.extend([tabela,Spacer(1,9)])
+    def titulo_secao(t):
+        return Paragraph("<b>"+xml_escape(t)+"</b>",ParagraphStyle("AcompSec",parent=estilo,fontName="Helvetica-Bold",fontSize=9,textColor=colors.HexColor("#193C65"),spaceBefore=5,spaceAfter=5))
+    saida.extend([titulo_secao("DESCRIÇÃO DA OCORRÊNCIA"),par(dados.get("descricao", "")),Spacer(1,8),titulo_secao("VALIDAÇÕES OPERACIONAIS")])
+    validacoes = [("ArcGIS",dados.get("arcgis","")),("SIA",dados.get("sia","")),("Loggers",dados.get("loggers","")),("Retorno Operação/Controle",dados.get("retorno_operacao",""))]
+    tval = Table([[par(k,rotulo),par(v)] for k,v in validacoes],colWidths=[largura*.42,largura*.58])
+    tval.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EDF3F9")),("LINEBELOW",(0,0),(-1,-1),.3,colors.HexColor("#D7E0EC")),("VALIGN",(0,0),(-1,-1),"TOP"),("TOPPADDING",(0,0),(-1,-1),6),("BOTTOMPADDING",(0,0),(-1,-1),6),("LEFTPADDING",(0,0),(-1,-1),9)]))
+    saida.extend([tval,Spacer(1,9),titulo_secao("HISTÓRICO DE MOVIMENTAÇÕES")])
+    movimentos = historico_evento(vinculo["evento_id"])
+    # O movimento de criação reproduz o relato inicial acima; não duplicar no PDF.
+    movimentos = [m for m in movimentos if not str(m.get("descricao", "")).startswith("Registro inicial criado. Relato:")]
+    if movimentos:
+        for m in movimentos:
+            cab = f"{m.get('data_hora','')}  |  {m.get('status_momento','')}"
+            bloco = Table([[par(cab,rotulo)],[par(m.get("descricao", ""))]],colWidths=[largura])
+            bloco.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#F4F7FB")),("LINEBEFORE",(0,0),(0,-1),3,colors.HexColor("#3975AC")),("TOPPADDING",(0,0),(-1,-1),5),("BOTTOMPADDING",(0,0),(-1,-1),5),("LEFTPADDING",(0,0),(-1,-1),10)]))
+            saida.extend([KeepTogether([bloco,Spacer(1,5)])])
+    else:
+        saida.append(par("Sem movimentações posteriores ao registro inicial."))
+    return saida
+
+
+def texto_acompanhamento_relatorio(concentracao):
+    """Consulta em tempo de geração, sem reutilizar dados de sessão obsoletos."""
+    chave = str(concentracao.get("CHAVE_ACOMPANHAMENTO", "") or "")
+    if not chave:
+        return "Acompanhamento operacional: não iniciado."
+    vinculo = next((v for v in listar_vinculos() if v["chave"] == chave), None)
+    if not vinculo:
+        return "Acompanhamento operacional: não iniciado."
+    dados = dados_acompanhamento().get(str(vinculo["evento_id"]))
+    return texto_pdf(vinculo, dados, historico_evento(vinculo["evento_id"]))
+
+
 def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_mapa=None):
     """Gera PDF em memória, sem gravar ou alterar informações no Sheets."""
     fonte_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -2239,6 +2309,7 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
         cols = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Início", "Término Real", "Serviço"]
         historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in eventos_relacionados.iterrows()],
                                 [3.1*cm, 2.5*cm, 3.0*cm, 4.5*cm, 4.2*cm, 4.2*cm, 4.6*cm]))
+    historia.extend(secao_pdf_acompanhamento(concentracao, largura=26.6*cm))
     historia.append(Spacer(1, 0.3*cm))
     historia.append(p("Nota: a relação de eventos é indicativa, baseada na coincidência de bairros e município; não comprova causalidade.", pequeno))
     doc.build(historia)
@@ -2755,7 +2826,6 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             grupo = (pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
                      if "_grupo" in pontos_cluster.columns else pd.DataFrame())
             codigo = str(c["ID_CONCENTRACAO"])
-            nota = str(c.get("OBSERVACAO_ANALISTA", "") or "")
             nomes_cidades = cidades_da_concentracao(c, pontos_cluster)
             bairros_concentracao = str(c.get("BAIRROS", "") or "").replace(";", ", ")
             cabecalho = " - ".join([codigo, ", ".join(nomes_cidades) or "MUNICÍPIO NÃO INFORMADO",
@@ -2769,7 +2839,6 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             resumo = [
                 Paragraph(xml_escape(f"{int(c['QTD_OS'])} O.S. · {int(c['QTD_MATRICULAS'])} matrículas distintas"), normal),
                 Spacer(1, 5),
-                Paragraph("<b>Acompanhamento:</b> " + xml_escape(nota or "Sem observação registrada"), pequeno),
             ]
             # Usar os registros dos eventos associados à concentração, e não somente sua quantidade.
             _, _, eventos_da_concentracao = dados_relatorio_concentracao(
@@ -2861,6 +2930,8 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ]))
             historia.append(ficha)
+            historia.append(Spacer(1, 7))
+            historia.extend(secao_pdf_acompanhamento(c, largura=26.6*cm))
 
             # Se houver excedente, continuar abaixo do mapa com o mesmo
             # fundo cinza, cabeçalho azul-claro e listras da tabela lateral.
@@ -2943,7 +3014,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
 # ============================================================
 
 st.title("Farol Operacional")
-st.caption("MÓDULO 3 — PRODUÇÃO | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
+st.caption("🧪 AMBIENTE DE DEMONSTRAÇÃO — dados isolados do Módulo 3 | O.S. + Eventos + Bairros geográficos + Poços/Ativos + Loggers")
 
 # Carregamento automático de polígonos de todos os municípios disponíveis.
 # A ausência de arquivo geográfico é normal e não gera avisos no mapa.
@@ -3002,7 +3073,7 @@ if historico_v2_ativo:
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### 🚰 Farol Operacional — Módulo 3")
+    st.markdown("### 🚰 Farol V2 — Módulo 7")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
@@ -3406,12 +3477,19 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                             f"⚡ {len(eventos_do_grupo)} evento(s) relacionado(s)"
                             if not eventos_do_grupo.empty else "Sem evento relacionado"
                         )
-                        municipio_nota, chave_nota, texto_nota = identificar_observacao(
-                            concentracao, os_grupo, observacoes_df, raio_concentracao
-                        )
-                        resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "OBSERVACAO_ANALISTA"] = texto_nota
+                        municipio_nota = cidades_grupo[0] if cidades_grupo else ""
+                        numeros_os = [str(x).strip() for x in os_grupo.get("Nº da O.S", []) if str(x).strip()]
+                        municipio_acomp = cidades_grupo[0] if cidades_grupo else municipio_nota
+                        chave_acomp = chave_concentracao(municipio_acomp, concentracao["LATITUDE"], concentracao["LONGITUDE"], numeros_os)
+                        concentracoes.loc[concentracoes["ID_CONCENTRACAO"] == codigo, "CHAVE_ACOMPANHAMENTO"] = chave_acomp
+                        resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "CHAVE_ACOMPANHAMENTO"] = chave_acomp
+                        try:
+                            vinculo_acomp = localizar_vinculo(chave_acomp, municipio_acomp, concentracao["LATITUDE"], concentracao["LONGITUDE"], numeros_os)
+                        except Exception as erro:
+                            vinculo_acomp = None
+                            st.warning(f"Acompanhamentos indisponíveis: {erro}")
                         resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
-                        indicador_nota = ("📝 " + texto_nota.replace("\n", " ")[:110] + ("…" if len(texto_nota) > 110 else "")) if texto_nota.strip() else "Sem acompanhamento registrado"
+                        indicador_nota = "📋 Acompanhamento iniciado" if vinculo_acomp else "Acompanhamento não iniciado"
                         bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
                         titulo = (
                             f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'}"
@@ -3425,27 +3503,27 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         # evitando gerar tabelas e componentes pesados para as demais.
                         ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
                         with st.expander(titulo, expanded=ativa):
+                            if vinculo_acomp:
+                                st.success(f"Acompanhamento operacional #{vinculo_acomp['evento_id']} vinculado.")
+                            else:
+                                st.caption("Nenhuma ficha operacional iniciada para este conjunto de O.S.")
+                            rotulo_acomp = "📂 Abrir Acompanhamento Operacional" if vinculo_acomp else "📝 Iniciar Acompanhamento Operacional"
+                            if st.button(rotulo_acomp, key=f"farol_acomp_{abrangencia}_{codigo}", disabled=not PODE_EDITAR_FAROL):
+                                st.session_state["acomp_farol_contexto"] = {
+                                    "chave": chave_acomp, "codigo": str(codigo),
+                                    "municipio": municipio_acomp, "bairros": bairros_grupo,
+                                    "latitude": float(concentracao["LATITUDE"]),
+                                    "longitude": float(concentracao["LONGITUDE"]),
+                                    "os": numeros_os, "qtd": int(concentracao["QTD_OS"]),
+                                    "evento_id": str(vinculo_acomp["evento_id"]) if vinculo_acomp else "",
+                                    "origem": "producao",
+                                }
+                                st.switch_page("pages/7_Modulo_7.py")
                             if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
                                          key=f"farol_v2_foco_{abrangencia}_{codigo}", disabled=ativa):
                                 st.session_state["farol_v2_concentracao"] = str(codigo)
                                 st.session_state["farol_concentracao_expandida"] = str(codigo)
                                 st.rerun()
-                            # As informações são exibidas ao expandir o painel,
-                            # independentemente de abrir o mapa da concentração.
-                            if PODE_EDITAR_FAROL:
-                                nota_editada = st.text_area("Observação do analista", value=texto_nota,
-                                                            key=f"farol_v2_nota_{abrangencia}_{codigo}_{chave_nota}", height=90,
-                                                            placeholder="Ex.: Contato com a operação, verificação do abastecimento, providências...")
-                                if st.button("💾 Salvar acompanhamento", key=f"farol_v2_salvar_nota_{abrangencia}_{codigo}"):
-                                    try:
-                                        salvar_observacao_concentracao(chave_nota, municipio_nota,
-                                            float(concentracao["LATITUDE"]), float(concentracao["LONGITUDE"]), nota_editada)
-                                        st.success("Acompanhamento salvo.")
-                                        st.rerun()
-                                    except Exception as erro:
-                                        st.error(f"Não foi possível salvar: {erro}")
-                            else:
-                                st.caption("Observação do analista: " + (texto_nota or "Nenhuma observação registrada."))
                             exibir_relatorio_concentracao(
                                 codigo, concentracoes, pontos_cluster, proximidades,
                                 df_eventos, int(raio_operacional), bairros
