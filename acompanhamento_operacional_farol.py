@@ -13,7 +13,10 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 from fpdf import FPDF
-from integracao_acompanhamento_producao import registrar_vinculo as registrar_vinculo_producao
+from integracao_acompanhamento_producao import (
+    registrar_vinculo as registrar_vinculo_producao,
+    invalidar_cache_acompanhamento,
+)
 
 
 STATUS = ["Aguardando motivo", "Concluído - causa identificada", "Concluído - causa não identificada"]
@@ -96,6 +99,7 @@ def cadastrar(titulo, qtd, status, unidade, regional, municipio, data_ident, des
         ev_aba.append_row(dados, value_input_option="RAW")
         mov_aba.append_row([mid, eid, momento, f"Registro inicial criado. Relato: {descricao}", status], value_input_option="RAW")
         ler_registros.clear()
+        invalidar_cache_acompanhamento()
     return eid
 
 def listar(status="Todos", municipio="", regional="Todas", unidade="Todas", finalizado="Todos"):
@@ -160,6 +164,7 @@ def editar_ficha(eid, titulo, qtd, unidade, regional, municipio, data_ident,
         mov_aba.append_row([mid, eid, momento, "Dados da ficha atualizados (edição cadastral).",
                             atual.get("status", "")], value_input_option="RAW")
         ler_registros.clear()
+        invalidar_cache_acompanhamento()
 
 
 def atualizar(eid, status, observacao, finalizado, data_fim):
@@ -188,6 +193,7 @@ def atualizar(eid, status, observacao, finalizado, data_fim):
         mid = novo_id(ler_registros("movimentacoes"))
         mov_aba.append_row([mid, eid, momento, texto, status], value_input_option="RAW")
         ler_registros.clear()
+        invalidar_cache_acompanhamento()
 
 def seguro(texto):
     substituicoes = {'•':'-', '—':'-', '–':'-', '“':'"', '”':'"', '‘':"'", '’':"'", '⚠️':'!', '📌':'', '⏱️':''}
