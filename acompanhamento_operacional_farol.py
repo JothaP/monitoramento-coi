@@ -385,7 +385,7 @@ def renderizar_acompanhamento_farol(pode_editar=True):
                 with c1:
                     try:
                         pdf_bytes = gerar_pdf(eid)
-                        st.download_button("📄 Baixar Relatório PDF Executivo",data=pdf_bytes,
+                        st.download_button("📄 Baixar ficha de acompanhamento (sem mapa)",data=pdf_bytes,
                                            file_name=f"Relatorio_Executivo_COI_{eid}.pdf",mime="application/pdf",
                                            use_container_width=True)
                     except Exception as exc:
@@ -395,6 +395,8 @@ def renderizar_acompanhamento_farol(pode_editar=True):
                     for dt, desc, stat in obter_movimentacoes(eid):
                         st.markdown(f"**⏱️ {dt} — {stat}**")
                         st.write(desc)
+                if contexto_farol:
+                    st.caption("Para baixar o PDF completo com o mapa da concentração, volte ao Farol e use ‘Preparar PDF com mapa da concentração’ na ficha correspondente.")
                 if esta_concluido(ev):
                     st.info("🔒 Acompanhamento concluído: ficha e movimentações disponíveis somente para consulta.")
                 else:
