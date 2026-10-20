@@ -18,3 +18,4 @@ reportlab
 shapely
 pyproj
 playwright
+fpdf2
