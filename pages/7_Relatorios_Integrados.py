@@ -1174,36 +1174,6 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
     historia.append(P("Atenção: a média é amostral, calculada sobre os pontos de aferição "
                       "cadastrados no intervalo. Não representa automaticamente toda a pressão "
                       "da rede de distribuição ou do bairro.",pequeno))
-    historia.append(PageBreak())
-
-    historia.append(P("REGISTROS INDIVIDUAIS DE PRESSÃO",titulo))
-    historia.append(P(f"{len(base)} medições válidas registradas no período. "
-                     "O campo de O.S. é apenas uma correspondência de matrícula, "
-                     "município e dia, quando identificável.",pequeno))
-    historia.append(Spacer(1,9))
-    colunas=["Data","Município / Bairro","Matrícula","mca","O.S. relacionada*","Observação"]
-    detalhe=[]
-    base_ordenada=base.sort_values(["_municipio","_bairro","_data","Matricula"],
-                                  na_position="last")
-    for _,r in base_ordenada.iterrows():
-        data=r.get("_data")
-        dia=data.strftime("%d/%m/%Y") if pd.notna(data) else str(r.get("Data",""))
-        valor_reg=r.get("_pressao")
-        observacao=str(r.get("Observacao","") or "").strip()
-        # Evita uma observação isolada imensa travar a paginação; CSV preserva o texto integral.
-        if len(observacao)>350:observacao=observacao[:347]+"…"
-        rel=str(r.get("O.S. relacionada","") or "").strip()
-        if len(rel)>95:rel=rel[:92]+"…"
-        detalhe.append([dia,f"{r.get('Bairro','')} / {r.get('Municipio','')}",
-            str(r.get("Matricula","") or ""),
-            f"{float(valor_reg):g}" if pd.notna(valor_reg) else "—",
-            rel or "—",observacao])
-    historia.append(tabela(colunas,detalhe,[2.5*cm,6.0*cm,2.7*cm,1.7*cm,5.5*cm,7.6*cm]))
-    historia.append(Spacer(1,8))
-    historia.append(P("* O Módulo 1 não armazena número da O.S.; a referência foi obtida "
-                      "por matrícula + município + mesma data na base do Farol. "
-                      "A correspondência não é confirmação de aferição na abertura da O.S. "
-                      "Registros sem correspondência aparecem com '—'.",pequeno))
 
 
 def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
@@ -1212,7 +1182,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
     """Relatório do Farol: panorama + fichas com mapa e O.S. ao lado.
 
     Mantém ativos, eventos, classificação temporal de O.S. e acompanhamento.
-    Detalha medições associadas nas fichas e todas as aferições no anexo M1.
+    Apresenta panorama de aferições e indicadores agregados por bairro no anexo M1.
     Não modifica nem importa a página do Módulo 3.
     """
     contexto = contexto or {}
@@ -1254,7 +1224,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                       [largura*.37,largura*.27,largura*.36])
 
     historia=[P("Farol Operacional — Relatório de concentrações",titulo),
-             P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y} | Gerado em {datetime.now():%d/%m/%Y %H:%M}"
+             P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}"
                + (" | Unidade: " + str(concentracoes.iloc[0]["_unidade"]) if concentracoes is not None and not concentracoes.empty else ""),normal),
              Spacer(1,9)]
     # Primeira parte: Farol na estrutura original, SEM pontos de pressão.
@@ -1606,14 +1576,6 @@ if r:
         for item in achados_baixa_pressao(bp,bairros,bp):
             st.write("• "+item)
         st.dataframe(bairros,hide_index=True,use_container_width=True)
-        st.subheader("Medições individuais e O.S. relacionadas")
-        campos=["Data","Municipio","Bairro","Matricula","Pressao_MCA","O.S. relacionada","Observacao"]
-        st.caption("O.S. relacionada somente por matrícula + município + mesma data; "
-                   "ausência de vínculo não impede o registro de pressão de aparecer.")
-        st.dataframe(bp.reindex(columns=campos),hide_index=True,use_container_width=True)
-        st.download_button("📥 Baixar medições detalhadas (CSV)",
-            data=bp.reindex(columns=campos).to_csv(index=False,sep=";").encode("utf-8-sig"),
-            file_name="medicoes_pressao_modulo1.csv",mime="text/csv")
 
     else:
         origem=r["contagem_origem"]
