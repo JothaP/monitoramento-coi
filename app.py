@@ -514,23 +514,9 @@ if ambiente_teste or modulo_7:
     st.markdown("")
     col7, col8, col9 = st.columns(3)
 
-    # Mantém o Ambiente de Teste à esquerda para o administrador.
-    if ambiente_teste:
-        with col7:
-            st.markdown("#### 🧪 Ambiente de Teste")
-            st.markdown("**Ferramentas em desenvolvimento**")
-            st.caption("Acesso exclusivo do administrador")
-            if st.button(
-                "Acessar Ambiente de Teste",
-                type="primary",
-                use_container_width=True,
-                key="acessar_ambiente_teste",
-            ):
-                st.switch_page("pages/Ambiente_de_Teste.py")
-
-    # Se não houver Ambiente de Teste, o Módulo 7 ocupa a coluna esquerda.
+    # O Módulo 7 vem primeiro; Ambiente de Teste é sempre o último botão.
     if modulo_7:
-        with (col8 if ambiente_teste else col7):
+        with col7:
             st.markdown("#### 📊 Módulo 7")
             st.markdown("**Relatórios Integrados**")
             st.caption("Concentrações e baixa pressão")
@@ -541,6 +527,20 @@ if ambiente_teste or modulo_7:
                 key="acessar_relatorios_integrados",
             ):
                 st.switch_page("pages/7_Relatorios_Integrados.py")
+
+    # Exclusivo do administrador, depois de todos os módulos.
+    if ambiente_teste:
+        with (col8 if modulo_7 else col7):
+            st.markdown("#### 🧪 Ambiente de Teste")
+            st.markdown("**Ferramentas em desenvolvimento**")
+            st.caption("Acesso exclusivo do administrador")
+            if st.button(
+                "Acessar Ambiente de Teste",
+                type="primary",
+                use_container_width=True,
+                key="acessar_ambiente_teste",
+            ):
+                st.switch_page("pages/Ambiente_de_Teste.py")
 
 
 # ============================================================
