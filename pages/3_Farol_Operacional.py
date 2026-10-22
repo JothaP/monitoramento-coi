@@ -3611,8 +3611,10 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                                 st.success(indicador_nota)
                             else:
                                 st.caption("Nenhuma ficha operacional iniciada para este conjunto de O.S.")
-                            rotulo_acomp = ("📋 Consultar Acompanhamento" if "concluído" in indicador_nota
-                                            else "✏️ Abrir / Editar Acompanhamento") if vinculo_acomp else "📝 Iniciar Acompanhamento"
+                            rotulo_acomp = (
+                                ("✏️ Abrir / Editar Acompanhamento" if PODE_EDITAR_FAROL else "📋 Consultar Acompanhamento")
+                                if vinculo_acomp else "📝 Iniciar Acompanhamento"
+                            )
                             if st.button(rotulo_acomp, key=f"farol_acomp_{abrangencia}_{codigo}",
                                          disabled=bool(erro_acomp_visivel)):
                                 contexto_popup = {
