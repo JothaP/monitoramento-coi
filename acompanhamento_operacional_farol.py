@@ -56,8 +56,12 @@ def aba_google(nome):
     if not primeira:
         aba.update(range_name="A1", values=[colunas])
     elif nome == "eventos" and primeira == colunas[:-1]:
-        # Evolução não destrutiva: 16 colunas antigas continuam intactas.
-        # Somente a coluna Q armazena a nova marcação da causa.
+        # Evolução não destrutiva: amplia a grade ANTES de escrever na coluna Q.
+        # Uma aba legada pode ter apenas 16 colunas (A:P); escrever em Q1
+        # sem antes ampliar a grade causa APIError [400] no Google Sheets.
+        # Não altera o total de linhas nem os registros/cabeçalhos existentes.
+        if aba.col_count < len(colunas):
+            aba.resize(cols=len(colunas))
         aba.update(range_name="Q1", values=[["causa_identificada"]], value_input_option="RAW")
     elif primeira != colunas:
         raise ValueError(f"A aba '{nome}' possui cabeçalhos diferentes dos esperados. Faça backup e confira a estrutura antes de continuar.")
