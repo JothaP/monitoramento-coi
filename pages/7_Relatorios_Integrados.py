@@ -462,105 +462,135 @@ def achados_baixa_pressao(pressao, bairros, os_vinculadas=None):
     return achados
 
 
+# Cores e faixas iguais nos dashboards do Streamlit e no PDF.
+CORES_FAIXAS_PRESSAO = {
+    "0 mca": "#e64e62",
+    ">5 a 10 mca": "#e6bc34",
+    ">0 a 5 mca": "#f3a53a",
+    ">10 a 15 mca": "#cf71a9",
+    ">15 mca": "#8554b8",
+}
+FUNDO_GRAFICO_PRESSAO = "#0e1117"
+
+
+def contagem_faixas_dashboard(valores):
+    """Cinco classes mutuamente exclusivas; 0 mca é medição válida."""
+    p = pd.to_numeric(valores, errors="coerce").dropna()
+    return {
+        "0 mca": int(p.eq(0).sum()),
+        ">5 a 10 mca": int(((p > 5) & (p <= 10)).sum()),
+        ">0 a 5 mca": int(((p > 0) & (p <= 5)).sum()),
+        ">10 a 15 mca": int(((p > 10) & (p <= 15)).sum()),
+        ">15 mca": int(p.gt(15).sum()),
+    }
+
+
 def _chart_faixas_vetorial(pressao, fonte="Helvetica"):
-    """Distribuição em faixas mutuamente exclusivas, desenhada em vetores no PDF."""
-    grupos=[("0 mca",lambda p:p.eq(0),"#e64e62"),
-            (">0–5",lambda p:(p>0)&(p<=5),"#f3a53a"),
-            (">5–10",lambda p:(p>5)&(p<=10),"#e6bc34"),
-            (">10–15",lambda p:(p>10)&(p<=15),"#cf71a9"),
-            (">15",lambda p:p>15,"#8554b8")]
-    serie=pd.to_numeric(pressao["_pressao"],errors="coerce").dropna()
-    total=max(len(serie),1)
-    d=Drawing(735,98)
-    d.add(String(4,83,"Distribuição das medições por faixa de pressão",fontName=fonte,fontSize=11,
-                 fillColor=colors.HexColor("#193c65")))
-    x0=5;y0=49;largura=724
-    d.add(Rect(x0,y0,largura,18,fillColor=colors.HexColor("#e6edf4"),strokeColor=None))
-    atual=x0
-    for rotulo,teste,hexcor in grupos:
-        qtd=int(teste(serie).sum());w=largura*qtd/total
-        if w>0:d.add(Rect(atual,y0,w,18,fillColor=colors.HexColor(hexcor),strokeColor=None))
-        atual+=w
-    for i,(nome,teste,c) in enumerate(grupos):
-        x=5+i*146
-        d.add(Rect(x,20,9,9,fillColor=colors.HexColor(c),strokeColor=None))
-        v=int(teste(serie).sum())
-        d.add(String(x+14,20,nome+f": {v} ({100*v/total:.0f}%)",fontName=fonte,fontSize=8.1,
-                     fillColor=colors.HexColor("#263b51")))
-    d.add(String(5,3,"A faixa >10 a 15 mca entra nos indicadores, mas é ocultada no mapa, conforme o Módulo 1.",
-                 fontName=fonte,fontSize=7.8,fillColor=colors.HexColor("#637489")))
+    """Gráfico de rosca vetorial, com o visual escuro da referência."""
+    from reportlab.graphics.shapes import Wedge
+
+    largura, altura = 355, 267
+    d = Drawing(largura, altura)
+    bg = colors.HexColor(FUNDO_GRAFICO_PRESSAO)
+    branco = colors.HexColor("#f7f8fb")
+    d.add(Rect(0, 0, largura, altura, fillColor=bg, strokeColor=None))
+    d.add(String(13, 241, "Distribuição por faixa de pressão",
+                 fontName=fonte, fontSize=11.7, fillColor=branco))
+
+    grupos = contagem_faixas_dashboard(pressao["_pressao"])
+    total = sum(grupos.values())
+    centro_x, centro_y, raio_externo, raio_interno = 177, 146, 78, 43
+    # O ângulo inicial posiciona a primeira faixa do lado direito, como na imagem.
+    angulo = -180 * grupos["0 mca"] / max(total, 1)
+    for nome, qtd in grupos.items():
+        if qtd <= 0 or not total:
+            continue
+        abertura = 360 * qtd / total
+        inicio = angulo
+        fim = angulo + min(abertura, 359.999)
+        cor = colors.HexColor(CORES_FAIXAS_PRESSAO[nome])
+        d.add(Wedge(centro_x, centro_y, raio_externo, inicio, fim,
+                    fillColor=cor, strokeColor=None))
+        if abertura >= 28:
+            ang_medio = math.radians(inicio + abertura / 2)
+            rr = (raio_externo + raio_interno) / 2
+            texto = f"{100 * qtd / total:.0f}%"
+            x = centro_x + rr * math.cos(ang_medio)
+            y = centro_y + rr * math.sin(ang_medio) - 4
+            largura_texto = pdfmetrics.stringWidth(texto, fonte, 10)
+            cor_texto = (bg if nome == ">5 a 10 mca" else branco)
+            d.add(String(x - largura_texto / 2, y, texto,
+                         fontName=fonte, fontSize=10, fillColor=cor_texto))
+        angulo += abertura
+    d.add(Circle(centro_x, centro_y, raio_interno, fillColor=bg, strokeColor=None))
+
+    # Duas linhas de legenda evitam fontes minúsculas no PDF A4 paisagem.
+    legenda = list(CORES_FAIXAS_PRESSAO.items())
+    for i, (nome, hex_cor) in enumerate(legenda):
+        linha, coluna = divmod(i, 3)
+        x, y = 13 + coluna * 116, 43 - linha * 20
+        d.add(Rect(x, y - 1, 9, 9, fillColor=colors.HexColor(hex_cor), strokeColor=None))
+        d.add(String(x + 15, y, nome, fontName=fonte,
+                     fontSize=7.65, fillColor=branco))
     return d
 
 
-def _chart_bairros_vetorial(bairros, fonte="Helvetica", variacao=False):
-    """Média e amplitude min–máx para até dez bairros, com amostra informada."""
-    amostra=bairros.sort_values(["Média (mca)","Medições"],ascending=[True,False]).head(10)
-    altura=max(120,38+len(amostra)*15)
-    d=Drawing(355,altura)
-    titulo="Mínima, média e máxima por bairro" if variacao else "Pressão média por bairro"
-    d.add(String(5,altura-17,titulo,fontSize=10.4,fontName=fonte,fillColor=colors.HexColor("#193c65")))
-    vmax=max(1.,float(amostra["Máx. (mca)"].max()) if not amostra.empty else 1.)
-    x0=140;xmax=337;bar_w=xmax-x0
-    for i,(_,r) in enumerate(amostra.iterrows()):
-        y=altura-35-i*14.5
-        nome=str(r["Bairro"]);mun=str(r["Município"])
-        if len(bairros["Município"].unique())>1:nome+=f"/{mun}"
-        texto_original=nome
-        while len(nome)>4 and pdfmetrics.stringWidth(nome,fonte,7.2)>132:
-            nome=nome[:-1]
-        # Rótulo curto apenas no gráfico; nomes completos permanecem na tabela.
-        if nome!=texto_original:nome=nome.rstrip()+"…"
-        d.add(String(2,y,nome,fontName=fonte,fontSize=7.2,fillColor=colors.HexColor("#293c53")))
-        media=float(r["Média (mca)"]);minimo=float(r["Mín. (mca)"]);maximo=float(r["Máx. (mca)"])
-        if variacao:
-            xp=x0+bar_w*minimo/vmax;xq=x0+bar_w*maximo/vmax;xm=x0+bar_w*media/vmax
-            d.add(Line(xp,y+2,xq,y+2,strokeColor=colors.HexColor("#88a2bd"),strokeWidth=3))
-            d.add(Circle(xp,y+2,2.7,fillColor=colors.HexColor("#d35a61"),strokeColor=None))
-            d.add(Circle(xq,y+2,2.7,fillColor=colors.HexColor("#5293a0"),strokeColor=None))
-            d.add(Circle(xm,y+2,4,fillColor=colors.HexColor("#173f6b"),strokeColor=colors.white,strokeWidth=.6))
-        else:
-            w=max(.8,bar_w*media/vmax)
-            d.add(Rect(x0,y-3,w,9,strokeColor=None,fillColor=colors.HexColor("#327cb7")))
-            d.add(String(min(xmax-35,x0+w+3),y,f"{media:g}",fontName=fonte,fontSize=7,
-                         fillColor=colors.HexColor("#304860")))
-        d.add(String(2,y-8,f"n={int(r['Medições'])}",fontName=fonte,fontSize=6.2,
-                     fillColor=colors.HexColor("#7f8b98")))
-    d.add(Line(x0,8,xmax,8,strokeColor=colors.HexColor("#d5dee6"),strokeWidth=.8))
-    d.add(String(x0,0,"0 mca",fontName=fonte,fontSize=7,fillColor=colors.HexColor("#718198")))
-    d.add(String(xmax-40,0,f"{vmax:.1f} mca",fontName=fonte,fontSize=7,
-                 fillColor=colors.HexColor("#718198")))
-    return d
+def _chart_bairros_vetorial(bairros, fonte="Helvetica"):
+    """Média por bairro: barras horizontais azuis, maior média no topo."""
+    largura, altura = 355, 267
+    d = Drawing(largura, altura)
+    bg = colors.HexColor(FUNDO_GRAFICO_PRESSAO)
+    branco = colors.HexColor("#f7f8fb")
+    d.add(Rect(0, 0, largura, altura, fillColor=bg, strokeColor=None))
+    d.add(String(12, 241, "Média das aferições por bairro",
+                 fontName=fonte, fontSize=11.7, fillColor=branco))
 
+    if bairros is None or bairros.empty:
+        d.add(String(18, 132, "Sem aferições no período", fontName=fonte,
+                     fontSize=10, fillColor=branco))
+        return d
 
-def _chart_evolucao_vetorial(pressao, fonte="Helvetica"):
-    base=pressao.dropna(subset=["_data","_pressao"]).copy()
-    if base.empty:return None
-    base["_dia"]=base["_data"].dt.date
-    dias=base.groupby("_dia")["_pressao"].agg(["mean","min","max","count"]).reset_index()
-    if len(dias)<2:return None
-    d=Drawing(735,125)
-    d.add(String(4,110,"Evolução diária da média das medições (mca)",fontName=fonte,fontSize=11,
-                 fillColor=colors.HexColor("#193c65")))
-    ymin=0; ymax=max(float(dias["max"].max())*1.12,1)
-    for j in range(5):
-        y=23+j*19
-        d.add(Line(50,y,720,y,strokeColor=colors.HexColor("#e6ebf0"),strokeWidth=.7))
-        d.add(String(5,y-3,f"{ymax*j/4:.1f}",fontName=fonte,fontSize=7.5,
-                     fillColor=colors.HexColor("#61738a")))
-    pts=[]
-    for i,(_,r) in enumerate(dias.iterrows()):
-        x=50+i*670/max(1,len(dias)-1)
-        y=23+float(r["mean"])/ymax*76
-        pts.extend([x,y])
-    if len(pts)>=4:d.add(PolyLine(pts,strokeColor=colors.HexColor("#1d689c"),strokeWidth=2.5))
-    for i,(_,r) in enumerate(dias.iterrows()):
-        x=50+i*670/max(1,len(dias)-1)
-        y=23+float(r["mean"])/ymax*76
-        d.add(Circle(x,y,3.3,strokeColor=colors.white,strokeWidth=.5,
-                     fillColor=colors.HexColor("#1d689c")))
-        if i % max(1,math.ceil(len(dias)/8))==0 or i==len(dias)-1:
-            d.add(String(min(x-18,675),7,r["_dia"].strftime("%d/%m"),fontName=fonte,fontSize=7.2,
-                         fillColor=colors.HexColor("#61738a")))
+    # Mostra os dez bairros de menor média (prioridade operacional), com
+    # barras visualmente ordenadas da maior para a menor, como na referência.
+    amostra = (bairros.sort_values(["Média (mca)", "Medições"],
+                                   ascending=[True, False]).head(10)
+               .sort_values(["Média (mca)", "Medições"],
+                            ascending=[False, False]).copy())
+    maior = max(float(amostra["Média (mca)"].max()), 0)
+    # Limite superior simples, sem distorcer a escala de pressão.
+    escala = max(2, int(math.ceil(maior / 2.0) * 2))
+    x0, xmax = 148, 343
+    largura_grafico = xmax - x0
+    y_topo, y_base = 214, 36
+    qt = len(amostra)
+    passo = min(34, (y_topo - y_base) / max(qt, 1))
+    altura_barra = min(19, passo * 0.65)
+
+    for tick in range(0, escala + 1, 2):
+        x = x0 + largura_grafico * tick / escala
+        d.add(Line(x, 30, x, 225, strokeColor=colors.HexColor("#243040"), strokeWidth=.6))
+        texto = str(tick)
+        d.add(String(x - pdfmetrics.stringWidth(texto, fonte, 7.4) / 2,
+                     16, texto, fontName=fonte, fontSize=7.4,
+                     fillColor=colors.HexColor("#e1e7f0")))
+    d.add(String(238, 3, "Média (mca)", fontName=fonte, fontSize=8,
+                 fillColor=branco))
+
+    for i, (_, r) in enumerate(amostra.iterrows()):
+        y = y_topo - i * passo
+        nome = f"{r['Bairro']} / {r['Município']}".upper()
+        original = nome
+        tamanho = 7.0
+        while len(nome) > 4 and pdfmetrics.stringWidth(nome, fonte, tamanho) > 137:
+            nome = nome[:-1]
+        if nome != original:
+            nome = nome.rstrip() + "…"
+        d.add(String(7, y - 3, nome, fontName=fonte,
+                     fontSize=tamanho, fillColor=branco))
+        media = max(0.0, float(r["Média (mca)"]))
+        if media > 0:
+            d.add(Rect(x0, y - altura_barra / 2, largura_grafico * media / escala,
+                       altura_barra, fillColor=colors.HexColor("#327cb7"), strokeColor=None))
     return d
 
 
@@ -1112,25 +1142,17 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
     historia.append(P("DASHBOARD DE PRESSÃO — PERFIL DO PERÍODO",titulo))
     historia.append(P("Indicadores calculados sobre os registros efetivamente aferidos.",pequeno))
     historia.append(Spacer(1,9))
-    historia.append(_chart_faixas_vetorial(base,fonte))
-    historia.append(Spacer(1,7))
+    # Exatamente os dois dashboards da referência, lado a lado, com tema escuro.
     graficos=Table([[
-        _chart_bairros_vetorial(bairros,fonte,variacao=False),
-        _chart_bairros_vetorial(bairros,fonte,variacao=True)
+        _chart_faixas_vetorial(base,fonte),
+        _chart_bairros_vetorial(bairros,fonte),
     ]],colWidths=[13.1*cm,13.1*cm],hAlign="LEFT")
     graficos.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("LEFTPADDING",(0,0),(-1,-1),2),
-        ("RIGHTPADDING",(0,0),(-1,-1),2),
-        ("TOPPADDING",(0,0),(-1,-1),2),
-        ("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+        ("LEFTPADDING",(0,0),(-1,-1),1),
+        ("RIGHTPADDING",(0,0),(-1,-1),1),
+        ("TOPPADDING",(0,0),(-1,-1),0),
+        ("BOTTOMPADDING",(0,0),(-1,-1),0)]))
     historia.append(graficos)
-    historia.append(Spacer(1,10))
-    historia.append(P("Gráficos exibem até dez bairros, ordenados pela menor média amostral. "
-                      "Na amplitude, vermelho = mínima, azul = média, verde = máxima. "
-                      "A tabela seguinte apresenta todos os bairros sem cortes.",pequeno))
-    tendencia=_chart_evolucao_vetorial(base,fonte)
-    if tendencia is not None:
-        historia.extend([Spacer(1,10),tendencia])
     historia.append(PageBreak())
 
     historia.append(P("DIAGNÓSTICO E COMPARAÇÃO POR BAIRRO",titulo))
@@ -1529,40 +1551,56 @@ if r:
             st.caption("Marcadores: vermelho (0–5 mca), amarelo (>5–10 mca), roxo (>15 mca). "
                        "Os registros entre 10 e 15 mca continuam nas análises, mas não são exibidos no mapa.")
         st.subheader("Dashboard executivo de pressão")
-        faixas={"0 mca":int(vals.eq(0).sum()),
-                ">0 a 5 mca":int(((vals>0)&(vals<=5)).sum()),
-                ">5 a 10 mca":int(((vals>5)&(vals<=10)).sum()),
-                ">10 a 15 mca":int(((vals>10)&(vals<=15)).sum()),
-                ">15 mca":int(vals.gt(15).sum())}
-        g1,g2=st.columns(2)
+        # Apenas dois gráficos, no tema escuro do modelo aprovado.
+        faixas=contagem_faixas_dashboard(vals)
+        df_faixas=pd.DataFrame({"Faixa":list(faixas),"Medições":list(faixas.values())})
+        df_bar=(bairros.sort_values(["Média (mca)","Medições"],
+                                    ascending=[True,False]).head(12).copy())
+        df_bar["Local"]=(df_bar["Bairro"]+" / "+df_bar["Município"]).str.upper()
+        altura_dash=max(425,min(650,150+len(df_bar)*48))
+        g1,g2=st.columns(2,gap="medium")
         with g1:
-            df_faixas=pd.DataFrame({"Faixa":list(faixas),"Medições":list(faixas.values())})
-            fig=px.pie(df_faixas,values="Medições",names="Faixa",hole=.55,
+            fig=px.pie(df_faixas,values="Medições",names="Faixa",hole=.45,
                        title="Distribuição por faixa de pressão",
-                       color="Faixa",color_discrete_map={"0 mca":"#e64e62",
-                          ">0 a 5 mca":"#f3a53a",">5 a 10 mca":"#e6bc34",
-                          ">10 a 15 mca":"#cf71a9",">15 mca":"#8554b8"})
-            fig.update_layout(margin=dict(l=15,r=15,t=55,b=10),height=340,legend=dict(orientation="h",y=-.1))
+                       color="Faixa",color_discrete_map=CORES_FAIXAS_PRESSAO,
+                       category_orders={"Faixa":list(CORES_FAIXAS_PRESSAO)})
+            fig.update_traces(textinfo="percent",textposition="inside",
+                              insidetextfont=dict(color="white",size=13),
+                              sort=False,marker=dict(line=dict(width=0)),
+                              hovertemplate="<b>%{label}</b><br>%{value} medição(ões) (%{percent})<extra></extra>")
+            fig.update_layout(
+                paper_bgcolor=FUNDO_GRAFICO_PRESSAO,
+                plot_bgcolor=FUNDO_GRAFICO_PRESSAO,
+                font=dict(color="#ffffff",size=11),
+                title=dict(font=dict(size=19,color="white"),x=.01,xanchor="left"),
+                height=altura_dash,
+                margin=dict(l=14,r=14,t=75,b=78),
+                legend=dict(orientation="h",x=0,y=-.10,xanchor="left",
+                            font=dict(color="white",size=10),title_text=""),
+                showlegend=True)
             st.plotly_chart(fig,use_container_width=True)
         with g2:
-            df_bar=bairros.sort_values("Média (mca)",ascending=True).head(12).copy()
-            # Municípios diferentes podem possuir bairros homônimos.
-            df_bar["Local"]=(df_bar["Bairro"]+" / "+df_bar["Município"])
             fig=px.bar(df_bar,y="Local",x="Média (mca)",orientation="h",
                        title="Média das aferições por bairro",
-                       hover_data=["Medições","Mín. (mca)","Máx. (mca)","% até 5 mca"],
-                       color_discrete_sequence=["#317ab0"])
-            fig.update_layout(margin=dict(l=5,r=12,t=55,b=10),height=340,yaxis_title=None)
-            st.plotly_chart(fig,use_container_width=True)
-        diarios=bp.dropna(subset=["_data"]).copy()
-        diarios["Dia"]=diarios["_data"].dt.date
-        diarios=diarios.groupby("Dia",as_index=False)["_pressao"].mean().rename(
-            columns={"_pressao":"Média (mca)"})
-        if len(diarios)>1:
-            fig=px.line(diarios,x="Dia",y="Média (mca)",markers=True,
-                        title="Evolução diária da média das aferições",
-                        color_discrete_sequence=["#246e9e"])
-            fig.update_layout(height=315,margin=dict(l=10,r=15,t=45,b=10))
+                       hover_data={"Medições":True,"Mín. (mca)":True,
+                                   "Máx. (mca)":True,"Local":False},
+                       color_discrete_sequence=["#327cb7"])
+            fig.update_traces(marker_line_width=0,
+                              hovertemplate="<b>%{y}</b><br>Média: %{x:.2f} mca<extra></extra>")
+            fig.update_yaxes(categoryorder="array",categoryarray=df_bar["Local"].tolist(),
+                             title_text=None,showgrid=False,zeroline=False,
+                             tickfont=dict(color="white",size=11),automargin=True)
+            fig.update_xaxes(title_text="Média (mca)",showgrid=False,zeroline=False,
+                             tickfont=dict(color="white",size=11),
+                             title_font=dict(color="white",size=12),rangemode="tozero")
+            fig.update_layout(
+                paper_bgcolor=FUNDO_GRAFICO_PRESSAO,
+                plot_bgcolor=FUNDO_GRAFICO_PRESSAO,
+                font=dict(color="white",size=11),
+                title=dict(font=dict(size=19,color="white"),x=.01,xanchor="left"),
+                height=altura_dash,
+                margin=dict(l=8,r=15,t=75,b=35),
+                bargap=.24,showlegend=False)
             st.plotly_chart(fig,use_container_width=True)
         st.subheader("Diagnóstico por bairro")
         for item in achados_baixa_pressao(bp,bairros,bp):
