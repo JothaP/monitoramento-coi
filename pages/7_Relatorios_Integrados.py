@@ -15,6 +15,7 @@ from html import escape
 from xml.sax.saxutils import escape as xml_escape
 
 import folium
+import plotly.express as px
 import gspread
 import pandas as pd
 import streamlit as st
@@ -24,7 +25,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Image, PageBreak
-from reportlab.graphics.shapes import Drawing, Circle, String, Rect
+from reportlab.graphics.shapes import Drawing, Circle, String, Rect, Line, PolyLine
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from streamlit_folium import st_folium
@@ -152,7 +153,7 @@ def preparar_os(df):
     df["_bairro"] = df["Bairro"].map(normalizar)
     df["_lat"] = df["Latitude"].map(lambda v: coordenada(v, "lat"))
     df["_lon"] = df["Longitude"].map(lambda v: coordenada(v, "lon"))
-    df["_data"] = df["Dt. Emissão"].map(data_parse)
+    df["_data"] = pd.to_datetime(df["Dt. Emissão"].map(data_parse),errors="coerce")
     return df
 
 def preparar_pressao(df):
@@ -165,8 +166,8 @@ def preparar_pressao(df):
     df["_bairro"] = df["Bairro"].map(normalizar)
     df["_lat"] = df["Latitude"].map(lambda v: coordenada(v, "lat"))
     df["_lon"] = df["Longitude"].map(lambda v: coordenada(v, "lon"))
-    df["_data"] = df["Data"].map(data_parse)
-    df["_pressao"] = df["Pressao_MCA"].map(flutuante)
+    df["_data"] = pd.to_datetime(df["Data"].map(data_parse),errors="coerce")
+    df["_pressao"] = df["Pressao_MCA"].map(lambda v: (p if (p := flutuante(v)) is not None and p >= 0 else None))
     df["_faixa"] = df["_pressao"].map(faixa_pressao)
     df["_id_medicao"] = [f"BP_{i}" for i in range(len(df))]
     return df
@@ -253,7 +254,8 @@ def relacionar(concs, os_cluster, pressao, raio, inicio, fim):
     Medições são eventos pontuais, não atestam toda a área ou causa das O.S.
     """
     resultados, geograficos, apenas_bairro = [], [], []
-    pressao = pressao[pressao["_data"].dt.date.between(inicio, fim)].copy()
+    pressao = (pressao[pressao["_data"].dt.date.between(inicio, fim)].copy()
+              if not pressao.empty else pressao.copy())
     for _, c in concs.iterrows():
         grupo = os_cluster[os_cluster["_grupo"] == c["_grupo"]].copy()
         municipios = set(grupo["_municipio"]) - {""}
@@ -343,38 +345,223 @@ def diagnostico_geral(resumo, pressao, associados, territorial, inicio, fim):
     return achados,isolados
 
 def resumo_pressao_por_bairro(pressao):
-    """Consolida TODO o Módulo 1 filtrado, com ou sem concentração relacionada.
+    """Resumo de aferições, NÃO média de pressão de toda a rede/bairro.
 
-    Respeita as faixas visuais M1; 10–15 mca ficam na tabela, fora do mapa.
+    As 5 faixas são disjuntas. Zero é leitura real e entra no cálculo da média.
     """
-    colunas = ["Município", "Bairro", "Medições", "0 mca", "Até 5 mca",
-               "5–10 mca", "10–15 mca", ">15 mca", "Mín. (mca)"]
+    cols=["Município","Bairro","Medições","Matrículas","0 mca","Até 5 mca",
+          "5–10 mca","10–15 mca",">15 mca","Mín. (mca)","Média (mca)",
+          "Mediana (mca)","Máx. (mca)","% até 5 mca"]
     if pressao is None or pressao.empty:
-        return pd.DataFrame(columns=colunas)
-    base = pressao[pressao["_pressao"].notna()].copy()
+        return pd.DataFrame(columns=cols)
+    base=pressao[pressao["_pressao"].notna()].copy()
     if base.empty:
-        return pd.DataFrame(columns=colunas)
+        return pd.DataFrame(columns=cols)
     linhas=[]
-    for (municipio, bairro), grupo in base.groupby(["_municipio","_bairro"], dropna=False):
-        p=pd.to_numeric(grupo["_pressao"], errors="coerce").dropna()
-        if p.empty:
-            continue
-        linhas.append({
-            "Município": str(municipio or "Não informado"),
-            "Bairro": str(bairro or "Não informado"),
-            "Medições": int(len(p)),
-            "0 mca": int((p == 0).sum()),
-            "Até 5 mca": int(((p >= 0) & (p <= 5)).sum()),
-            "5–10 mca": int(((p > 5) & (p <= 10)).sum()),
-            "10–15 mca": int(((p > 10) & (p <= 15)).sum()),
-            ">15 mca": int((p > 15).sum()),
-            "Mín. (mca)": round(float(p.min()), 2),
-        })
-    if not linhas:
-        return pd.DataFrame(columns=colunas)
-    return (pd.DataFrame(linhas,columns=colunas)
-            .sort_values(["Até 5 mca","Medições","Município","Bairro"],
-                         ascending=[False,False,True,True]).reset_index(drop=True))
+    for (mun,bairro),grupo in base.groupby(["_municipio","_bairro"],dropna=False):
+        p=pd.to_numeric(grupo["_pressao"],errors="coerce").dropna()
+        if p.empty:continue
+        n_crit=int(p.le(5).sum())
+        mat=grupo.get("Matricula",pd.Series(dtype=str)).astype(str).str.strip()
+        linhas.append({"Município":str(mun or "Não informado"),
+          "Bairro":str(bairro or "Não informado"),"Medições":int(len(p)),
+          "Matrículas":int(mat[~mat.isin(["","nan","None"])].nunique()),
+          "0 mca":int(p.eq(0).sum()),"Até 5 mca":n_crit,
+          "5–10 mca":int(((p>5)&(p<=10)).sum()),
+          "10–15 mca":int(((p>10)&(p<=15)).sum()),
+          ">15 mca":int(p.gt(15).sum()),
+          "Mín. (mca)":round(float(p.min()),2),
+          "Média (mca)":round(float(p.mean()),2),
+          "Mediana (mca)":round(float(p.median()),2),
+          "Máx. (mca)":round(float(p.max()),2),
+          "% até 5 mca":round(n_crit*100/len(p),1)})
+    return (pd.DataFrame(linhas,columns=cols)
+            .sort_values(["% até 5 mca","Até 5 mca","Medições","Bairro"],
+                         ascending=[False,False,False,True]).reset_index(drop=True))
+
+
+def associar_pressao_as_os(pressao, os_base):
+    """Identifica POSSÍVEL O.S. a partir da matrícula + município + mesma data.
+
+    Sem número da O.S. na base M1, não atribuir uma medição a uma O.S.
+    por mera proximidade ou bairro. Não usar vínculos para contagem de pressão.
+    """
+    if pressao is None:return pd.DataFrame()
+    resultado=pressao.copy()
+    resultado["O.S. relacionada"]=""
+    resultado["_qtd_os_mesma_matricula_dia"]=0
+    if resultado.empty or os_base is None or os_base.empty:return resultado
+    base=os_base.copy()
+    base["_data_dia"]=pd.to_datetime(base["_data"],errors="coerce").dt.date
+    base["_matricula_vinculo"]=base["Matrícula"].astype(str).str.strip()
+    mapa={}
+    for _,os_row in base.iterrows():
+        chave=(os_row["_municipio"], os_row["_matricula_vinculo"],os_row["_data_dia"])
+        if not chave[0] or not chave[1] or pd.isna(chave[2]):continue
+        numero=protocolo_os_relatorio(os_row)
+        if numero: mapa.setdefault(chave,set()).add(numero)
+    for idx,r in resultado.iterrows():
+        mat=str(r.get("Matricula","") or "").strip()
+        dt=r.get("_data")
+        if not mat or pd.isna(dt):continue
+        chave=(r.get("_municipio",""),mat,pd.Timestamp(dt).date())
+        os_rel=sorted(mapa.get(chave,set()))
+        resultado.at[idx,"_qtd_os_mesma_matricula_dia"]=len(os_rel)
+        resultado.at[idx,"O.S. relacionada"]="; ".join(os_rel)
+    return resultado
+
+
+def mapa_exclusivo_pressao(pressao):
+    """Mapa independente do M1. Pontos de 10–15 mca ficam ocultos APENAS no mapa."""
+    if pressao is None or pressao.empty:return None
+    validas=pressao.dropna(subset=["_lat","_lon","_pressao"])
+    visiveis=validas[validas.apply(pressao_visivel,axis=1)].copy()
+    if visiveis.empty:return None
+    lat=float(visiveis["_lat"].mean());lon=float(visiveis["_lon"].mean())
+    mapa=folium.Map(location=[lat,lon],zoom_start=13,tiles="OpenStreetMap",
+                    control_scale=True,zoom_control=False)
+    posicoes=adicionar_pontos_pressao(mapa,visiveis)
+    if len(posicoes)>1:
+        mapa.fit_bounds(posicoes,padding=(45,45),max_zoom=14)
+    from branca.element import Element
+    legenda=('<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+      'background:#fff;color:#24364b;border:1px solid #cad4df;border-radius:5px;'
+      'padding:8px 11px;font:12px Arial">'
+      '<strong>Medições de pressão</strong><br>'
+      '<span style="color:#f04452">●</span> 0 a 5 mca &nbsp; '
+      '<span style="color:#f2c600">●</span> &gt;5 a 10 mca &nbsp; '
+      '<span style="color:#8b27ef">●</span> &gt;15 mca</div>')
+    mapa.get_root().html.add_child(Element(legenda))
+    return mapa
+
+
+def achados_baixa_pressao(pressao, bairros, os_vinculadas=None):
+    """Achados descritivos auditáveis; pressão pontual não confirma causa nem pressão do bairro."""
+    if pressao is None or pressao.empty:return []
+    p=pd.to_numeric(pressao["_pressao"],errors="coerce").dropna()
+    if p.empty:return []
+    n=len(p); baixa=int(p.le(5).sum());zeros=int(p.eq(0).sum())
+    achados=[f"Foram analisadas {n} medições válidas em {len(bairros)} bairro(s). "
+             f"A pressão média das medições foi de {p.mean():.1f} mca "
+             f"(mínima {p.min():g} e máxima {p.max():g} mca).",
+             f"{baixa} aferição(ões) ({baixa*100/n:.1f}%) apresentaram até 5 mca, "
+             f"incluindo {zeros} leitura(s) de 0 mca."]
+    if not bairros.empty:
+        relevantes=bairros[bairros["Até 5 mca"]>0].copy()
+        if not relevantes.empty:
+            ranking=relevantes.sort_values(["Até 5 mca","% até 5 mca"],ascending=False).head(4)
+            locais=[f"{r['Bairro']} ({r['Município']}: {r['Até 5 mca']}/{r['Medições']} até 5 mca)" for _,r in ranking.iterrows()]
+            achados.append("Bairros que concentram mais aferições críticas: "+"; ".join(locais)+".")
+        if (bairros["Medições"]==1).any():
+            achados.append("Médias de bairros com apenas uma aferição representam somente aquele ponto de medição.")
+    if os_vinculadas is not None and not os_vinculadas.empty:
+        qtd=int(os_vinculadas["_qtd_os_mesma_matricula_dia"].gt(0).sum())
+        if qtd:achados.append(f"{qtd} medição(ões) possuem O.S. com a mesma matrícula, município e data; "
+                              "a correspondência não comprova que a pressão foi aferida na abertura da O.S.")
+    achados.append("Médias e incidências resumem apenas os pontos registrados, não a pressão de todo o bairro.")
+    return achados
+
+
+def _chart_faixas_vetorial(pressao, fonte="Helvetica"):
+    """Distribuição em faixas mutuamente exclusivas, desenhada em vetores no PDF."""
+    grupos=[("0 mca",lambda p:p.eq(0),"#e64e62"),
+            (">0–5",lambda p:(p>0)&(p<=5),"#f3a53a"),
+            (">5–10",lambda p:(p>5)&(p<=10),"#e6bc34"),
+            (">10–15",lambda p:(p>10)&(p<=15),"#cf71a9"),
+            (">15",lambda p:p>15,"#8554b8")]
+    serie=pd.to_numeric(pressao["_pressao"],errors="coerce").dropna()
+    total=max(len(serie),1)
+    d=Drawing(735,98)
+    d.add(String(4,83,"Distribuição das medições por faixa de pressão",fontName=fonte,fontSize=11,
+                 fillColor=colors.HexColor("#193c65")))
+    x0=5;y0=49;largura=724
+    d.add(Rect(x0,y0,largura,18,fillColor=colors.HexColor("#e6edf4"),strokeColor=None))
+    atual=x0
+    for rotulo,teste,hexcor in grupos:
+        qtd=int(teste(serie).sum());w=largura*qtd/total
+        if w>0:d.add(Rect(atual,y0,w,18,fillColor=colors.HexColor(hexcor),strokeColor=None))
+        atual+=w
+    for i,(nome,teste,c) in enumerate(grupos):
+        x=5+i*146
+        d.add(Rect(x,20,9,9,fillColor=colors.HexColor(c),strokeColor=None))
+        v=int(teste(serie).sum())
+        d.add(String(x+14,20,nome+f": {v} ({100*v/total:.0f}%)",fontName=fonte,fontSize=8.1,
+                     fillColor=colors.HexColor("#263b51")))
+    d.add(String(5,3,"A faixa >10 a 15 mca entra nos indicadores, mas é ocultada no mapa, conforme o Módulo 1.",
+                 fontName=fonte,fontSize=7.8,fillColor=colors.HexColor("#637489")))
+    return d
+
+
+def _chart_bairros_vetorial(bairros, fonte="Helvetica", variacao=False):
+    """Média e amplitude min–máx para até dez bairros, com amostra informada."""
+    amostra=bairros.sort_values(["Média (mca)","Medições"],ascending=[True,False]).head(10)
+    altura=max(120,38+len(amostra)*15)
+    d=Drawing(355,altura)
+    titulo="Mínima, média e máxima por bairro" if variacao else "Pressão média por bairro"
+    d.add(String(5,altura-17,titulo,fontSize=10.4,fontName=fonte,fillColor=colors.HexColor("#193c65")))
+    vmax=max(1.,float(amostra["Máx. (mca)"].max()) if not amostra.empty else 1.)
+    x0=140;xmax=337;bar_w=xmax-x0
+    for i,(_,r) in enumerate(amostra.iterrows()):
+        y=altura-35-i*14.5
+        nome=str(r["Bairro"]);mun=str(r["Município"])
+        if len(bairros["Município"].unique())>1:nome+=f"/{mun}"
+        texto_original=nome
+        while len(nome)>4 and pdfmetrics.stringWidth(nome,fonte,7.2)>132:
+            nome=nome[:-1]
+        # Rótulo curto apenas no gráfico; nomes completos permanecem na tabela.
+        if nome!=texto_original:nome=nome.rstrip()+"…"
+        d.add(String(2,y,nome,fontName=fonte,fontSize=7.2,fillColor=colors.HexColor("#293c53")))
+        media=float(r["Média (mca)"]);minimo=float(r["Mín. (mca)"]);maximo=float(r["Máx. (mca)"])
+        if variacao:
+            xp=x0+bar_w*minimo/vmax;xq=x0+bar_w*maximo/vmax;xm=x0+bar_w*media/vmax
+            d.add(Line(xp,y+2,xq,y+2,strokeColor=colors.HexColor("#88a2bd"),strokeWidth=3))
+            d.add(Circle(xp,y+2,2.7,fillColor=colors.HexColor("#d35a61"),strokeColor=None))
+            d.add(Circle(xq,y+2,2.7,fillColor=colors.HexColor("#5293a0"),strokeColor=None))
+            d.add(Circle(xm,y+2,4,fillColor=colors.HexColor("#173f6b"),strokeColor=colors.white,strokeWidth=.6))
+        else:
+            w=max(.8,bar_w*media/vmax)
+            d.add(Rect(x0,y-3,w,9,strokeColor=None,fillColor=colors.HexColor("#327cb7")))
+            d.add(String(min(xmax-35,x0+w+3),y,f"{media:g}",fontName=fonte,fontSize=7,
+                         fillColor=colors.HexColor("#304860")))
+        d.add(String(2,y-8,f"n={int(r['Medições'])}",fontName=fonte,fontSize=6.2,
+                     fillColor=colors.HexColor("#7f8b98")))
+    d.add(Line(x0,8,xmax,8,strokeColor=colors.HexColor("#d5dee6"),strokeWidth=.8))
+    d.add(String(x0,0,"0 mca",fontName=fonte,fontSize=7,fillColor=colors.HexColor("#718198")))
+    d.add(String(xmax-40,0,f"{vmax:.1f} mca",fontName=fonte,fontSize=7,
+                 fillColor=colors.HexColor("#718198")))
+    return d
+
+
+def _chart_evolucao_vetorial(pressao, fonte="Helvetica"):
+    base=pressao.dropna(subset=["_data","_pressao"]).copy()
+    if base.empty:return None
+    base["_dia"]=base["_data"].dt.date
+    dias=base.groupby("_dia")["_pressao"].agg(["mean","min","max","count"]).reset_index()
+    if len(dias)<2:return None
+    d=Drawing(735,125)
+    d.add(String(4,110,"Evolução diária da média das medições (mca)",fontName=fonte,fontSize=11,
+                 fillColor=colors.HexColor("#193c65")))
+    ymin=0; ymax=max(float(dias["max"].max())*1.12,1)
+    for j in range(5):
+        y=23+j*19
+        d.add(Line(50,y,720,y,strokeColor=colors.HexColor("#e6ebf0"),strokeWidth=.7))
+        d.add(String(5,y-3,f"{ymax*j/4:.1f}",fontName=fonte,fontSize=7.5,
+                     fillColor=colors.HexColor("#61738a")))
+    pts=[]
+    for i,(_,r) in enumerate(dias.iterrows()):
+        x=50+i*670/max(1,len(dias)-1)
+        y=23+float(r["mean"])/ymax*76
+        pts.extend([x,y])
+    if len(pts)>=4:d.add(PolyLine(pts,strokeColor=colors.HexColor("#1d689c"),strokeWidth=2.5))
+    for i,(_,r) in enumerate(dias.iterrows()):
+        x=50+i*670/max(1,len(dias)-1)
+        y=23+float(r["mean"])/ymax*76
+        d.add(Circle(x,y,3.3,strokeColor=colors.white,strokeWidth=.5,
+                     fillColor=colors.HexColor("#1d689c")))
+        if i % max(1,math.ceil(len(dias)/8))==0 or i==len(dias)-1:
+            d.add(String(min(x-18,675),7,r["_dia"].strftime("%d/%m"),fontName=fonte,fontSize=7.2,
+                         fillColor=colors.HexColor("#61738a")))
+    return d
 
 
 def diagnostico_pressao_independente(pressao, resumo_bairros, associados, territoriais):
@@ -854,6 +1041,149 @@ def ficha_acompanhamento(c,grupo,contexto):
     return f.iloc[-1].to_dict(),movimentos
 
 
+
+def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
+                                titulo, secao, fonte, P, tabela, os_base=None):
+    """Segunda parte do PDF: medições M1, sem alterar a primeira parte do Farol.
+
+    O anexo existe apenas quando há medições válidas. Em todos os cálculos,
+    a unidade amostral é a aferição, não a O.S. e não a rede hidráulica inteira.
+    """
+    if pressao is None or pressao.empty:
+        return
+    base=pressao.loc[pressao["_pressao"].notna()].copy()
+    if base.empty:return
+    bairros=resumo_pressao_por_bairro(base)
+    if bairros.empty:return
+    valor=pd.to_numeric(base["_pressao"],errors="coerce").dropna()
+    n=len(valor);criticos=int(valor.le(5).sum());zeros=int(valor.eq(0).sum())
+    mun=list(sorted(set(base["_municipio"].dropna()) - {""}))
+    geos=int(base[["_lat","_lon"]].notna().all(axis=1).sum())
+    sem_gerar_longo=f"{inicio:%d/%m/%Y} a {fim:%d/%m/%Y} · {', '.join(mun) if mun else 'Municípios não informados'}"
+
+    historia.append(P("MONITORAMENTO DE BAIXA PRESSÃO — MÓDULO 1",titulo))
+    historia.append(P(sem_gerar_longo,normal))
+    historia.append(Spacer(1,9))
+
+    def cartao(rotulo,valor_texto,detalhe):
+        grade=Table([
+            [P(rotulo,pequeno)],
+            [P(valor_texto,ParagraphStyle(f"kpi_bp_{len(historia)}_{len(rotulo)}",parent=normal,
+                   fontSize=18,leading=22,textColor=colors.HexColor("#193c65")))],
+            [P(detalhe,pequeno)]
+        ],colWidths=[6.0*cm],hAlign="LEFT")
+        grade.setStyle(TableStyle([
+           ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#f1f5fa")),
+           ("BOX",(0,0),(-1,-1),.6,colors.HexColor("#dce5ef")),
+           ("LEFTPADDING",(0,0),(-1,-1),10),
+           ("RIGHTPADDING",(0,0),(-1,-1),7),
+           ("TOPPADDING",(0,0),(-1,-1),2),
+           ("BOTTOMPADDING",(0,0),(-1,-1),2),
+        ]))
+        return grade
+    painel=Table([[
+        cartao("MEDIÇÕES",str(n),f"{geos} com coordenadas"),
+        cartao("BAIRROS",str(len(bairros)),"com aferições"),
+        cartao("MÉDIA",f"{valor.mean():.1f} mca","das medições"),
+        cartao("ATÉ 5 MCA",f"{criticos} ({100*criticos/n:.0f}%)",f"inclui {zeros} de 0 mca"),
+    ]],colWidths=[6.55*cm]*4,hAlign="LEFT")
+    painel.setStyle(TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("LEFTPADDING",(0,0),(-1,-1),1),
+        ("RIGHTPADDING",(0,0),(-1,-1),2),
+        ("TOPPADDING",(0,0),(-1,-1),0),
+        ("BOTTOMPADDING",(0,0),(-1,-1),0),
+    ]))
+    historia.extend([painel,Spacer(1,8)])
+    mapa=mapa_exclusivo_pressao(base)
+    if mapa is not None:
+        historia.append(P("Mapa das aferições de pressão",secao))
+        imagem=imagem_folium(mapa,1280,660)
+        historia.append(Image(io.BytesIO(imagem),width=26*cm,height=11.5*cm))
+    else:
+        historia.append(P("Nenhum marcador exibido pelas faixas visuais do Módulo 1, "
+                          "mas todas as medições válidas continuam contabilizadas nos indicadores.",normal))
+    historia.append(Spacer(1,7))
+    historia.append(P("Mapa: vermelho (0 a 5 mca), amarelo (>5 a 10 mca) e roxo (>15 mca). "
+                      "Entre 10 e 15 mca: oculto apenas no mapa. "
+                      "Pressões nulas (0 mca) são medições válidas.",pequeno))
+    historia.append(PageBreak())
+
+    historia.append(P("DASHBOARD DE PRESSÃO — PERFIL DO PERÍODO",titulo))
+    historia.append(P("Indicadores calculados sobre os registros efetivamente aferidos.",pequeno))
+    historia.append(Spacer(1,9))
+    historia.append(_chart_faixas_vetorial(base,fonte))
+    historia.append(Spacer(1,7))
+    graficos=Table([[
+        _chart_bairros_vetorial(bairros,fonte,variacao=False),
+        _chart_bairros_vetorial(bairros,fonte,variacao=True)
+    ]],colWidths=[13.1*cm,13.1*cm],hAlign="LEFT")
+    graficos.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("LEFTPADDING",(0,0),(-1,-1),2),
+        ("RIGHTPADDING",(0,0),(-1,-1),2),
+        ("TOPPADDING",(0,0),(-1,-1),2),
+        ("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+    historia.append(graficos)
+    historia.append(Spacer(1,10))
+    historia.append(P("Gráficos exibem até dez bairros, ordenados pela menor média amostral. "
+                      "Na amplitude, vermelho = mínima, azul = média, verde = máxima. "
+                      "A tabela seguinte apresenta todos os bairros sem cortes.",pequeno))
+    tendencia=_chart_evolucao_vetorial(base,fonte)
+    if tendencia is not None:
+        historia.extend([Spacer(1,10),tendencia])
+    historia.append(PageBreak())
+
+    historia.append(P("DIAGNÓSTICO E COMPARAÇÃO POR BAIRRO",titulo))
+    for item in achados_baixa_pressao(base,bairros,base):
+        historia.append(P("• "+item,normal))
+        historia.append(Spacer(1,4))
+    historia.append(Spacer(1,5))
+    # Mantém toda a lista de bairros, inclusive os sem pressão crítica.
+    linhas=[]
+    for _,r in bairros.iterrows():
+        linhas.append([f"{r['Bairro']} ({r['Município']})",r["Medições"],
+            f"{r['Mín. (mca)']:g}",f"{r['Média (mca)']:g}",
+            f"{r['Mediana (mca)']:g}",f"{r['Máx. (mca)']:g}",
+            f"{r['Até 5 mca']} / {r['Medições']}",f"{r['% até 5 mca']:g}%"])
+    historia.append(tabela(["Bairro / Município","n","Mín.","Média","Mediana",
+                            "Máx.","≤5 mca","% ≤5"],linhas,
+                           [10.0*cm,1.4*cm,2.2*cm,2.2*cm,2.6*cm,2.2*cm,3.0*cm,2.4*cm]))
+    historia.append(Spacer(1,9))
+    historia.append(P("Atenção: a média é amostral, calculada sobre os pontos de aferição "
+                      "cadastrados no intervalo. Não representa automaticamente toda a pressão "
+                      "da rede de distribuição ou do bairro.",pequeno))
+    historia.append(PageBreak())
+
+    historia.append(P("REGISTROS INDIVIDUAIS DE PRESSÃO",titulo))
+    historia.append(P(f"{len(base)} medições válidas registradas no período. "
+                     "O campo de O.S. é apenas uma correspondência de matrícula, "
+                     "município e dia, quando identificável.",pequeno))
+    historia.append(Spacer(1,9))
+    colunas=["Data","Município / Bairro","Matrícula","mca","O.S. relacionada*","Observação"]
+    detalhe=[]
+    base_ordenada=base.sort_values(["_municipio","_bairro","_data","Matricula"],
+                                  na_position="last")
+    for _,r in base_ordenada.iterrows():
+        data=r.get("_data")
+        dia=data.strftime("%d/%m/%Y") if pd.notna(data) else str(r.get("Data",""))
+        valor_reg=r.get("_pressao")
+        observacao=str(r.get("Observacao","") or "").strip()
+        # Evita uma observação isolada imensa travar a paginação; CSV preserva o texto integral.
+        if len(observacao)>350:observacao=observacao[:347]+"…"
+        rel=str(r.get("O.S. relacionada","") or "").strip()
+        if len(rel)>95:rel=rel[:92]+"…"
+        detalhe.append([dia,f"{r.get('Bairro','')} / {r.get('Municipio','')}",
+            str(r.get("Matricula","") or ""),
+            f"{float(valor_reg):g}" if pd.notna(valor_reg) else "—",
+            rel or "—",observacao])
+    historia.append(tabela(colunas,detalhe,[2.5*cm,6.0*cm,2.7*cm,1.7*cm,5.5*cm,7.6*cm]))
+    historia.append(Spacer(1,8))
+    historia.append(P("* O Módulo 1 não armazena número da O.S.; a referência foi obtida "
+                      "por matrícula + município + mesma data na base do Farol. "
+                      "A correspondência não é confirmação de aferição na abertura da O.S. "
+                      "Registros sem correspondência aparecem com '—'.",pequeno))
+
+
 def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
                   concentracoes=None, grupos=None, raio_cluster=500, contexto=None, pressao=None,
                   pontos_todos=None):
@@ -905,54 +1235,29 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
              P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y} | Gerado em {datetime.now():%d/%m/%Y %H:%M}"
                + (" | Unidade: " + str(concentracoes.iloc[0]["_unidade"]) if concentracoes is not None and not concentracoes.empty else ""),normal),
              Spacer(1,9)]
-    resumo_bp = resumo_pressao_por_bairro(pressao)
+    # Primeira parte: Farol na estrutura original, SEM pontos de pressão.
+    # Segunda parte: relatório M1 independente, com mapa e dashboards.
+    pressao=associar_pressao_as_os(pressao,pontos_todos)
 
     def adicionar_secao_modulo1():
-        """Anexo M1 completo, mesmo quando não houver pressão junto às O.S."""
-        if pressao.empty or resumo_bp.empty:
-            return
-        historia.append(P("PANORAMA DE PRESSÃO — MÓDULO 1", titulo))
-        achados_m1=diagnostico_pressao_independente(pressao,resumo_bp,associados,territoriais)
-        for item in achados_m1:
-            historia.append(P("• " + item, normal))
-            historia.append(Spacer(1, 3))
-        historia.append(Spacer(1, 5))
-        linhas=[]
-        for _,r_bp in resumo_bp.iterrows():
-            linhas.append([f"{r_bp['Bairro']} — {r_bp['Município']}",
-                r_bp["Medições"],r_bp["0 mca"],r_bp["Até 5 mca"],
-                r_bp["5–10 mca"],r_bp["10–15 mca"],r_bp[">15 mca"],
-                f"{r_bp['Mín. (mca)']:g}"])
-        historia.append(tabela(["Bairro / município","Medições","0 mca","≤5 mca",
-            "5–10 mca","10–15 mca",">15 mca","Mín. mca"], linhas,
-            [9.1*cm,2.6*cm,2.2*cm,2.3*cm,2.4*cm,2.6*cm,2.2*cm,2.6*cm]))
-        historia.extend([Spacer(1,6),P("Medições de 10 a 15 mca são contabilizadas, mas "
-            "permanecem ocultas no mapa, conforme a configuração do Módulo 1.", pequeno)])
+        montar_secao_baixa_pressao(
+            historia,pressao,inicio,fim,normal,pequeno,titulo,secao,
+            fonte,P,tabela,os_base=pontos_todos)
+
 
     if concentracoes is None or concentracoes.empty:
         historia.append(P("Nenhuma concentração identificada para a seleção.", normal))
         if not pressao.empty:
-            mapa_bp=mapa_integrado_farol(pd.DataFrame(), pd.DataFrame(), pressao, contexto,
-                                        raio_cluster, pontos_todos=pontos_todos)
-            if mapa_bp is not None:
-                historia.append(Spacer(1,8))
-                historia.append(Image(io.BytesIO(imagem_folium(mapa_bp,1280,700)),
-                                      width=26*cm,height=14.22*cm))
             historia.append(PageBreak())
             adicionar_secao_modulo1()
         doc.build(historia)
         return buffer.getvalue()
 
     # PANORAMA do Farol + todos os pontos cartográficos válidos de pressão.
-    mapa=mapa_integrado_farol(concentracoes,grupos,pressao,contexto,raio_cluster,
+    mapa=mapa_integrado_farol(concentracoes,grupos,pressao.iloc[:0],contexto,raio_cluster,
                              pontos_todos=pontos_todos)
     imagem=imagem_folium(mapa,1280,700)
-    n_bairros_bp = len(resumo_bp)
-    p_criticos = (int(pd.to_numeric(pressao["_pressao"],errors="coerce").le(5).sum())
-                  if not pressao.empty else 0)
-    subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais"
-               + (f" · Módulo 1: {len(pressao)} medições em {n_bairros_bp} bairros,"
-                  f" {p_criticos} até 5 mca" if not pressao.empty else "") + ".")
+    subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais.")
     historia.append(KeepTogether([
         P("Panorama territorial das concentrações",titulo),
         Image(io.BytesIO(imagem),width=26*cm,height=14.22*cm),
@@ -966,9 +1271,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
         proximas=associados[associados["Concentração"]==codigo] if not associados.empty else pd.DataFrame()
         territoriais_c=territoriais[territoriais["Concentração"]==codigo] if not territoriais.empty else pd.DataFrame()
         historia.append(P(f"{codigo} — {c['Município']} — {c['Bairros']}",titulo))
-        med_ficha=(pd.concat([proximas,territoriais_c], ignore_index=True)
-                   if not proximas.empty or not territoriais_c.empty else pressao.iloc[:0].copy())
-        figura=imagem_folium(mapa_ficha_farol(c,grupo,med_ficha,contexto,raio_cluster),760,515)
+        figura=imagem_folium(mapa_ficha_farol(c,grupo,pressao.iloc[:0],contexto,raio_cluster),760,515)
         img=Image(io.BytesIO(figura),width=13.4*cm,height=9.08*cm)
         eventos=eventos_da_concentracao(c,contexto,inicio,fim)
         vinculadas,nao_vinculadas=classificar_os_eventos(grupo,eventos)
@@ -1058,34 +1361,6 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                     for m in movimentacoes],[4.5*cm,4.5*cm,17.0*cm]))
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
-        # COMPLEMENTO M1 da ficha: só quando existir associação pertinente.
-        if not proximas.empty or not territoriais_c.empty:
-            historia.append(P("MEDIÇÕES DE PRESSÃO — MÓDULO 1",secao))
-            if not proximas.empty:
-                qtd=len(proximas)
-                crit=int(pd.to_numeric(proximas["_pressao"],errors="coerce").le(5).sum())
-                historia.append(P(f"{qtd} medição(ões) até {raio} m de pelo menos uma O.S. "
-                                   + (f"{crit} com pressão de 0 a 5 mca." if crit else ""),normal))
-            else:
-                historia.append(P("Correspondência pelo bairro; a distância às O.S. não foi confirmada.",normal))
-            for subt,base,confirmada in (("Medições próximas às O.S.",proximas,True),
-                                         ("Medições no mesmo bairro",territoriais_c,False)):
-                if base.empty:continue
-                historia.append(P(f"{subt} ({len(base)})",secao))
-                linhas=[]
-                for _,med in base.iterrows():
-                    v=med.get("_pressao")
-                    distancia=med.get("Distância até O.S. (m)")
-                    linhas.append([med.get("Data",""),med.get("Bairro",""),
-                        f"{float(v):g}" if pd.notna(v) else "Não aferida",
-                        (f"{distancia} m" if pd.notna(distancia) else "—") if confirmada else "Bairro",
-                        med.get("Observacao","")])
-                historia.append(tabela(["Data","Bairro","mca","Relação","Observação"],
-                               linhas,[3.0*cm,5.4*cm,2.2*cm,4.6*cm,10.8*cm]))
-            analise = str(c.get("Análise operacional", "") or "").strip()
-            if analise:
-                historia.extend([P("LEITURA OPERACIONAL",secao),P(analise,normal)])
-            historia.append(P("Associação espacial/territorial não confirma causa hidráulica.",pequeno))
         if indice<len(resumo)-1:
             historia.append(PageBreak())
     if not pressao.empty:
@@ -1138,6 +1413,7 @@ if executar:
                 os_df=os_df[os_df["_municipio"]==mun]
                 bp=bp[bp["_municipio"]==mun]
             contagem_origem["unidade_municipio"] = len(bp)
+            bp=associar_pressao_as_os(bp,os_df)
             resumo_bp=resumo_pressao_por_bairro(bp)
             concs,grupos=concentracoes_farol(os_df,int(raio_cluster),int(minimo))
             if not concs.empty:
@@ -1147,7 +1423,7 @@ if executar:
                 resumo,associados,territoriais=pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
                 achados=["Nenhuma concentração atende aos critérios selecionados."]
                 pressao_sem_conc=bp.iloc[:0].copy()
-            st.session_state["relatorio_coi_integrado"]={"versao_esquema":9,"resumo":resumo,"associados":associados,"territoriais":territoriais,
+            st.session_state["relatorio_coi_integrado"]={"versao_esquema":10,"resumo":resumo,"associados":associados,"territoriais":territoriais,
              "concentracoes":concs,"achados":achados,"pressao_sem_conc":pressao_sem_conc,
              "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp,"unidade":unidade,"os_base":os_df,"resumo_bp":resumo_bp,"contagem_origem":contagem_origem}
     except gspread.exceptions.APIError as ex:
@@ -1168,7 +1444,7 @@ _chaves_necessarias = {
 }
 if r is not None and (
     not isinstance(r, dict)
-    or r.get("versao_esquema") != 9
+    or r.get("versao_esquema") != 10
     or not _chaves_necessarias.issubset(r)
 ):
     st.session_state.pop("relatorio_coi_integrado", None)
@@ -1191,10 +1467,9 @@ if r:
     for achado in r["achados"]:
         st.write("• " + achado)
     if not resumo.empty or tem_pressao:
-        st.subheader("Mapa consolidado")
-        st.caption("Mapa integrado: concentrações, O.S. e equipamentos operacionais do Farol." +
-                   (" Medições do Módulo 1 sobrepostas: vermelho (0–5 mca), amarelo (5–10 mca) e roxo (>15 mca)." if tem_pressao else ""))
-        mapa=mapa_integrado_farol(r["concentracoes"],r["grupos"],r["pressao_mapa"],r["contexto"],
+        st.subheader("Parte 1 — Farol Operacional")
+        st.caption("Concentrações, O.S., eventos e ativos operacionais; o relatório de baixa pressão vem em seguida.")
+        mapa=mapa_integrado_farol(r["concentracoes"],r["grupos"],r["pressao_mapa"].iloc[:0],r["contexto"],
                                   r["raio_cluster"],pontos_todos=r["os_base"])
         if mapa is not None:
             st_folium(mapa,height=500,width=None,returned_objects=[],key="mapa_integrado_relatorio")
@@ -1235,14 +1510,73 @@ if r:
                 st.dataframe(r["pressao_sem_conc"][["Data","Municipio","Bairro","Pressao_MCA","Observacao"]],hide_index=True,use_container_width=True)
     if tem_pressao:
         st.divider()
-        st.subheader("Módulo 1 — Panorama de pressão por bairro")
-        st.caption("Inclui TODAS as medições do período e unidade, mesmo quando não se relacionam a uma concentração de O.S.")
-        for item in diagnostico_pressao_independente(r["pressao_mapa"],r["resumo_bp"],r["associados"],r["territoriais"]):
-            st.write("• " + item)
-        st.dataframe(r["resumo_bp"], hide_index=True, use_container_width=True)
-        st.download_button("📥 Baixar medições do Módulo 1 (CSV)",
-            data=r["pressao_mapa"][["Data","Municipio","Bairro","Latitude","Longitude","Pressao_MCA","Observacao","Matricula"]].to_csv(index=False,sep=";").encode("utf-8-sig"),
-            file_name="medicoes_pressao_modulo1.csv", mime="text/csv")
+        st.subheader("Parte 2 — Monitoramento de Baixa Pressão")
+        st.caption("Dados do Módulo 1 analisados independentemente das concentrações de O.S. "
+                   "A pressão média é amostral, calculada com as aferições disponíveis.")
+        bp=r["pressao_mapa"]
+        vals=pd.to_numeric(bp["_pressao"],errors="coerce").dropna()
+        bairros=r["resumo_bp"]
+        k1,k2,k3,k4,k5=st.columns(5)
+        k1.metric("Medições",len(vals))
+        k2.metric("Bairros aferidos",len(bairros))
+        k3.metric("Pressão média",f"{vals.mean():.1f} mca")
+        k4.metric("Menor pressão",f"{vals.min():g} mca")
+        k5.metric("Até 5 mca",f"{vals.le(5).sum()} ({vals.le(5).mean()*100:.0f}%)")
+        mapa_bp=mapa_exclusivo_pressao(bp)
+        if mapa_bp is not None:
+            st.subheader("Mapa das medições")
+            st_folium(mapa_bp,height=465,width=None,returned_objects=[],key="mapa_pressao_independente")
+            st.caption("Marcadores: vermelho (0–5 mca), amarelo (>5–10 mca), roxo (>15 mca). "
+                       "Os registros entre 10 e 15 mca continuam nas análises, mas não são exibidos no mapa.")
+        st.subheader("Dashboard executivo de pressão")
+        faixas={"0 mca":int(vals.eq(0).sum()),
+                ">0 a 5 mca":int(((vals>0)&(vals<=5)).sum()),
+                ">5 a 10 mca":int(((vals>5)&(vals<=10)).sum()),
+                ">10 a 15 mca":int(((vals>10)&(vals<=15)).sum()),
+                ">15 mca":int(vals.gt(15).sum())}
+        g1,g2=st.columns(2)
+        with g1:
+            df_faixas=pd.DataFrame({"Faixa":list(faixas),"Medições":list(faixas.values())})
+            fig=px.pie(df_faixas,values="Medições",names="Faixa",hole=.55,
+                       title="Distribuição por faixa de pressão",
+                       color="Faixa",color_discrete_map={"0 mca":"#e64e62",
+                          ">0 a 5 mca":"#f3a53a",">5 a 10 mca":"#e6bc34",
+                          ">10 a 15 mca":"#cf71a9",">15 mca":"#8554b8"})
+            fig.update_layout(margin=dict(l=15,r=15,t=55,b=10),height=340,legend=dict(orientation="h",y=-.1))
+            st.plotly_chart(fig,use_container_width=True)
+        with g2:
+            df_bar=bairros.sort_values("Média (mca)",ascending=True).head(12).copy()
+            # Municípios diferentes podem possuir bairros homônimos.
+            df_bar["Local"]=(df_bar["Bairro"]+" / "+df_bar["Município"])
+            fig=px.bar(df_bar,y="Local",x="Média (mca)",orientation="h",
+                       title="Média das aferições por bairro",
+                       hover_data=["Medições","Mín. (mca)","Máx. (mca)","% até 5 mca"],
+                       color_discrete_sequence=["#317ab0"])
+            fig.update_layout(margin=dict(l=5,r=12,t=55,b=10),height=340,yaxis_title=None)
+            st.plotly_chart(fig,use_container_width=True)
+        diarios=bp.dropna(subset=["_data"]).copy()
+        diarios["Dia"]=diarios["_data"].dt.date
+        diarios=diarios.groupby("Dia",as_index=False)["_pressao"].mean().rename(
+            columns={"_pressao":"Média (mca)"})
+        if len(diarios)>1:
+            fig=px.line(diarios,x="Dia",y="Média (mca)",markers=True,
+                        title="Evolução diária da média das aferições",
+                        color_discrete_sequence=["#246e9e"])
+            fig.update_layout(height=315,margin=dict(l=10,r=15,t=45,b=10))
+            st.plotly_chart(fig,use_container_width=True)
+        st.subheader("Diagnóstico por bairro")
+        for item in achados_baixa_pressao(bp,bairros,bp):
+            st.write("• "+item)
+        st.dataframe(bairros,hide_index=True,use_container_width=True)
+        st.subheader("Medições individuais e O.S. relacionadas")
+        campos=["Data","Municipio","Bairro","Matricula","Pressao_MCA","O.S. relacionada","Observacao"]
+        st.caption("O.S. relacionada somente por matrícula + município + mesma data; "
+                   "ausência de vínculo não impede o registro de pressão de aparecer.")
+        st.dataframe(bp.reindex(columns=campos),hide_index=True,use_container_width=True)
+        st.download_button("📥 Baixar medições detalhadas (CSV)",
+            data=bp.reindex(columns=campos).to_csv(index=False,sep=";").encode("utf-8-sig"),
+            file_name="medicoes_pressao_modulo1.csv",mime="text/csv")
+
     else:
         origem=r["contagem_origem"]
         st.caption("Módulo 1: nenhuma medição válida para o período, unidade e município selecionados. "
