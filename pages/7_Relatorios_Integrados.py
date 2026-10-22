@@ -107,8 +107,40 @@ def haversine(lat1, lon1, lat2, lon2):
     return 12742000 * math.asin(min(1, math.sqrt(a)))
 
 def data_parse(v):
-    # O Farol admite datas com hora; o Módulo 1 utiliza em geral DD/MM/AAAA.
-    return pd.to_datetime(v, dayfirst=True, errors="coerce")
+    """Datas do Farol e do M1: dia/mês/ano, ISO, hora opcional e serial Sheets.
+
+    Zero, vazio ou valores não interpretáveis não são convertidos em data fictícia.
+    """
+    if v is None or (not isinstance(v, (list, tuple, dict)) and pd.isna(v)):
+        return pd.NaT
+    if isinstance(v, (pd.Timestamp, datetime, date)):
+        try:
+            return pd.Timestamp(v)
+        except (TypeError, ValueError):
+            return pd.NaT
+    texto = str(v).strip()
+    if not texto or texto.lower() in {"nan", "nat", "none", "-"}:
+        return pd.NaT
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                "%d/%m/%y %H:%M", "%d/%m/%y", "%d-%m-%Y",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+                "%Y/%m/%d"):
+        try:
+            return pd.Timestamp(datetime.strptime(texto, fmt))
+        except ValueError:
+            pass
+    # Datas seriadas podem ter vindo de exportações não formatadas.
+    try:
+        n = float(texto.replace(",", "."))
+        if 20000 <= n <= 90000:
+            return pd.Timestamp("1899-12-30") + pd.to_timedelta(n, unit="D")
+    except (ValueError, TypeError, OverflowError):
+        pass
+    try:
+        return pd.to_datetime(texto, dayfirst=True, errors="coerce")
+    except (ValueError, TypeError, OverflowError):
+        return pd.NaT
+
 
 def preparar_os(df):
     nomes = ["Nº da O.S", "Matrícula", "Cidade", "Bairro", "Latitude", "Longitude", "Dt. Emissão"]
@@ -136,6 +168,7 @@ def preparar_pressao(df):
     df["_data"] = df["Data"].map(data_parse)
     df["_pressao"] = df["Pressao_MCA"].map(flutuante)
     df["_faixa"] = df["_pressao"].map(faixa_pressao)
+    df["_id_medicao"] = [f"BP_{i}" for i in range(len(df))]
     return df
 
 def faixa_pressao(p):
@@ -308,6 +341,78 @@ def diagnostico_geral(resumo, pressao, associados, territorial, inicio, fim):
         locais = sorted({f"{r['_bairro']} ({r['_municipio']})" for _,r in isolados.iterrows() if r['_bairro']})
         achados.append(f"Há {len(isolados)} medição(ões) de até 5 mca em bairro(s) sem concentração identificada pelos critérios atuais" + (": " + ", ".join(locais[:6]) if locais else "") + ".")
     return achados,isolados
+
+def resumo_pressao_por_bairro(pressao):
+    """Consolida TODO o Módulo 1 filtrado, com ou sem concentração relacionada.
+
+    Respeita as faixas visuais M1; 10–15 mca ficam na tabela, fora do mapa.
+    """
+    colunas = ["Município", "Bairro", "Medições", "0 mca", "Até 5 mca",
+               "5–10 mca", "10–15 mca", ">15 mca", "Mín. (mca)"]
+    if pressao is None or pressao.empty:
+        return pd.DataFrame(columns=colunas)
+    base = pressao[pressao["_pressao"].notna()].copy()
+    if base.empty:
+        return pd.DataFrame(columns=colunas)
+    linhas=[]
+    for (municipio, bairro), grupo in base.groupby(["_municipio","_bairro"], dropna=False):
+        p=pd.to_numeric(grupo["_pressao"], errors="coerce").dropna()
+        if p.empty:
+            continue
+        linhas.append({
+            "Município": str(municipio or "Não informado"),
+            "Bairro": str(bairro or "Não informado"),
+            "Medições": int(len(p)),
+            "0 mca": int((p == 0).sum()),
+            "Até 5 mca": int(((p >= 0) & (p <= 5)).sum()),
+            "5–10 mca": int(((p > 5) & (p <= 10)).sum()),
+            "10–15 mca": int(((p > 10) & (p <= 15)).sum()),
+            ">15 mca": int((p > 15).sum()),
+            "Mín. (mca)": round(float(p.min()), 2),
+        })
+    if not linhas:
+        return pd.DataFrame(columns=colunas)
+    return (pd.DataFrame(linhas,columns=colunas)
+            .sort_values(["Até 5 mca","Medições","Município","Bairro"],
+                         ascending=[False,False,True,True]).reset_index(drop=True))
+
+
+def diagnostico_pressao_independente(pressao, resumo_bairros, associados, territoriais):
+    """Diagnóstico apoiado em todas as leituras, não apenas nas ligadas a O.S."""
+    if pressao is None or pressao.empty:
+        return []
+    total = len(pressao)
+    p = pd.to_numeric(pressao["_pressao"], errors="coerce").dropna()
+    if p.empty:
+        return []
+    n_zero = int((p == 0).sum())
+    n_baixa = int(((p > 0) & (p <= 5)).sum())
+    n_atencao = int(((p > 5) & (p <= 10)).sum())
+    n_oculta = int(((p > 10) & (p <= 15)).sum())
+    n_alta = int((p > 15).sum())
+    achados = [
+        f"O Módulo 1 registrou {total} medição(ões) no período e unidade selecionados, "
+        f"em {len(resumo_bairros)} bairro(s), independentemente das concentrações do Farol.",
+        f"Distribuição: {n_zero} com 0 mca; {n_baixa} acima de 0 até 5 mca; "
+        f"{n_atencao} acima de 5 até 10 mca; {n_oculta} acima de 10 até 15 mca "
+        f"(faixa que não aparece no mapa); {n_alta} acima de 15 mca.",
+    ]
+    criticos=resumo_bairros[resumo_bairros["Até 5 mca"]>0]
+    if not criticos.empty:
+        nomes=[f"{r['Bairro']} ({r['Município']})" for _,r in criticos.head(5).iterrows()]
+        achados.append("Prioridade de verificação da pressão (0–5 mca): "
+                       + ", ".join(nomes) + ". A medição é pontual e não estabelece a causa.")
+    relacionadas=set()
+    for tabela in (associados, territoriais):
+        if tabela is not None and not tabela.empty and "_id_medicao" in tabela:
+            relacionadas.update(tabela["_id_medicao"].astype(str))
+    q_sem_relacao = int((~pressao["_id_medicao"].astype(str).isin(relacionadas)).sum())
+    if q_sem_relacao:
+        achados.append(f"{q_sem_relacao} medição(ões) não estão vinculadas a nenhuma "
+                       "concentração pela proximidade ou coincidência de bairro; continuam "
+                       "representadas no panorama de pressão.")
+    return achados
+
 
 def mapa_integrado(concs, associados, raio):
     if concs.empty: return None
@@ -513,12 +618,27 @@ def mapa_integrado_farol(concs, os_cluster, pressao, contexto, raio_cluster, pon
 
     Inclusive as O.S. fora das concentrações, exatamente como no mapa do Módulo 3.
     """
-    if concs.empty:return None
-    mapa=folium.Map(location=[float(concs["Latitude"].mean()),float(concs["Longitude"].mean())],
-                     zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
+    pontos_mapa=[]
+    if concs is not None and not concs.empty:
+        pontos_mapa.extend(concs[["Latitude","Longitude"]].astype(float).values.tolist())
+    base_mapa = pontos_todos if pontos_todos is not None else os_cluster
+    if base_mapa is not None and not base_mapa.empty:
+        pontos_mapa.extend([[float(r["_lat"]),float(r["_lon"])]
+            for _,r in base_mapa.dropna(subset=["_lat","_lon"]).iterrows()])
+    if pressao is not None and not pressao.empty:
+        pontos_mapa.extend([[float(r["_lat"]),float(r["_lon"])]
+            for _,r in pressao.dropna(subset=["_lat","_lon"]).iterrows()
+            if pressao_visivel(r)])
+    if not pontos_mapa:
+        return None
+    centro_lat=sum(p[0] for p in pontos_mapa)/len(pontos_mapa)
+    centro_lon=sum(p[1] for p in pontos_mapa)/len(pontos_mapa)
+    mapa=folium.Map(location=[centro_lat,centro_lon], zoom_start=12,
+                     tiles="OpenStreetMap",control_scale=True,zoom_control=False)
     posicoes=[]
     os_fg=folium.FeatureGroup(name="O.S. — Farol",show=True)
-    base_mapa = pontos_todos if pontos_todos is not None else os_cluster
+    if base_mapa is None:
+        base_mapa = pd.DataFrame()
     for _,p in base_mapa.iterrows():
         if pd.isna(p.get("_lat")) or pd.isna(p.get("_lon")): continue
         lat,lon=float(p["_lat"]),float(p["_lon"])
@@ -529,19 +649,20 @@ def mapa_integrado_farol(concs, os_cluster, pressao, contexto, raio_cluster, pon
             tooltip=f"O.S. {p.get('Nº da O.S','')} — {p.get('Bairro','')}").add_to(os_fg)
         posicoes.append([lat,lon])
     os_fg.add_to(mapa)
-    centros=[(float(c["Latitude"]),float(c["Longitude"])) for _,c in concs.iterrows()]
-    adicionar_ativos_eventos_mapa(mapa,contexto,centros=centros,raio=raio_cluster)
+    centros=[(float(c["Latitude"]),float(c["Longitude"])) for _,c in concs.iterrows()] if concs is not None and not concs.empty else []
+    if centros:
+        adicionar_ativos_eventos_mapa(mapa,contexto,centros=centros,raio=raio_cluster)
     # A inclusão de TODAS as aferições do período não depende de uma associação com O.S.
     pontos_bp=adicionar_pontos_pressao(mapa,pressao)
-    for _,c in concs.iterrows():
+    for _,c in (concs if concs is not None else pd.DataFrame()).iterrows():
         y,x=float(c["Latitude"]),float(c["Longitude"])
         folium.Circle([y,x],radius=raio_cluster,color="#8522a5",weight=3,
                       fill=True,fill_color="#8522a5",fill_opacity=.05).add_to(mapa)
         marcador_concentracao(c).add_to(mapa)
         posicoes.append([y,x])
-    # Evitar enquadramento excessivo por pontos muito distantes em outros municípios.
-    bp_locais=[p for p in pontos_bp if any(haversine(p[0],p[1],c[0],c[1])<10000 for c in centros)]
-    enquadrar=posicoes+bp_locais
+    # Todas as medições válidas selecionadas entram no enquadramento, inclusive
+    # bairros sem O.S. concentradas (antes pontos >10 km eram cortados).
+    enquadrar=posicoes+pontos_bp
     if len(enquadrar)>1:
         mapa.fit_bounds(enquadrar,padding=(35,35),max_zoom=14)
     adicionar_legenda_integrada(mapa,bool(pontos_bp))
@@ -739,7 +860,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
     """Relatório do Farol: panorama + fichas com mapa e O.S. ao lado.
 
     Mantém ativos, eventos, classificação temporal de O.S. e acompanhamento.
-    Insere pressão SOMENTE quando há medições associadas à concentração.
+    Detalha medições associadas nas fichas e todas as aferições no anexo M1.
     Não modifica nem importa a página do Módulo 3.
     """
     contexto = contexto or {}
@@ -784,18 +905,54 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
              P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y} | Gerado em {datetime.now():%d/%m/%Y %H:%M}"
                + (" | Unidade: " + str(concentracoes.iloc[0]["_unidade"]) if concentracoes is not None and not concentracoes.empty else ""),normal),
              Spacer(1,9)]
+    resumo_bp = resumo_pressao_por_bairro(pressao)
+
+    def adicionar_secao_modulo1():
+        """Anexo M1 completo, mesmo quando não houver pressão junto às O.S."""
+        if pressao.empty or resumo_bp.empty:
+            return
+        historia.append(P("PANORAMA DE PRESSÃO — MÓDULO 1", titulo))
+        achados_m1=diagnostico_pressao_independente(pressao,resumo_bp,associados,territoriais)
+        for item in achados_m1:
+            historia.append(P("• " + item, normal))
+            historia.append(Spacer(1, 3))
+        historia.append(Spacer(1, 5))
+        linhas=[]
+        for _,r_bp in resumo_bp.iterrows():
+            linhas.append([f"{r_bp['Bairro']} — {r_bp['Município']}",
+                r_bp["Medições"],r_bp["0 mca"],r_bp["Até 5 mca"],
+                r_bp["5–10 mca"],r_bp["10–15 mca"],r_bp[">15 mca"],
+                f"{r_bp['Mín. (mca)']:g}"])
+        historia.append(tabela(["Bairro / município","Medições","0 mca","≤5 mca",
+            "5–10 mca","10–15 mca",">15 mca","Mín. mca"], linhas,
+            [9.1*cm,2.6*cm,2.2*cm,2.3*cm,2.4*cm,2.6*cm,2.2*cm,2.6*cm]))
+        historia.extend([Spacer(1,6),P("Medições de 10 a 15 mca são contabilizadas, mas "
+            "permanecem ocultas no mapa, conforme a configuração do Módulo 1.", pequeno)])
+
     if concentracoes is None or concentracoes.empty:
-        historia.append(P("Nenhuma concentração identificada para a seleção.",normal))
+        historia.append(P("Nenhuma concentração identificada para a seleção.", normal))
+        if not pressao.empty:
+            mapa_bp=mapa_integrado_farol(pd.DataFrame(), pd.DataFrame(), pressao, contexto,
+                                        raio_cluster, pontos_todos=pontos_todos)
+            if mapa_bp is not None:
+                historia.append(Spacer(1,8))
+                historia.append(Image(io.BytesIO(imagem_folium(mapa_bp,1280,700)),
+                                      width=26*cm,height=14.22*cm))
+            historia.append(PageBreak())
+            adicionar_secao_modulo1()
         doc.build(historia)
         return buffer.getvalue()
 
-    # PANORAMA exatamente na posição do relatório Farol, com complemento cartográfico M1.
+    # PANORAMA do Farol + todos os pontos cartográficos válidos de pressão.
     mapa=mapa_integrado_farol(concentracoes,grupos,pressao,contexto,raio_cluster,
                              pontos_todos=pontos_todos)
     imagem=imagem_folium(mapa,1280,700)
+    n_bairros_bp = len(resumo_bp)
+    p_criticos = (int(pd.to_numeric(pressao["_pressao"],errors="coerce").le(5).sum())
+                  if not pressao.empty else 0)
     subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais"
-               + (" · medições de pressão sobrepostas" if (not pressao.empty and
-                   any(pressao.apply(pressao_visivel,axis=1))) else "") + ".")
+               + (f" · Módulo 1: {len(pressao)} medições em {n_bairros_bp} bairros,"
+                  f" {p_criticos} até 5 mca" if not pressao.empty else "") + ".")
     historia.append(KeepTogether([
         P("Panorama territorial das concentrações",titulo),
         Image(io.BytesIO(imagem),width=26*cm,height=14.22*cm),
@@ -901,7 +1058,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                     for m in movimentacoes],[4.5*cm,4.5*cm,17.0*cm]))
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
-        # COMPLEMENTO M1: seção omitida completamente quando não houver medições pertinentes.
+        # COMPLEMENTO M1 da ficha: só quando existir associação pertinente.
         if not proximas.empty or not territoriais_c.empty:
             historia.append(P("MEDIÇÕES DE PRESSÃO — MÓDULO 1",secao))
             if not proximas.empty:
@@ -931,6 +1088,9 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
             historia.append(P("Associação espacial/territorial não confirma causa hidráulica.",pequeno))
         if indice<len(resumo)-1:
             historia.append(PageBreak())
+    if not pressao.empty:
+        historia.append(PageBreak())
+        adicionar_secao_modulo1()
     doc.build(historia)
     return buffer.getvalue()
 
@@ -963,9 +1123,13 @@ if executar:
         with st.spinner("Consultando as bases e cruzando O.S. com medições..."):
             os_df=preparar_os(ler_base(ID_FAROL,"PONTOS"))
             contexto=carregar_contexto_farol()
-            bp=preparar_pressao(ler_base(ID_PRESSAO,"baixa_pressao"))
+            bp_todas=preparar_pressao(ler_base(ID_PRESSAO,"baixa_pressao"))
+            contagem_origem={"total": len(bp_todas),
+                "data_valida": int(bp_todas["_data"].notna().sum()),
+                "pressao_valida": int(bp_todas["_pressao"].notna().sum())}
             os_df=os_df[os_df["_data"].dt.date.between(inicio,fim)].copy()
-            bp=bp[bp["_data"].dt.date.between(inicio,fim) & bp["_pressao"].notna()].copy()
+            bp=bp_todas[bp_todas["_data"].dt.date.between(inicio,fim) & bp_todas["_pressao"].notna()].copy()
+            contagem_origem["periodo"] = len(bp)
             unidade=unidade_sel.split(" ",1)[0]
             os_df=os_df[os_df["Cidade"].map(unidade_da_cidade_farol)==unidade].copy()
             bp=bp[bp["Municipio"].map(unidade_da_cidade_farol)==unidade].copy()
@@ -973,6 +1137,8 @@ if executar:
                 mun=normalizar(municipio_sel)
                 os_df=os_df[os_df["_municipio"]==mun]
                 bp=bp[bp["_municipio"]==mun]
+            contagem_origem["unidade_municipio"] = len(bp)
+            resumo_bp=resumo_pressao_por_bairro(bp)
             concs,grupos=concentracoes_farol(os_df,int(raio_cluster),int(minimo))
             if not concs.empty:
                 resumo,associados,territoriais=relacionar(concs,grupos,bp,int(raio_relacao),inicio,fim)
@@ -981,9 +1147,9 @@ if executar:
                 resumo,associados,territoriais=pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
                 achados=["Nenhuma concentração atende aos critérios selecionados."]
                 pressao_sem_conc=bp.iloc[:0].copy()
-            st.session_state["relatorio_coi_integrado"]={"versao_esquema":8,"resumo":resumo,"associados":associados,"territoriais":territoriais,
+            st.session_state["relatorio_coi_integrado"]={"versao_esquema":9,"resumo":resumo,"associados":associados,"territoriais":territoriais,
              "concentracoes":concs,"achados":achados,"pressao_sem_conc":pressao_sem_conc,
-             "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp,"unidade":unidade,"os_base":os_df}
+             "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp,"unidade":unidade,"os_base":os_df,"resumo_bp":resumo_bp,"contagem_origem":contagem_origem}
     except gspread.exceptions.APIError as ex:
         codigo=getattr(getattr(ex,"response",None),"status_code",None)
         st.error("Quota temporária do Google Sheets excedida (429)." if codigo==429 else f"Falha na consulta às fontes (HTTP {codigo or 'desconhecido'}).")
@@ -998,11 +1164,11 @@ r=st.session_state.get("relatorio_coi_integrado")
 # apresentado como se tivesse passado pela análise nova.
 _chaves_necessarias = {
     "resumo", "associados", "territoriais", "concentracoes", "achados", "grupos", "raio_cluster",
-    "pressao_sem_conc", "inicio", "fim", "raio", "n_os", "n_bp", "contexto", "pressao_mapa", "unidade", "os_base"
+    "pressao_sem_conc", "inicio", "fim", "raio", "n_os", "n_bp", "contexto", "pressao_mapa", "unidade", "os_base", "resumo_bp", "contagem_origem"
 }
 if r is not None and (
     not isinstance(r, dict)
-    or r.get("versao_esquema") != 8
+    or r.get("versao_esquema") != 9
     or not _chaves_necessarias.issubset(r)
 ):
     st.session_state.pop("relatorio_coi_integrado", None)
@@ -1024,9 +1190,9 @@ if r:
     st.subheader(f"Análise operacional — {r['unidade']}")
     for achado in r["achados"]:
         st.write("• " + achado)
-    if not resumo.empty:
+    if not resumo.empty or tem_pressao:
         st.subheader("Mapa consolidado")
-        st.caption("Mapa do Farol: concentrações, O.S. e equipamentos operacionais." +
+        st.caption("Mapa integrado: concentrações, O.S. e equipamentos operacionais do Farol." +
                    (" Medições do Módulo 1 sobrepostas: vermelho (0–5 mca), amarelo (5–10 mca) e roxo (>15 mca)." if tem_pressao else ""))
         mapa=mapa_integrado_farol(r["concentracoes"],r["grupos"],r["pressao_mapa"],r["contexto"],
                                   r["raio_cluster"],pontos_todos=r["os_base"])
@@ -1036,7 +1202,10 @@ if r:
         visiveis=["Concentração","Município","Bairros","O.S.","Matrículas"]
         if not resumo.empty and ((resumo["Medições próximas"]>0)|(resumo["Medições mesmo bairro"]>0)).any():
             visiveis += ["Medições próximas","Medições mesmo bairro","Menor pressão (mca)","Classificação indicativa"]
-        st.dataframe(resumo[visiveis],hide_index=True,use_container_width=True)
+        if not resumo.empty:
+            st.dataframe(resumo[visiveis],hide_index=True,use_container_width=True)
+        else:
+            st.caption("Não há concentração nesta seleção. Os pontos medidos do Módulo 1 continuam visíveis no mapa.")
         if st.button("📄 Preparar relatório cartográfico (PDF)", type="primary", key="gerar_pdf_ri_farol"):
             try:
                 with st.spinner("Capturando mapas e montando as fichas operacionais..."):
@@ -1050,8 +1219,9 @@ if r:
             st.download_button("⬇️ Baixar relatório no padrão Farol (PDF)",
                 data=st.session_state["pdf_relatorio_integrado_farol"],
                 file_name="relatorio_operacional_integrado_coi.pdf",mime="application/pdf")
-        st.download_button("📋 Baixar diagnóstico (CSV)",data=resumo[visiveis].to_csv(index=False,sep=";").encode("utf-8-sig"),
-            file_name="diagnostico_integrado_coi.csv",mime="text/csv")
+        if not resumo.empty:
+            st.download_button("📋 Baixar diagnóstico (CSV)",data=resumo[visiveis].to_csv(index=False,sep=";").encode("utf-8-sig"),
+                file_name="diagnostico_integrado_coi.csv",mime="text/csv")
         if not r["associados"].empty:
             with st.expander("Medições associadas por proximidade geográfica"):
                 campos=["Concentração","Data","Municipio","Bairro","Matricula","Pressao_MCA","_faixa","Distância até O.S. (m)","Observacao"]
@@ -1063,5 +1233,21 @@ if r:
         if not r["pressao_sem_conc"].empty:
             with st.expander("Medições até 5 mca em bairros sem concentração"):
                 st.dataframe(r["pressao_sem_conc"][["Data","Municipio","Bairro","Pressao_MCA","Observacao"]],hide_index=True,use_container_width=True)
+    if tem_pressao:
+        st.divider()
+        st.subheader("Módulo 1 — Panorama de pressão por bairro")
+        st.caption("Inclui TODAS as medições do período e unidade, mesmo quando não se relacionam a uma concentração de O.S.")
+        for item in diagnostico_pressao_independente(r["pressao_mapa"],r["resumo_bp"],r["associados"],r["territoriais"]):
+            st.write("• " + item)
+        st.dataframe(r["resumo_bp"], hide_index=True, use_container_width=True)
+        st.download_button("📥 Baixar medições do Módulo 1 (CSV)",
+            data=r["pressao_mapa"][["Data","Municipio","Bairro","Latitude","Longitude","Pressao_MCA","Observacao","Matricula"]].to_csv(index=False,sep=";").encode("utf-8-sig"),
+            file_name="medicoes_pressao_modulo1.csv", mime="text/csv")
+    else:
+        origem=r["contagem_origem"]
+        st.caption("Módulo 1: nenhuma medição válida para o período, unidade e município selecionados. "
+                   f"Registros disponíveis na fonte: {origem['total']}; datas reconhecidas: "
+                   f"{origem['data_valida']}; pressões numéricas: {origem['pressao_valida']}; "
+                   f"válidas no período (antes de filtrar unidade): {origem['periodo']}.")
 else:
     st.info("Selecione o período e clique em **Gerar diagnóstico integrado**. As bases são consultadas somente quando solicitado.")
