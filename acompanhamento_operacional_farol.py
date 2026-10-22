@@ -110,8 +110,16 @@ def causa_para_interface(evento):
     antigo = str(evento.get("status", "")).casefold()
     return "Sim" if "causa identificada" in antigo and "não identificada" not in antigo else "Não"
 
+def exigir_permissao_acompanhamento():
+    """Somente perfis admin/usuario podem persistir mudanças, inclusive em ficha concluída."""
+    perfil = str(st.session_state.get("perfil", "")).strip().lower()
+    if perfil not in {"admin", "usuario"}:
+        raise PermissionError("Seu perfil permite apenas consultar os acompanhamentos.")
+
+
 def cadastrar(titulo, qtd, status, unidade, regional, municipio, data_ident, descricao,
               arcgis, sia, loggers, retorno, finalizado, data_fim, causa_identificada="Não"):
+    exigir_permissao_acompanhamento()
     if status not in STATUS:
         raise ValueError("Status inválido para o novo acompanhamento.")
     if causa_identificada not in SIM_NAO:
@@ -163,14 +171,15 @@ def obter_movimentacoes(eid):
     return [(r["data_hora"], r["descricao"], r["status_momento"]) for r in rows]
 
 def esta_concluido(evento):
-    """Impede edição tanto por status concluído quanto por finalização explícita."""
+    """Identifica a situação da ficha; não determina as permissões de edição."""
     return (str(evento.get("status", "")).strip().casefold().startswith("concluído")
             or str(evento.get("finalizado", "")).strip().casefold() == "sim")
 
 
 def editar_ficha(eid, titulo, qtd, unidade, regional, municipio, data_ident,
                  descricao, arcgis, sia, loggers, retorno):
-    """Edita apenas a ficha ainda aberta, sem apagar o histórico nem alterar o ID."""
+    """Edita a ficha (inclusive concluída) mantendo o ID e as movimentações."""
+    exigir_permissao_acompanhamento()
     if not str(titulo).strip() or not str(municipio).strip():
         raise ValueError("Título e município são obrigatórios.")
     with _GRAVACAO_LOCK:
@@ -183,8 +192,6 @@ def editar_ficha(eid, titulo, qtd, unidade, regional, municipio, data_ident,
             raise ValueError("Acompanhamento não encontrado ou ID duplicado.")
         numero_linha, linha = matches[0]
         atual = dict(zip(CAMPOS_EVENTOS, (linha + [""] * len(CAMPOS_EVENTOS))[:len(CAMPOS_EVENTOS)]))
-        if esta_concluido(atual):
-            raise ValueError("Este acompanhamento já foi concluído e não pode ser editado.")
         momento = agora()
         # B:D = título, quantidade, status (mantido); E:N = atualização e campos editáveis.
         aba.batch_update([
@@ -205,12 +212,14 @@ def editar_ficha(eid, titulo, qtd, unidade, regional, municipio, data_ident,
 
 
 def atualizar(eid, status, observacao, finalizado, data_fim):
+    exigir_permissao_acompanhamento()
     momento = agora()
     if status not in STATUS:
         raise ValueError("Status inválido.")
     if status == "Concluído" or finalizado == "Sim":
         status, finalizado = "Concluído", "Sim"
-        data_fim = data_fim or momento
+    else:
+        finalizado, data_fim = "Não", ""
     texto = observacao.strip() or f"Status atualizado para: {status}"
     with _GRAVACAO_LOCK:
         aba = aba_google("eventos")
@@ -221,8 +230,9 @@ def atualizar(eid, status, observacao, finalizado, data_fim):
         numero_linha = linhas_exatas[0]
         linha_atual = aba.row_values(numero_linha)
         evento_atual = dict(zip(CAMPOS_EVENTOS, (linha_atual + [""] * len(CAMPOS_EVENTOS))[:len(CAMPOS_EVENTOS)]))
-        if esta_concluido(evento_atual):
-            raise ValueError("Este acompanhamento já foi concluído e não aceita novas movimentações.")
+        if finalizado == "Sim":
+            # Edições posteriores não mudam a data histórica do encerramento.
+            data_fim = data_fim or evento_atual.get("data_finalizacao", "") or momento
         # Atualiza o intervalo D:E (status e data da última atualização) e O:P (finalização).
         aba.batch_update([
             {"range": f"D{numero_linha}:E{numero_linha}", "values": [[status, momento]]},
@@ -236,16 +246,15 @@ def atualizar(eid, status, observacao, finalizado, data_fim):
 
 def salvar_popup(eid, titulo, qtd, status, causa, unidade, regional, municipio,
                  descricao, arcgis, sia, loggers, retorno, movimentacao="", concluir=False):
-    """Uma operação lógica: edição + status/causa + eventual finalização + auditoria."""
+    """Edição autorizada, inclusive após conclusão, com registro de histórico."""
+    exigir_permissao_acompanhamento()
     if not str(titulo).strip() or not str(municipio).strip():
         raise ValueError("Título e município são obrigatórios.")
     if status not in STATUS or causa not in SIM_NAO:
         raise ValueError("Status ou identificação da causa inválidos.")
-    if status == "Concluído" and not concluir:
-        raise ValueError("Para encerrar a ficha utilize o botão 'Acompanhamento Concluído'.")
     with _GRAVACAO_LOCK:
         aba = aba_google("eventos")
-        # Releitura no momento da gravação evita editar ficha finalizada por outra sessão.
+        # Releitura garante edição sobre o registro mais recente e preserva o histórico.
         indices = [n for n, id_item in enumerate(aba.col_values(1), start=1)
                    if n > 1 and str(id_item).strip() == str(eid)]
         if len(indices) != 1:
@@ -253,12 +262,18 @@ def salvar_popup(eid, titulo, qtd, status, causa, unidade, regional, municipio,
         linha = indices[0]
         valores = aba.row_values(linha)
         anterior = dict(zip(CAMPOS_EVENTOS, (valores + [""] * len(CAMPOS_EVENTOS))[:len(CAMPOS_EVENTOS)]))
-        if esta_concluido(anterior):
-            raise ValueError("Este acompanhamento já foi concluído e não pode ser editado.")
         momento = agora()
+        ja_concluido = esta_concluido(anterior)
+        # A ficha já concluída pode ser corrigida ou reaberta por admin/usuario.
+        # Um novo encerramento de ficha aberta é confirmado pelo botão específico.
+        if status == "Concluído" and not concluir and not ja_concluido:
+            raise ValueError("Para concluir, utilize o botão 'Acompanhamento Concluído'.")
         status_final = "Concluído" if concluir else status
-        finalizado = "Sim" if concluir else "Não"
-        data_fim = momento if concluir else ""
+        finalizado = "Sim" if status_final == "Concluído" else "Não"
+        if finalizado == "Sim":
+            data_fim = (anterior.get("data_finalizacao", "") or momento) if ja_concluido else momento
+        else:
+            data_fim = ""
         linha_nova = [
             str(titulo).strip(), int(qtd), status_final, momento, unidade, regional,
             str(municipio).strip(), anterior.get("data_identificacao", "") or momento,
@@ -288,7 +303,9 @@ def salvar_popup(eid, titulo, qtd, status, causa, unidade, regional, municipio,
                     if str(antigo) != str(atual):
                         alteracoes.append(rotulo)
                 descr = ("Ficha atualizada: " + ", ".join(alteracoes) + ".") if alteracoes else "Ficha revisada, sem alteração dos campos."
-        if concluir and "concluído" not in descr.casefold():
+        if ja_concluido and status_final != "Concluído":
+            descr = "Acompanhamento reaberto. " + descr
+        elif concluir and not ja_concluido and "concluído" not in descr.casefold():
             descr += " | Acompanhamento concluído."
         aba_mov = aba_google("movimentacoes")
         mid = novo_id(ler_registros("movimentacoes"))
@@ -316,10 +333,14 @@ def popup_acompanhamento_farol(contexto, pode_editar=True):
         return
 
     concluido = bool(evento and esta_concluido(evento))
-    somente_leitura = not pode_editar or concluido
+    perfil = str(st.session_state.get("perfil", "")).strip().lower()
+    somente_leitura = not (pode_editar and perfil in {"admin", "usuario"})
     st.caption("Ficha vinculada à concentração do Farol · histórico preservado no Google Sheets")
     if concluido:
-        st.success("Acompanhamento concluído — disponível somente para consulta.")
+        st.success("Acompanhamento concluído.")
+        if not somente_leitura:
+            st.caption("Admin/usuário: todos os campos da ficha podem ser corrigidos. "
+                       "Para reabrir, selecione Pendente ou Em Andamento e salve.")
     elif evento:
         st.info("Acompanhamento em andamento. É possível editar os campos e atualizar o status.")
     else:
@@ -350,7 +371,7 @@ def popup_acompanhamento_farol(contexto, pode_editar=True):
         col_status, col_causa = st.columns(2)
         status_atual = status_para_interface(evento.get("status", "")) if evento else "Em Andamento"
         status = col_status.selectbox("Status", STATUS, index=STATUS.index(status_atual), disabled=somente_leitura,
-                                      help="O encerramento definitivo ocorre pelo botão 'Acompanhamento Concluído'.")
+                                      help="Ao mudar um concluído para Pendente/Em Andamento e salvar, ele será reaberto.")
         causa_atual = causa_para_interface(evento) if evento else "Não"
         causa = col_causa.radio("Causa identificada?", SIM_NAO, horizontal=True,
                                 index=SIM_NAO.index(causa_atual), disabled=somente_leitura)
@@ -371,20 +392,25 @@ def popup_acompanhamento_farol(contexto, pode_editar=True):
         if evento and not somente_leitura:
             movimentacao = st.text_area("Nova movimentação (opcional)", placeholder="Descreva a ação realizada ou pendência...", height=70)
         if not somente_leitura:
-            confirmar_fim = st.checkbox("Confirmo que este acompanhamento está encerrado.")
-            salvar_col, concluir_col = st.columns(2)
-            salvar = salvar_col.form_submit_button("💾 Salvar acompanhamento", type="primary", use_container_width=True)
-            encerrar = concluir_col.form_submit_button("✅ Acompanhamento Concluído",
-                                    use_container_width=True)
+            if concluido:
+                salvar = st.form_submit_button("💾 Salvar alterações / Reabrir",
+                                              type="primary", use_container_width=True)
+                encerrar = confirmar_fim = False
+            else:
+                confirmar_fim = st.checkbox("Confirmo que este acompanhamento está encerrado.")
+                salvar_col, concluir_col = st.columns(2)
+                salvar = salvar_col.form_submit_button("💾 Salvar acompanhamento", type="primary", use_container_width=True)
+                encerrar = concluir_col.form_submit_button("✅ Acompanhamento Concluído",
+                                        use_container_width=True)
         else:
-            salvar = encerrar = False
+            salvar = encerrar = confirmar_fim = False
 
     if salvar or encerrar:
         try:
             if encerrar and not confirmar_fim:
                 raise ValueError("Confirme o encerramento antes de concluir o acompanhamento.")
-            if salvar and status == "Concluído":
-                raise ValueError("Para alterar o status para Concluído, use 'Acompanhamento Concluído'.")
+            if salvar and status == "Concluído" and not concluido:
+                raise ValueError("Para concluir uma ficha em andamento, utilize 'Acompanhamento Concluído'.")
             if evento:
                 salvar_popup(eid, titulo, quantidade, status, causa, unidade, regional,
                              municipio, descricao, arcgis, sia, loggers, retorno, movimentacao, concluir=encerrar)
@@ -625,9 +651,9 @@ def renderizar_acompanhamento_farol(pode_editar=True):
                 if contexto_farol:
                     st.caption("Para baixar o PDF completo com o mapa da concentração, volte ao Farol e use ‘Preparar PDF com mapa da concentração’ na ficha correspondente.")
                 if esta_concluido(ev):
-                    st.info("🔒 Acompanhamento concluído: ficha e movimentações disponíveis somente para consulta.")
-                else:
-                    with st.expander("✏️ Editar dados da ficha (acompanhamento em aberto)", expanded=True):
+                    st.info("Acompanhamento concluído: administrador e usuário podem corrigir ou reabrir a ficha.")
+                if pode_editar:
+                    with st.expander("✏️ Editar dados da ficha", expanded=True):
                         with st.form(f"editar_ficha_acomp_{eid}"):
                             a,b,c = st.columns([2,1,2])
                             titulo_edit = a.text_input("Título do Acompanhamento", value=ev["titulo"])
@@ -662,7 +688,7 @@ def renderizar_acompanhamento_farol(pode_editar=True):
                                 st.rerun()
                             except (ValueError, gspread.exceptions.GSpreadException) as exc:
                                 st.error(str(exc))
-                if not esta_concluido(ev):
+                if pode_editar:
                     st.markdown("#### Registrar Nova Movimentação / Atualização")
                     with st.form(f"atualizar_evento_{eid}"):
                         c1,c2,c3 = st.columns(3)
