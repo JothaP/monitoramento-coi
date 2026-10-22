@@ -44,7 +44,7 @@ from branca.element import Element
 
 from auth import verificar_autenticacao, tem_acesso_modulo
 from integracao_acompanhamento_producao import (chave_concentracao, localizar_vinculo, listar_vinculos, dados_acompanhamento, historico_evento, texto_pdf)
-from acompanhamento_operacional_farol import renderizar_acompanhamento_farol
+from acompanhamento_operacional_farol import renderizar_acompanhamento_farol, popup_acompanhamento_farol
 
 
 # ============================================================
@@ -3542,9 +3542,11 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             # repetir uma leitura para cada cartão na tela.
             try:
                 vinculos_acomp_visiveis = {v["chave"]: v for v in listar_vinculos()}
+                fichas_acomp_visiveis = dados_acompanhamento()
                 erro_acomp_visivel = None
             except Exception as erro:
                 vinculos_acomp_visiveis = {}
+                fichas_acomp_visiveis = {}
                 erro_acomp_visivel = erro
                 st.warning(f"Acompanhamentos temporariamente indisponíveis: {erro}")
             # Mesma divisão geográfica adotada nos relatórios PDF.
@@ -3584,7 +3586,14 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "CHAVE_ACOMPANHAMENTO"] = chave_acomp
                         vinculo_acomp = vinculos_acomp_visiveis.get(chave_acomp)
                         resumo_pdf.loc[resumo_pdf["ID_CONCENTRACAO"] == codigo, "EVENTOS_RELACIONADOS"] = len(eventos_do_grupo)
-                        indicador_nota = "📋 Acompanhamento iniciado" if vinculo_acomp else "Acompanhamento não iniciado"
+                        ficha_acomp = fichas_acomp_visiveis.get(str(vinculo_acomp.get("evento_id", ""))) if vinculo_acomp else None
+                        if ficha_acomp and (str(ficha_acomp.get("finalizado", "")).strip().casefold() == "sim"
+                                             or str(ficha_acomp.get("status", "")).strip().casefold().startswith("concluído")):
+                            indicador_nota = "✅ Acompanhamento concluído"
+                        elif vinculo_acomp:
+                            indicador_nota = "🔄 Acompanhamento em andamento"
+                        else:
+                            indicador_nota = "Acompanhamento não iniciado" if not erro_acomp_visivel else "Acompanhamento indisponível"
                         bairros_grupo = str(concentracao.get("BAIRROS", "") or "").strip()
                         titulo = (
                             f"{codigo} — {', '.join(cidades_grupo) or 'Município não informado'}"
@@ -3599,12 +3608,14 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                         ativa = str(codigo) == str(st.session_state.get("farol_v2_concentracao", ""))
                         with st.expander(titulo, expanded=ativa):
                             if vinculo_acomp:
-                                st.success(f"Acompanhamento operacional #{vinculo_acomp['evento_id']} vinculado.")
+                                st.success(indicador_nota)
                             else:
                                 st.caption("Nenhuma ficha operacional iniciada para este conjunto de O.S.")
-                            rotulo_acomp = "📂 Abrir Acompanhamento Operacional" if vinculo_acomp else "📝 Iniciar Acompanhamento Operacional"
-                            if st.button(rotulo_acomp, key=f"farol_acomp_{abrangencia}_{codigo}", disabled=not PODE_EDITAR_FAROL):
-                                st.session_state["acomp_farol_contexto"] = {
+                            rotulo_acomp = ("📋 Consultar Acompanhamento" if "concluído" in indicador_nota
+                                            else "✏️ Abrir / Editar Acompanhamento") if vinculo_acomp else "📝 Iniciar Acompanhamento"
+                            if st.button(rotulo_acomp, key=f"farol_acomp_{abrangencia}_{codigo}",
+                                         disabled=bool(erro_acomp_visivel)):
+                                contexto_popup = {
                                     "chave": chave_acomp, "codigo": str(codigo),
                                     "municipio": municipio_acomp, "bairros": bairros_grupo,
                                     "latitude": float(concentracao["LATITUDE"]),
@@ -3613,8 +3624,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                                     "evento_id": str(vinculo_acomp["evento_id"]) if vinculo_acomp else "",
                                     "origem": "producao",
                                 }
-                                st.session_state["farol_exibir_acompanhamento"] = True
-                                st.rerun()
+                                popup_acompanhamento_farol(contexto_popup, pode_editar=PODE_EDITAR_FAROL)
                             if st.button("🗺️ Abrir mapa desta concentração" if not ativa else "📍 Mapa desta concentração aberto",
                                          key=f"farol_v2_foco_{abrangencia}_{codigo}", disabled=ativa):
                                 st.session_state["farol_v2_concentracao"] = str(codigo)
