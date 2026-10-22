@@ -44,7 +44,7 @@ from branca.element import Element
 
 from auth import verificar_autenticacao, tem_acesso_modulo
 from integracao_acompanhamento_producao import (chave_concentracao, localizar_vinculo, listar_vinculos, dados_acompanhamento, historico_evento, texto_pdf)
-from acompanhamento_operacional_farol import renderizar_acompanhamento_farol, popup_acompanhamento_farol
+from acompanhamento_operacional_farol import popup_acompanhamento_farol
 
 
 # ============================================================
@@ -85,10 +85,11 @@ if not ID_PLANILHA_ACOMP or ID_PLANILHA_ACOMP == SPREADSHEET_ID:
     st.error("Configure acompanhamento_operacional_spreadsheet_id com uma OUTRA planilha Google Sheets, independente da planilha do Farol.")
     st.stop()
 
-# A ficha é uma visualização interna do Farol; não depende mais de pages/7_Modulo_7.py.
-if st.session_state.get("farol_exibir_acompanhamento"):
-    renderizar_acompanhamento_farol(pode_editar=PODE_EDITAR_FAROL)
-    st.stop()
+# A ficha deve ser aberta exclusivamente pelo popup da concentração.
+# Remove sinalizadores de navegação da versão antiga (tela com abas).
+# Eles podem sobreviver na sessão após a implantação de uma nova versão.
+st.session_state.pop("farol_exibir_acompanhamento", None)
+st.session_state.pop("acomp_farol_contexto", None)
 
 NOME_ABA_POCOS = "POCOS"
 NOME_ABA_LOGGERS = "LOGGERS"
@@ -3613,7 +3614,8 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                                 st.caption("Nenhuma ficha operacional iniciada para este conjunto de O.S.")
                             rotulo_acomp = (
                                 ("✏️ Abrir / Editar Acompanhamento" if PODE_EDITAR_FAROL else "📋 Consultar Acompanhamento")
-                                if vinculo_acomp else "📝 Iniciar Acompanhamento"
+                                if vinculo_acomp
+                                else ("📝 Iniciar Acompanhamento" if PODE_EDITAR_FAROL else "📋 Consultar Acompanhamento")
                             )
                             if st.button(rotulo_acomp, key=f"farol_acomp_{abrangencia}_{codigo}",
                                          disabled=bool(erro_acomp_visivel)):
