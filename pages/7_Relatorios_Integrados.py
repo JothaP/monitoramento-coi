@@ -1,10 +1,10 @@
-"""Módulo 7 — Relatórios Integrados COI.
-Leitura exclusiva de Módulo 1 (baixa_pressao) e Módulo 3 (PONTOS).
-Não importa os módulos interativos: reproduz o algoritmo espacial do Farol.
+"""Módulo 7 — Relatório Farol acrescido de medições do Módulo 1.
+Fontes independentes e acesso somente leitura.
 """
 import io
 import json
 import math
+import re
 import os
 import shutil
 import tempfile
@@ -12,6 +12,7 @@ from pathlib import Path
 import unicodedata
 from datetime import date, datetime, timedelta
 from html import escape
+from xml.sax.saxutils import escape as xml_escape
 
 import folium
 import gspread
@@ -20,10 +21,12 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether, Image, PageBreak
 from reportlab.graphics.shapes import Drawing, Circle, String, Rect
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from streamlit_folium import st_folium
 from auth import verificar_autenticacao, tem_acesso_modulo
 
@@ -229,8 +232,8 @@ def relacionar(concs, os_cluster, pressao, raio, inicio, fim):
             leitura = (f"{n_bairro} medição(ões) no(s) mesmo(s) bairro(s), mas fora do raio de {raio} m "
                        "ou sem coordenadas válidas. Não equivalem a confirmação no local da O.S.")
         else:
-            situacao = "SEM MEDIÇÃO CORRELACIONADA"
-            leitura = "Não há medição próxima nem no(s) mesmo(s) bairro(s) no período; isso não comprova pressão normal."
+            situacao = ""
+            leitura = ""
         resultados.append({**c.to_dict(),
             "Medições próximas": n_geo,
             "Medições mesmo bairro": n_bairro,
@@ -254,9 +257,9 @@ def diagnostico_geral(resumo, pressao, associados, territorial, inicio, fim):
     geo = resumo[resumo["Medições próximas"] > 0]
     bairro = resumo[(resumo["Medições próximas"] == 0) & (resumo["Medições mesmo bairro"] > 0)]
     lacunas = resumo[(resumo["Medições próximas"] == 0) & (resumo["Medições mesmo bairro"] == 0)]
-    achados = [
-        f"{len(resumo)} concentração(ões) de O.S. identificada(s); {len(geo)} com medição geograficamente próxima, {len(bairro)} apenas com indício no mesmo bairro e {len(lacunas)} sem medição correlacionada.",
-    ]
+    achados = [f"{len(resumo)} concentração(ões) de O.S. identificada(s) no período."]
+    if len(geo) or len(bairro):
+        achados.append(f"{len(geo)} concentração(ões) com medição próxima de alguma O.S.; {len(bairro)} com medição no mesmo bairro, fora do raio confirmado.")
     if len(geo):
         crit = geo[geo["Sem/baixa pressão"]>0]
         if len(crit):
@@ -265,8 +268,6 @@ def diagnostico_geral(resumo, pressao, associados, territorial, inicio, fim):
             achados.append("Há medições próximas a O.S., mas nenhuma delas registrou de 0 a 5 mca no período.")
     if len(bairro):
         achados.append("Correspondências apenas por bairro NÃO são prova de que a baixa pressão ocorreu no endereço da reclamação; confirmar localização e janela de medição.")
-    if len(lacunas):
-        achados.append(f"Sem dados correlacionados em {len(lacunas)} concentração(ões): ausência de medição não deve ser interpretada como pressão normal.")
     # Diagnóstico de cobertura: bairros com medição crítica e nenhuma concentração no mesmo bairro.
     bp = pressao[pressao["_data"].dt.date.between(inicio,fim)].copy()
     bp = bp[bp["_pressao"].notna() & (bp["_pressao"]<=5)]
@@ -349,122 +350,542 @@ def mapa_ficha(c, grupo, proximas, raio):
     return mapa
 
 
-def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
-                  concentracoes=None, grupos=None, raio_cluster=500):
-    """Relatório padrão Farol: panorama cartográfico + uma ficha territorial por concentração."""
-    buf=io.BytesIO()
-    doc=SimpleDocTemplate(buf,pagesize=landscape(A4),leftMargin=1.15*cm,rightMargin=1.15*cm,
-                          topMargin=1.05*cm,bottomMargin=1.05*cm)
-    largura=27.4*cm
-    styles={
-      "titulo":ParagraphStyle("ri3t",fontName="Helvetica-Bold",fontSize=16,leading=20,textColor=colors.HexColor("#193e67"),spaceAfter=8),
-      "sub":ParagraphStyle("ri3s",fontName="Helvetica-Bold",fontSize=11,leading=14,textColor=colors.HexColor("#193e67"),spaceBefore=9,spaceAfter=5),
-      "p":ParagraphStyle("ri3p",fontName="Helvetica",fontSize=9.1,leading=13,spaceAfter=5),
-      "mini":ParagraphStyle("ri3m",fontName="Helvetica",fontSize=7.9,leading=10.5,spaceAfter=3),
-      "cel":ParagraphStyle("ri3c",fontName="Helvetica",fontSize=8.1,leading=11),
-    }
-    def P(valor,sty="p"):
-        return Paragraph(escape(str(valor)).replace("\n","<br/>"),styles[sty])
-    def tabela(cab,linhas,larguras):
-        itens=[[P(c,"cel") for c in cab]]+[[P(str(v),"cel") for v in linha] for linha in linhas]
-        tb=Table(itens,colWidths=larguras,repeatRows=1,hAlign="LEFT")
-        tb.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#dce8f5")),
-          ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f3f6fa")]),
-          ("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),5),
-          ("RIGHTPADDING",(0,0),(-1,-1),5),("TOPPADDING",(0,0),(-1,-1),4),
-          ("BOTTOMPADDING",(0,0),(-1,-1),4)]))
-        return tb
-    historia=[P("COI | RELATÓRIO OPERACIONAL INTEGRADO", "titulo"),
-      P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}  ·  Fontes: Módulo 1 / Módulo 3"),
-      P(f"{n_os} O.S. analisadas  ·  {n_bp} medições  ·  {len(resumo)} concentrações  ·  "
-        f"{int((resumo['Medições próximas']>0).sum()) if not resumo.empty else 0} com medições próximas"),
-      P("PANORAMA TERRITORIAL", "sub")]
-    if concentracoes is not None and not concentracoes.empty:
-        mapa=mapa_integrado(concentracoes,associados,raio)
-        imagem=imagem_folium(mapa,1250,650)
-        historia.append(Image(io.BytesIO(imagem),width=20.5*cm,height=10.66*cm))
-        historia.append(Spacer(1,5))
-        historia.append(P("Azul: concentração de O.S. · vermelho: pressão até 5 mca · amarelo: 5–10 mca. "
-          "Medições de 10–15 mca não aparecem no mapa, conforme regra do Módulo 1.","mini"))
-    historia.append(P("LEITURA EXECUTIVA", "sub"))
-    for achado in achados:
-        historia.append(P("• " + str(achado),"mini"))
-    if not resumo.empty:
-        historia.append(P("QUADRO DE PRIORIDADES", "sub"))
-        linhas=[]
-        for _,row in resumo.iterrows():
-            linhas.append([row["Concentração"],row["Bairros"],row["O.S."],
-                           row["Medições próximas"],row["Medições mesmo bairro"],row["Classificação indicativa"]])
-        historia.append(tabela(["Área","Bairros","O.S.","Próximas","Mesmo bairro","Diagnóstico"],linhas,
-                               [2.4*cm,7.0*cm,1.4*cm,2.3*cm,2.9*cm,11.4*cm]))
-    if not resumo.empty:
-        for _,c in resumo.iterrows():
-            historia.append(PageBreak())
-            id_c=str(c["Concentração"])
-            historia.append(P(id_c+" — "+str(c["Município"])+" — "+str(c["Bairros"]),"titulo"))
-            grupo=(grupos[grupos["_grupo"]==c["_grupo"]].copy()
-                   if grupos is not None and not grupos.empty else pd.DataFrame())
-            proximas=(associados[associados["Concentração"]==id_c].copy()
-                       if not associados.empty else pd.DataFrame())
-            por_bairro=(territoriais[territoriais["Concentração"]==id_c].copy()
-                        if not territoriais.empty else pd.DataFrame())
-            mapa=mapa_ficha(c,grupo,proximas,raio_cluster)
-            imagem=imagem_folium(mapa,780,555)
-            mapa_pdf=Image(io.BytesIO(imagem),width=11.25*cm,height=8.0*cm)
-            minimo=c.get("Menor pressão (mca)")
-            resumo_ficha=[P("RESUMO OPERACIONAL","sub"),
-              P(f"Ordens de serviço: {int(c['O.S.'])}  ·  Matrículas distintas: {int(c['Matrículas'])}"),
-              P(f"Medições até {raio} m de uma O.S.: {int(c['Medições próximas'])}"),
-              P(f"Indícios no mesmo bairro: {int(c['Medições mesmo bairro'])}"),
-              P("Menor pressão associada: "+(f"{float(minimo):.1f} mca" if pd.notna(minimo) else "não disponível")),
-              P("CLASSIFICAÇÃO INDICATIVA","sub"),P(c["Classificação indicativa"]),
-              P("INTERPRETAÇÃO","sub"),P(c["Análise operacional"]),
-              P("Mapa: vermelho = O.S.; marcadores de pressão próximos por faixa.","mini")]
-            painel=Table([[mapa_pdf,resumo_ficha]],colWidths=[13.7*cm,13.7*cm],hAlign="LEFT")
-            painel.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),
-                ("BACKGROUND",(1,0),(1,0),colors.HexColor("#f1f5fa")),
-                ("LEFTPADDING",(0,0),(0,0),0), ("RIGHTPADDING",(0,0),(0,0),6),
-                ("LEFTPADDING",(1,0),(1,0),12),
-                ("TOPPADDING",(0,0),(-1,-1),4), ("BOTTOMPADDING",(0,0),(-1,-1),4)]))
-            historia.extend([painel,Spacer(1,6),P("O.S. QUE FORMAM A CONCENTRAÇÃO","sub")])
-            if grupo.empty: historia.append(P("Nenhuma O.S. associada nesta execução."))
-            else:
-                linhas=[]
-                for _,os_row in grupo.iterrows():
-                    linhas.append([os_row.get("Nº da O.S",""),os_row.get("Matrícula",""),
-                         os_row.get("Bairro",""),os_row.get("Dt. Emissão",""),os_row.get("Status OS","")])
-                historia.append(tabela(["O.S.","Matrícula","Bairro","Emissão","Status"],linhas,
-                              [4.0*cm,4.0*cm,9.0*cm,5.1*cm,5.3*cm]))
-            historia.append(P("MEDIÇÕES DE PRESSÃO RELACIONADAS","sub"))
-            for titulo,meds,com_distancia in (("Proximidade geográfica",proximas,True),
-                                               ("Somente bairro coincidente",por_bairro,False)):
-                historia.append(P(titulo+f" ({len(meds)})","mini"))
-                if meds.empty:
-                    historia.append(P("Nenhuma medição nesta categoria.","mini"))
+# ============================================================
+# RELATÓRIO NO PADRÃO FAROL — CONTEÚDO ORIGINAL + PRESSÃO
+# ============================================================
+@st.cache_data(ttl=120, show_spinner=False)
+def carregar_contexto_farol():
+    """Respeita fontes do Farol: EVENTOS no Sheets; poços e loggers nos CSV do GitHub.
+
+    Outras abas de acompanhamento são lidas em lote. O relatório é somente leitura.
+    """
+    def opcional(identificador, aba):
+        try:
+            return ler_base(identificador, aba)
+        except gspread.exceptions.WorksheetNotFound:
+            return pd.DataFrame()
+
+    contexto = {"EVENTOS": opcional(ID_FAROL, "EVENTOS")}
+    raiz = Path(__file__).resolve().parent.parent
+    for aba, nome_arquivo in (("POCOS", "pocos.csv"), ("LOGGERS", "loggers.csv")):
+        caminho = raiz / "dados" / nome_arquivo
+        if caminho.is_file():
+            try:
+                contexto[aba] = pd.read_csv(caminho, dtype=str, keep_default_na=False,
+                                            encoding="utf-8-sig", sep=None, engine="python")
+            except Exception as erro:
+                raise ValueError(f"Não foi possível ler dados/{nome_arquivo}: {erro}") from erro
+        else:
+            # Compatibilidade com instalações nas quais o cadastro ainda está no Sheets.
+            contexto[aba] = opcional(ID_FAROL, aba)
+    contexto.update({"vinculos_farol_producao": pd.DataFrame(),
+                      "eventos_acomp": pd.DataFrame(), "movimentacoes": pd.DataFrame()})
+    id_acomp = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
+    if id_acomp and id_acomp != ID_FAROL:
+        for aba in ("vinculos_farol_producao", "eventos", "movimentacoes"):
+            destino = "eventos_acomp" if aba == "eventos" else aba
+            contexto[destino] = opcional(id_acomp, aba)
+    return contexto
+
+
+def pressao_visivel(m):
+    v = m.get("_pressao")
+    return pd.notna(v) and not (10 < float(v) <= 15)
+
+
+def adicionar_pontos_pressao(mapa, pressao, pontos_limiter=None):
+    """Pontos medidos sobrepostos às concentrações, mesmo sem relação direta com O.S.
+
+    Apenas 10 < pressão <= 15 fica oculto, conforme a regra do Módulo 1.
+    """
+    if pressao is None or pressao.empty:
+        return []
+    camada = folium.FeatureGroup(name="Medições de pressão (Módulo 1)", show=True)
+    posicoes = []
+    for _, med in pressao.iterrows():
+        lat, lon = med.get("_lat"), med.get("_lon")
+        if pd.isna(lat) or pd.isna(lon) or not pressao_visivel(med):
+            continue
+        lat, lon = float(lat), float(lon)
+        valor = float(med["_pressao"])
+        cor = "#f04452" if valor <= 5 else "#f2c600" if valor <= 10 else "#8b27ef"
+        popup = (f"<b>{escape(str(med.get('Bairro', '')))}</b><br>"
+                 f"Pressão aferida: <b>{valor:g} mca</b><br>"
+                 f"Data: {escape(str(med.get('Data','')))}<br>"
+                 f"Matrícula: {escape(str(med.get('Matricula','')))}<br>"
+                 f"Observação: {escape(str(med.get('Observacao','')))}")
+        folium.CircleMarker([lat,lon],radius=7,color="#ffffff",weight=1.6,
+            fill=True,fill_color=cor,fill_opacity=.98,
+            tooltip=f"Pressão {valor:g} mca — {med.get('Bairro','')}",
+            popup=folium.Popup(popup,max_width=350)).add_to(camada)
+        posicoes.append([lat,lon])
+    if posicoes:
+        camada.add_to(mapa)
+    return posicoes
+
+
+def marcador_concentracao(c):
+    """Alvo roxo do Farol, distinto dos pontos de aferição do Módulo 1."""
+    nome=escape(str(c.get("Concentração", "")))
+    icon=folium.DivIcon(icon_size=(26,26),icon_anchor=(13,13),html=(
+        '<div style="width:24px;height:24px;border:4px solid #8a24bf;'
+        'background:#ffffff;border-radius:50%;box-shadow:0 1px 5px #0006;'
+        'box-sizing:border-box;display:flex;align-items:center;justify-content:center;">'
+        '<div style="width:7px;height:7px;background:#8a24bf;border-radius:50%"></div>'
+        '</div>'))
+    return folium.Marker([float(c["Latitude"]),float(c["Longitude"])],
+            icon=icon,tooltip=f"{nome} — {int(c['O.S.'])} O.S.")
+
+
+def adicionar_legenda_integrada(mapa, tem_pressao):
+    itens='<span style="color:#8729ad">●</span> Concentrações&nbsp;&nbsp; <span style="color:#1877d2">●</span> O.S.'
+    if tem_pressao:
+        itens+='&nbsp;&nbsp; <span style="color:#f04452">●</span> 0–5 mca&nbsp;&nbsp; <span style="color:#d0a700">●</span> 5–10 mca&nbsp;&nbsp; <span style="color:#8b27ef">●</span> &gt;15 mca'
+    from branca.element import Element
+    mapa.get_root().html.add_child(Element(
+        '<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+        'background:rgba(255,255,255,.96);border:1px solid #bdc9d4;'
+        'padding:6px 9px;border-radius:5px;font:11px Arial;color:#22354a">'
+        +itens+'</div>'))
+
+
+def adicionar_ativos_eventos_mapa(mapa, contexto, municipio=None, centros=None, raio=500, rotulos=False):
+    """Usa os CSV de poços/loggers do Farol; limita os equipamentos aos centros."""
+    for tipo, icone in (("POCOS", "tint"), ("LOGGERS", "signal")):
+        base = contexto.get(tipo, pd.DataFrame())
+        if base is None or base.empty:
+            continue
+        camada = folium.FeatureGroup(name="Ativos — " + ("Poços" if tipo=="POCOS" else "Loggers"), show=True)
+        for _, item in base.iterrows():
+            mun = normalizar(item.get("MUNICIPIO",item.get("Município","")))
+            if municipio and mun and mun != normalizar(municipio):
+                continue
+            lat=coordenada(item.get("LATITUDE"),"lat")
+            lon=coordenada(item.get("LONGITUDE"),"lon")
+            if lat is None or lon is None:
+                continue
+            if centros and not any(haversine(lat,lon,y,x)<=raio for y,x in centros):
+                continue
+            nome=str(item.get("IDENTIFICACAO_ATIVO","") or item.get("ID_POCO","") or item.get("ID_LOGGER","") or "Ativo")
+            nome_sec=str(item.get("NOME_POCO","") or item.get("ENDERECO", ""))
+            folium.Marker([lat,lon],icon=folium.Icon(color="orange",icon=icone,prefix="fa"),
+                tooltip=f"{nome} — {nome_sec}").add_to(camada)
+            if rotulos:
+                folium.Marker([lat,lon],icon=folium.DivIcon(icon_size=(155,20),icon_anchor=(-8,24),
+                    html='<div style="display:inline-block;white-space:nowrap;'
+                         'background:#ffffffed;border:1px solid #b8c4d0;'
+                         'padding:2px 4px;border-radius:3px;font:bold 10px Arial;'
+                         'color:#1b324a">'+escape(nome)+'</div>')).add_to(camada)
+        if camada._children:
+            camada.add_to(mapa)
+
+
+def mapa_integrado_farol(concs, os_cluster, pressao, contexto, raio_cluster):
+    """Panorama do Farol com OS azuis/laranjas, alvos roxos, ativos e aferições."""
+    if concs.empty:return None
+    mapa=folium.Map(location=[float(concs["Latitude"].mean()),float(concs["Longitude"].mean())],
+                     zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
+    posicoes=[]
+    os_fg=folium.FeatureGroup(name="O.S. — Farol",show=True)
+    for _,p in os_cluster.iterrows():
+        if pd.isna(p.get("_lat")) or pd.isna(p.get("_lon")): continue
+        lat,lon=float(p["_lat"]),float(p["_lon"])
+        servico=str(p.get("Serviço Executado", ""))
+        cor="#f28c28" if re.search(r"(?<!\d)146005(?!\d)",servico) else "#1677d2"
+        folium.CircleMarker([lat,lon],radius=4.2,color=cor,weight=1,fill=True,
+            fill_color=cor,fill_opacity=.9,
+            tooltip=f"O.S. {p.get('Nº da O.S','')} — {p.get('Bairro','')}").add_to(os_fg)
+        posicoes.append([lat,lon])
+    os_fg.add_to(mapa)
+    centros=[(float(c["Latitude"]),float(c["Longitude"])) for _,c in concs.iterrows()]
+    adicionar_ativos_eventos_mapa(mapa,contexto,centros=centros,raio=raio_cluster)
+    # A inclusão de TODAS as aferições do período não depende de uma associação com O.S.
+    pontos_bp=adicionar_pontos_pressao(mapa,pressao)
+    for _,c in concs.iterrows():
+        y,x=float(c["Latitude"]),float(c["Longitude"])
+        folium.Circle([y,x],radius=raio_cluster,color="#8522a5",weight=3,
+                      fill=True,fill_color="#8522a5",fill_opacity=.05).add_to(mapa)
+        marcador_concentracao(c).add_to(mapa)
+        posicoes.append([y,x])
+    # Evitar enquadramento excessivo por pontos muito distantes em outros municípios.
+    bp_locais=[p for p in pontos_bp if any(haversine(p[0],p[1],c[0],c[1])<10000 for c in centros)]
+    enquadrar=posicoes+bp_locais
+    if len(enquadrar)>1:
+        mapa.fit_bounds(enquadrar,padding=(35,35),max_zoom=14)
+    adicionar_legenda_integrada(mapa,bool(pontos_bp))
+    folium.LayerControl(collapsed=True).add_to(mapa)
+    return mapa
+
+
+def mapa_ficha_farol(c, grupo, pressao, contexto, raio_cluster):
+    centro=[float(c["Latitude"]),float(c["Longitude"])]
+    mapa=folium.Map(location=centro,zoom_start=15,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
+    folium.Circle(centro,radius=raio_cluster,color="#8522a5",weight=3,
+                  fill=True,fill_color="#8522a5",fill_opacity=.06).add_to(mapa)
+    pontos_os=[]
+    os_fg=folium.FeatureGroup(name="O.S. — Concentração",show=True)
+    for _,p in grupo.iterrows():
+        if pd.isna(p.get("_lat")) or pd.isna(p.get("_lon")):continue
+        y,x=float(p["_lat"]),float(p["_lon"])
+        cor="#f28c28" if re.search(r"(?<!\d)146005(?!\d)",str(p.get("Serviço Executado", ""))) else "#1677d2"
+        folium.CircleMarker([y,x],radius=4.5,color=cor,weight=1,fill=True,
+            fill_color=cor,fill_opacity=.92,tooltip=f"O.S. {p.get('Nº da O.S','')}").add_to(os_fg)
+        pontos_os.append([y,x])
+    os_fg.add_to(mapa)
+    municipio=str(c.get("Município", "")).split(",")[0]
+    adicionar_ativos_eventos_mapa(mapa,contexto,municipio=municipio,
+                                   centros=[tuple(centro)],raio=raio_cluster,rotulos=True)
+    codigo_set={normalizar(b) for b in str(c.get("Bairros", "")).split(",")}
+    med_visivel=[]
+    for _,p in pressao.iterrows():
+        if p.get("_municipio")!=normalizar(municipio):continue
+        if pd.isna(p.get("_lat")) or pd.isna(p.get("_lon")):continue
+        if not pressao_visivel(p):continue
+        y,x=float(p["_lat"]),float(p["_lon"])
+        perto=any(haversine(y,x,p_os[0],p_os[1])<=max(raio_cluster*2,750) for p_os in pontos_os)
+        if perto or (p.get("_bairro") in codigo_set and haversine(y,x,*centro)<=3000):
+            med_visivel.append(p)
+    pos_bp=adicionar_pontos_pressao(mapa,pd.DataFrame(med_visivel)) if med_visivel else []
+    marcador_concentracao(c).add_to(mapa)
+    extremos=pontos_os+pos_bp
+    if extremos:
+        extremos += [centro]
+        if len(extremos)>1:
+            mapa.fit_bounds(extremos,padding=(40,40),max_zoom=16)
+    adicionar_legenda_integrada(mapa,bool(pos_bp))
+    folium.LayerControl(collapsed=True).add_to(mapa)
+    return mapa
+
+
+def ativos_da_concentracao(c,contexto,raio):
+    achados=[]
+    for tipo in ("POCOS","LOGGERS"):
+        df=contexto.get(tipo,pd.DataFrame())
+        if df.empty:continue
+        for _,a in df.iterrows():
+            lat=coordenada(a.get("LATITUDE",a.get("Latitude")),"lat")
+            lon=coordenada(a.get("LONGITUDE",a.get("Longitude")),"lon")
+            if lat is None or lon is None:continue
+            cidade=normalizar(a.get("MUNICIPIO",a.get("Município","")))
+            if cidade and cidade not in normalizar(c["Município"]):continue
+            distancia=haversine(float(c["Latitude"]),float(c["Longitude"]),lat,lon)
+            if distancia<=raio:
+                ident=str(a.get("IDENTIFICACAO_ATIVO",a.get("ID_POCO",a.get("ID_LOGGER",""))))
+                nome=str(a.get("NOME_POCO",a.get("ENDERECO","")))
+                achados.append(["Poço" if tipo=="POCOS" else "Logger",ident,nome,f"{distancia:.0f} m"])
+    return sorted(achados,key=lambda v:float(v[3].split()[0]))
+
+
+def evento_tem_abrangencia_municipal(texto):
+    return bool(re.search(r"(?:TODA A CIDADE|TODO O MUNICIPIO|MUNICIPIO INTEIRO|TODOS OS BAIRROS)", normalizar(texto)))
+
+
+def nomes_bairros_evento(texto):
+    bruto=normalizar(texto)
+    bruto=re.sub(r"BAIRROS?\s*(?:IMPACTADOS?|AFETADOS?)?\s*:",";",bruto)
+    bruto=re.sub(r"AREAS?\s+IMPACTADAS?\s*:",";",bruto)
+    return {re.sub(r"\s*\(PARCIAL\)","",p).strip(" .:-")
+            for p in re.split(r"[,;\n]+",bruto) if p.strip(" .:-")}
+
+
+def evento_na_janela(evento, inicio, fim):
+    """Verifica interseção temporal, sem declarar ativo evento encerrado sem término."""
+    ini=data_parse(evento.get("Início", ""))
+    term=data_parse(evento.get("Término Real", ""))
+    if pd.isna(ini):return False
+    finalizado=any(p in normalizar(evento.get("Status","")) for p in ("FINALIZ", "CONCLUID", "ENCERRAD"))
+    if pd.isna(term) and finalizado:return False
+    if pd.notna(term) and term.date()<inicio:return False
+    if ini.date()>fim:return False
+    return True
+
+
+def eventos_da_concentracao(c,contexto,inicio=None,fim=None):
+    """Mesmas chaves de município/bairro do Farol, e evento ativo no período."""
+    eventos=contexto.get("EVENTOS",pd.DataFrame())
+    if eventos is None or eventos.empty:return []
+    mun=normalizar(str(c.get("Município", "")).split(",")[0])
+    bairros={normalizar(x) for x in str(c.get("Bairros","")).split(",") if x.strip()}
+    encontrados=[]
+    for _,e in eventos.iterrows():
+        if normalizar(e.get("Cidade",""))!=mun:continue
+        if inicio is not None and fim is not None and not evento_na_janela(e,inicio,fim):continue
+        areas=e.get("Áreas Impactadas", "")
+        municipal=evento_tem_abrangencia_municipal(areas)
+        coincidentes=sorted(bairros.intersection(nomes_bairros_evento(areas)))
+        if not municipal and not coincidentes:continue
+        item=e.to_dict()
+        item["Bairros coincidentes"]="Todo o município" if municipal and not coincidentes else ", ".join(coincidentes)
+        encontrados.append(item)
+    return encontrados
+
+
+def horario_operacional(valor):
+    """Data sem hora não basta para vincular uma O.S. temporalmente ao evento."""
+    texto=str(valor or "").strip()
+    if not texto or re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}",texto):
+        return pd.NaT
+    return data_parse(texto)
+
+
+def classificar_os_eventos(grupo,eventos):
+    """Classificação Farol: município, bairro e horário [início, fim + 3h]."""
+    vinculadas=[]; nao_vinculadas=[]
+    agora=pd.Timestamp.now().tz_localize(None)
+    for _,osr in grupo.iterrows():
+        data_os=horario_operacional(osr.get("Dt. Emissão", ""))
+        cidade=normalizar(osr.get("Cidade", ""))
+        bairro=normalizar(osr.get("Bairro", ""))
+        protocolos=[]
+        if pd.notna(data_os):
+            for e in eventos:
+                if cidade!=normalizar(e.get("Cidade", "")):continue
+                b_evt=nomes_bairros_evento(e.get("Bairros coincidentes", ""))
+                if not evento_tem_abrangencia_municipal(e.get("Bairros coincidentes", "")) and bairro not in b_evt:
                     continue
-                linhas=[]
-                for _,med in meds.iterrows():
-                    press=med.get("_pressao")
-                    linhas.append([med.get("Data",""),med.get("Bairro",""),
-                      f"{float(press):.1f}" if pd.notna(press) else "inválida",
-                      (str(med.get("Distância até O.S. (m)",""))+" m") if com_distancia else "Sem proximidade confirmada",
-                      str(med.get("Observacao","") or "")])
-                historia.append(tabela(["Data","Bairro","mca","Distância / vínculo","Observação"],linhas,
-                                     [3.0*cm,5.2*cm,2.0*cm,5.6*cm,11.6*cm]))
-            historia.append(P("ENCAMINHAMENTO SUGERIDO","sub"))
-            if c["Medições próximas"] and c["Sem/baixa pressão"]:
-                msg="Verificar abastecimento e pressão na área das O.S.; conferir eventos operacionais, poços e loggers disponíveis no Farol."
-            elif c["Medições próximas"]:
-                msg="Confrontar os horários das medições com a abertura das O.S. e avaliar necessidade de nova aferição."
-            elif c["Medições mesmo bairro"]:
-                msg="Validar endereços e coordenadas; a coincidência por bairro não confirma ocorrência no local das O.S."
+                ini=horario_operacional(e.get("Início", ""))
+                fim=horario_operacional(e.get("Término Real", ""))
+                if pd.isna(ini):continue
+                finalizado=any(p in normalizar(e.get("Status","")) for p in ("FINALIZ","CONCLUID","ENCERRAD"))
+                if pd.isna(fim):
+                    if finalizado:continue
+                    fim=agora
+                if ini <= data_os <= fim+pd.Timedelta(hours=3):
+                    protocolos.append(str(e.get("Protocolo","") or e.get("Serviço", "") or "Evento"))
+        registro=osr.to_dict()
+        registro["Eventos vinculados"]="; ".join(dict.fromkeys(protocolos))
+        (vinculadas if protocolos else nao_vinculadas).append(registro)
+    return vinculadas,nao_vinculadas
+
+
+def protocolo_os_relatorio(reg):
+    """Usa O.S. e ano quando há emissão válida, como no Módulo 3."""
+    numero=str(reg.get("Nº da O.S","") or "").strip()
+    if not numero or numero.lower()=="nan":return ""
+    if re.search(r"/\d{4}-1$",numero):return numero
+    dt=data_parse(reg.get("Dt. Emissão", ""))
+    return f"{numero}/{dt.year}-1" if pd.notna(dt) else numero
+
+
+def ficha_acompanhamento(c,grupo,contexto):
+    """Busca vínculo pela chave exata de O.S. usada pelo Farol, sem chamadas extras."""
+    vinc=contexto.get("vinculos_farol_producao",pd.DataFrame())
+    fichas=contexto.get("eventos_acomp",pd.DataFrame())
+    mov=contexto.get("movimentacoes",pd.DataFrame())
+    if vinc.empty or fichas.empty:return None, []
+    try:
+        from integracao_acompanhamento_producao import chave_concentracao
+        numeros=sorted({str(x).strip() for x in grupo["Nº da O.S"] if str(x).strip()})
+        chave=chave_concentracao(str(c.get("Município","")),float(c["Latitude"]),float(c["Longitude"]),numeros)
+    except Exception:
+        return None,[]
+    cols={normalizar(z):z for z in vinc.columns}
+    ch=cols.get("CHAVE")
+    ev=cols.get("EVENTO_ID")
+    if not ch or not ev:return None,[]
+    achado=vinc[vinc[ch].astype(str)==chave]
+    if achado.empty:return None,[]
+    evento_id=str(achado.iloc[-1][ev])
+    if "id" not in fichas.columns:return None,[]
+    f=fichas[fichas["id"].astype(str)==evento_id]
+    if f.empty:return None,[]
+    movimentos=[]
+    if not mov.empty and "evento_id" in mov.columns:
+        for _,m in mov[mov["evento_id"].astype(str)==evento_id].iterrows():
+            if not str(m.get("descricao","")).startswith("Registro inicial criado. Relato:"):
+                movimentos.append(m.to_dict())
+    return f.iloc[-1].to_dict(),movimentos
+
+
+def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
+                  concentracoes=None, grupos=None, raio_cluster=500, contexto=None, pressao=None):
+    """Relatório do Farol: panorama + fichas com mapa e O.S. ao lado.
+
+    Mantém ativos, eventos, classificação temporal de O.S. e acompanhamento.
+    Insere pressão SOMENTE quando há medições associadas à concentração.
+    Não modifica nem importa a página do Módulo 3.
+    """
+    contexto = contexto or {}
+    pressao = pressao if pressao is not None else pd.DataFrame()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4),
+            leftMargin=1.2*cm, rightMargin=1.2*cm,
+            topMargin=1.2*cm, bottomMargin=1.2*cm)
+    regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if os.path.isfile(regular) and "FIntReg" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("FIntReg", regular))
+        pdfmetrics.registerFont(TTFont("FIntBold", bold))
+        pdfmetrics.registerFontFamily("FIntReg", normal="FIntReg", bold="FIntBold")
+    fonte = "FIntReg" if "FIntReg" in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+    azul = colors.HexColor("#193c65")
+    normal = ParagraphStyle("farol_integra_normal",fontName=fonte,fontSize=8.4,leading=11.5)
+    pequeno = ParagraphStyle("farol_integra_pequeno",parent=normal,fontSize=7.1,leading=9.3)
+    titulo = ParagraphStyle("farol_integra_titulo",parent=normal,fontSize=12.5,leading=16,spaceAfter=8,textColor=azul)
+    secao = ParagraphStyle("farol_integra_secao",parent=normal,fontSize=9.7,leading=12,
+                           spaceBefore=8,spaceAfter=5,textColor=azul)
+    def P(v,sty=pequeno):
+        return Paragraph(xml_escape(str(v if v is not None else "")).replace("\n","<br/>"),sty)
+    def tabela(cab,linhas,larguras):
+        dados=[[P(x) for x in cab]]+[[P(v) for v in linha] for linha in linhas]
+        t=Table(dados,colWidths=larguras,repeatRows=1,hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#dee8f2")),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#f4f7fb")]),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("LEFTPADDING",(0,0),(-1,-1),3),
+            ("RIGHTPADDING",(0,0),(-1,-1),3),
+            ("TOPPADDING",(0,0),(-1,-1),3),
+            ("BOTTOMPADDING",(0,0),(-1,-1),3)
+        ]))
+        return t
+    def tabela_os(linhas,largura=11.85*cm):
+        return tabela(["O.S. / Ano","Matrícula","Status"],linhas,
+                      [largura*.37,largura*.27,largura*.36])
+
+    historia=[P("Farol Operacional — Relatório de concentrações",titulo),
+             P(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y} | Gerado em {datetime.now():%d/%m/%Y %H:%M}",normal),
+             Spacer(1,9)]
+    if concentracoes is None or concentracoes.empty:
+        historia.append(P("Nenhuma concentração identificada para a seleção.",normal))
+        doc.build(historia)
+        return buffer.getvalue()
+
+    # PANORAMA exatamente na posição do relatório Farol, com complemento cartográfico M1.
+    mapa=mapa_integrado_farol(concentracoes,grupos,pressao,contexto,raio_cluster)
+    imagem=imagem_folium(mapa,1280,700)
+    subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais"
+               + (" · medições de pressão sobrepostas" if (not pressao.empty and
+                   any(pressao.apply(pressao_visivel,axis=1))) else "") + ".")
+    historia.append(KeepTogether([
+        P("Panorama territorial das concentrações",titulo),
+        Image(io.BytesIO(imagem),width=26*cm,height=14.22*cm),
+        Spacer(1,4),P(subtitulo)
+    ]))
+    historia.append(PageBreak())
+
+    for indice,(_,c) in enumerate(resumo.iterrows()):
+        codigo=str(c["Concentração"])
+        grupo=grupos[grupos["_grupo"]==c["_grupo"]].copy()
+        proximas=associados[associados["Concentração"]==codigo] if not associados.empty else pd.DataFrame()
+        territoriais_c=territoriais[territoriais["Concentração"]==codigo] if not territoriais.empty else pd.DataFrame()
+        historia.append(P(f"{codigo} — {c['Município']} — {c['Bairros']}",titulo))
+        figura=imagem_folium(mapa_ficha_farol(c,grupo,pressao,contexto,raio_cluster),760,515)
+        img=Image(io.BytesIO(figura),width=13.4*cm,height=9.08*cm)
+        eventos=eventos_da_concentracao(c,contexto,inicio,fim)
+        vinculadas,nao_vinculadas=classificar_os_eventos(grupo,eventos)
+        ev_descr="; ".join((f"{e.get('Protocolo','')} — {e.get('Serviço','')} / "
+                           f"{e.get('Código do Ativo','')} [{e.get('Status','')}] "
+                           f"{e.get('Início','')} até {e.get('Término Real','') or 'em andamento'}")
+                          for e in eventos)
+        base_info=[P(f"{len(grupo)} O.S. · {int(c['Matrículas'])} matrículas distintas",normal),
+                   Spacer(1,5),P("Eventos relacionados: "+(ev_descr or "Nenhum evento relacionado")),
+                   Spacer(1,3)]
+        def linhas_os(registros):
+            return [[protocolo_os_relatorio(r),str(r.get("Matrícula","")),
+                     str(r.get("Status OS",""))] for r in registros]
+        categorias=[("Ordens vinculadas aos eventos",linhas_os(vinculadas)),
+                    ("Ordens não vinculadas",linhas_os(nao_vinculadas))]
+        def conteudo_painel(qt):
+            blocos=list(base_info)
+            for (nome,linhas),qtd in zip(categorias,qt):
+                blocos.extend([Spacer(1,4),P(f"{nome} ({len(linhas)})")])
+                if linhas and qtd:
+                    blocos.append(tabela_os(linhas[:qtd]))
+                elif not linhas:
+                    blocos.append(P("Nenhuma O.S. nesta categoria."))
+            return blocos
+        # Reserva exatamente o espaço do painel lateral usado pelo Farol.
+        limite_h=9.08*cm-12
+        largura_painel=12.8*cm-16
+        def altura_bloco(elements):
+            altura=0
+            for element in elements:
+                _,h=element.wrap(largura_painel,limite_h)
+                altura+=h+element.getSpaceBefore()+element.getSpaceAfter()
+            return altura
+        contagens=[0,0]
+        for k,(_,linhas) in enumerate(categorias):
+            for _ in linhas:
+                candidato=contagens.copy(); candidato[k]+=1
+                if altura_bloco(conteudo_painel(candidato))<=limite_h:
+                    contagens=candidato
+                else:break
+        ficha=Table([[img,conteudo_painel(contagens)]],
+                    colWidths=[13.8*cm,12.8*cm],hAlign="LEFT")
+        ficha.setStyle(TableStyle([
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("BACKGROUND",(1,0),(1,0),colors.HexColor("#f4f7fb")),
+            ("LEFTPADDING",(0,0),(0,0),0),
+            ("LEFTPADDING",(1,0),(1,0),10),
+            ("RIGHTPADDING",(1,0),(1,0),6),
+            ("TOPPADDING",(0,0),(-1,-1),6),
+            ("BOTTOMPADDING",(0,0),(-1,-1),6),
+        ]))
+        historia.extend([ficha,Spacer(1,7)])
+        for (nome,linhas),ja_exibidas in zip(categorias,contagens):
+            restantes=linhas[ja_exibidas:]
+            if restantes:
+                painel=Table([[[P(f"{nome} — continuação"),Spacer(1,4),
+                                 tabela_os(restantes,25.6*cm)]]],colWidths=[26.6*cm],hAlign="LEFT")
+                painel.setStyle(TableStyle([
+                    ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#f4f7fb")),
+                    ("LEFTPADDING",(0,0),(-1,-1),10),
+                    ("RIGHTPADDING",(0,0),(-1,-1),10),
+                    ("TOPPADDING",(0,0),(-1,-1),8),
+                    ("BOTTOMPADDING",(0,0),(-1,-1),8)]))
+                historia.extend([Spacer(1,5),painel])
+        # Padrão do Farol: equipamentos são exibidos no mapa e os eventos no
+        # painel de O.S. Não criar quadros extras que alterem o layout original.
+        acompanhamento,movimentacoes=ficha_acompanhamento(c,grupo,contexto)
+        if acompanhamento:
+            historia.append(P("ACOMPANHAMENTO OPERACIONAL",secao))
+            historia.append(tabela(["Status / Finalizado","Município / Regional","Reclamações / Unidade"],[[
+                f"{acompanhamento.get('status','')} · {acompanhamento.get('finalizado','')}",
+                f"{acompanhamento.get('municipio','')} · {acompanhamento.get('regional','')}",
+                f"{acompanhamento.get('qtd_reclamacoes','')} · {acompanhamento.get('unidade','')}"
+            ]],[8.8*cm,8.8*cm,8.4*cm]))
+            historia.extend([P("Validações operacionais",secao),
+                tabela(["ArcGIS","SIA","Loggers","Retorno Operação/Controle"],[[
+                acompanhamento.get("arcgis",""),acompanhamento.get("sia",""),
+                acompanhamento.get("loggers",""),acompanhamento.get("retorno_operacao","")]],
+                [6.0*cm,6.0*cm,6.0*cm,8.0*cm]),
+                P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
+            if movimentacoes:
+                historia.append(P("Histórico de movimentações",secao))
+                historia.append(tabela(["Data / Hora","Status","Descrição"],[
+                    [m.get("data_hora",""),m.get("status_momento",""),m.get("descricao","")]
+                    for m in movimentacoes],[4.5*cm,4.5*cm,17.0*cm]))
+        # COMPLEMENTO M1: seção omitida completamente quando não houver medições pertinentes.
+        if not proximas.empty or not territoriais_c.empty:
+            historia.append(P("MEDIÇÕES DE PRESSÃO — MÓDULO 1",secao))
+            if not proximas.empty:
+                qtd=len(proximas)
+                crit=int(pd.to_numeric(proximas["_pressao"],errors="coerce").le(5).sum())
+                historia.append(P(f"{qtd} medição(ões) até {raio} m de pelo menos uma O.S. "
+                                   + (f"{crit} com pressão de 0 a 5 mca." if crit else ""),normal))
             else:
-                msg="Avaliar aferição de campo nos endereços reclamantes e consulta aos eventos/ativos do Farol."
-            historia.append(P(msg))
-            historia.append(P("Associação geográfica ou territorial não comprova causa da reclamação. "
-                              "Ausência de medição associada não comprova normalidade.","mini"))
+                historia.append(P("Correspondência pelo bairro; a distância às O.S. não foi confirmada.",normal))
+            for subt,base,confirmada in (("Medições próximas às O.S.",proximas,True),
+                                         ("Medições no mesmo bairro",territoriais_c,False)):
+                if base.empty:continue
+                historia.append(P(f"{subt} ({len(base)})",secao))
+                linhas=[]
+                for _,med in base.iterrows():
+                    v=med.get("_pressao")
+                    distancia=med.get("Distância até O.S. (m)")
+                    linhas.append([med.get("Data",""),med.get("Bairro",""),
+                        f"{float(v):g}" if pd.notna(v) else "Não aferida",
+                        (f"{distancia} m" if pd.notna(distancia) else "—") if confirmada else "Bairro",
+                        med.get("Observacao","")])
+                historia.append(tabela(["Data","Bairro","mca","Relação","Observação"],
+                               linhas,[3.0*cm,5.4*cm,2.2*cm,4.6*cm,10.8*cm]))
+            historia.append(P("Associação espacial/territorial não confirma causa hidráulica.",pequeno))
+        if indice<len(resumo)-1:
+            historia.append(PageBreak())
     doc.build(historia)
-    return buf.getvalue()
+    return buffer.getvalue()
+
 
 st.title("📊 Relatórios Integrados — Diagnóstico Operacional")
 st.caption("Integração analítica entre concentrações de O.S. e registros de pressão · fontes somente leitura")
@@ -492,9 +913,10 @@ if executar:
     try:
         with st.spinner("Consultando as bases e cruzando O.S. com medições..."):
             os_df=preparar_os(ler_base(ID_FAROL,"PONTOS"))
+            contexto=carregar_contexto_farol()
             bp=preparar_pressao(ler_base(ID_PRESSAO,"baixa_pressao"))
             os_df=os_df[os_df["_data"].dt.date.between(inicio,fim)].copy()
-            bp=bp[bp["_data"].dt.date.between(inicio,fim)].copy()
+            bp=bp[bp["_data"].dt.date.between(inicio,fim) & bp["_pressao"].notna()].copy()
             if municipio_sel.strip():
                 mun=normalizar(municipio_sel)
                 os_df=os_df[os_df["_municipio"]==mun]
@@ -507,9 +929,9 @@ if executar:
                 resumo,associados,territoriais=pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
                 achados=["Nenhuma concentração atende aos critérios selecionados."]
                 pressao_sem_conc=bp.iloc[:0].copy()
-            st.session_state["relatorio_coi_integrado"]={"versao_esquema":3,"resumo":resumo,"associados":associados,"territoriais":territoriais,
+            st.session_state["relatorio_coi_integrado"]={"versao_esquema":6,"resumo":resumo,"associados":associados,"territoriais":territoriais,
              "concentracoes":concs,"achados":achados,"pressao_sem_conc":pressao_sem_conc,
-             "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster)}
+             "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp}
     except gspread.exceptions.APIError as ex:
         codigo=getattr(getattr(ex,"response",None),"status_code",None)
         st.error("Quota temporária do Google Sheets excedida (429)." if codigo==429 else f"Falha na consulta às fontes (HTTP {codigo or 'desconhecido'}).")
@@ -524,11 +946,11 @@ r=st.session_state.get("relatorio_coi_integrado")
 # apresentado como se tivesse passado pela análise nova.
 _chaves_necessarias = {
     "resumo", "associados", "territoriais", "concentracoes", "achados", "grupos", "raio_cluster",
-    "pressao_sem_conc", "inicio", "fim", "raio", "n_os", "n_bp"
+    "pressao_sem_conc", "inicio", "fim", "raio", "n_os", "n_bp", "contexto", "pressao_mapa"
 }
 if r is not None and (
     not isinstance(r, dict)
-    or r.get("versao_esquema") != 3
+    or r.get("versao_esquema") != 6
     or not _chaves_necessarias.issubset(r)
 ):
     st.session_state.pop("relatorio_coi_integrado", None)
@@ -536,29 +958,38 @@ if r is not None and (
     st.info("O diagnóstico anterior é de uma versão antiga. Clique em **Gerar diagnóstico integrado** para atualizar a análise.")
 if r:
     resumo=r["resumo"]
-    a,b,c,d=st.columns(4)
-    a.metric("O.S. no período",r["n_os"])
-    b.metric("Medições no período",r["n_bp"])
-    c.metric("Concentrações",len(resumo))
-    d.metric("Com medição próxima",int((resumo["Medições próximas"]>0).sum()) if not resumo.empty else 0)
+    tem_pressao = r["n_bp"] > 0
+    if tem_pressao:
+        a,b,c,d=st.columns(4)
+        a.metric("O.S. no período",r["n_os"])
+        b.metric("Concentrações",len(resumo))
+        c.metric("Medições no período",r["n_bp"])
+        d.metric("Concentrações com medição próxima",int((resumo["Medições próximas"]>0).sum()) if not resumo.empty else 0)
+    else:
+        a,b=st.columns(2)
+        a.metric("O.S. no período",r["n_os"])
+        b.metric("Concentrações",len(resumo))
     st.subheader("Análise consolidada")
     for achado in r["achados"]:
         st.write("• " + achado)
     if not resumo.empty:
         st.subheader("Mapa consolidado")
-        st.caption("Azul: concentrações | vermelho: medição até 5 mca associada geograficamente | amarelo: 5–10 mca. Medições 10–15 mca continuam ocultas no mapa, conforme regra do Módulo 1. Pontos identificados só por bairro não são desenhados como próximos.")
-        mapa=mapa_integrado(r["concentracoes"],r["associados"],r["raio"])
+        st.caption("Mapa do Farol: concentrações, O.S. e equipamentos operacionais." +
+                   (" Medições do Módulo 1 sobrepostas: vermelho (0–5 mca), amarelo (5–10 mca) e roxo (>15 mca)." if tem_pressao else ""))
+        mapa=mapa_integrado_farol(r["concentracoes"],r["grupos"],r["pressao_mapa"],r["contexto"],r["raio_cluster"])
         if mapa is not None:
             st_folium(mapa,height=500,width=None,returned_objects=[],key="mapa_integrado_relatorio")
-        st.subheader("Diagnóstico por concentração")
-        visiveis=["Concentração","Município","Bairros","O.S.","Matrículas","Medições próximas","Medições mesmo bairro","Sem/baixa pressão","Em atenção (5–10)","Faixa 10–15 (oculta no M1)","Menor pressão (mca)","Classificação indicativa","Análise operacional"]
+        st.subheader("Concentrações operacionais")
+        visiveis=["Concentração","Município","Bairros","O.S.","Matrículas"]
+        if not resumo.empty and ((resumo["Medições próximas"]>0)|(resumo["Medições mesmo bairro"]>0)).any():
+            visiveis += ["Medições próximas","Medições mesmo bairro","Menor pressão (mca)","Classificação indicativa"]
         st.dataframe(resumo[visiveis],hide_index=True,use_container_width=True)
         if st.button("📄 Preparar relatório cartográfico (PDF)", type="primary", key="gerar_pdf_ri_farol"):
             try:
                 with st.spinner("Capturando mapas e montando as fichas operacionais..."):
                     st.session_state["pdf_relatorio_integrado_farol"] = pdf_relatorio(
                         resumo,r["associados"],r["territoriais"],r["achados"],r["inicio"],r["fim"],
-                        r["raio"],r["n_os"],r["n_bp"],r["concentracoes"],r["grupos"],r["raio_cluster"])
+                        r["raio"],r["n_os"],r["n_bp"],r["concentracoes"],r["grupos"],r["raio_cluster"],r["contexto"],r["pressao_mapa"])
             except Exception as erro_pdf:
                 st.error(f"Não foi possível capturar o mapa para o PDF: {erro_pdf}. "
                          "Confirme a disponibilidade do Playwright/Chromium, como no Farol.")
@@ -568,12 +999,14 @@ if r:
                 file_name="relatorio_operacional_integrado_coi.pdf",mime="application/pdf")
         st.download_button("📋 Baixar diagnóstico (CSV)",data=resumo[visiveis].to_csv(index=False,sep=";").encode("utf-8-sig"),
             file_name="diagnostico_integrado_coi.csv",mime="text/csv")
-        with st.expander("Medições associadas por proximidade geográfica"):
-            campos=["Concentração","Data","Municipio","Bairro","Matricula","Pressao_MCA","_faixa","Distância até O.S. (m)","Observacao"]
-            st.dataframe(r["associados"][campos] if not r["associados"].empty else pd.DataFrame(columns=campos),hide_index=True,use_container_width=True)
-        with st.expander("Indícios apenas pelo mesmo bairro (sem proximidade confirmada)"):
-            campos=["Concentração","Data","Municipio","Bairro","Matricula","Pressao_MCA","_faixa","Observacao"]
-            st.dataframe(r["territoriais"][campos] if not r["territoriais"].empty else pd.DataFrame(columns=campos),hide_index=True,use_container_width=True)
+        if not r["associados"].empty:
+            with st.expander("Medições associadas por proximidade geográfica"):
+                campos=["Concentração","Data","Municipio","Bairro","Matricula","Pressao_MCA","_faixa","Distância até O.S. (m)","Observacao"]
+                st.dataframe(r["associados"].reindex(columns=campos),hide_index=True,use_container_width=True)
+        if not r["territoriais"].empty:
+            with st.expander("Indícios apenas pelo mesmo bairro (sem proximidade confirmada)"):
+                campos=["Concentração","Data","Municipio","Bairro","Matricula","Pressao_MCA","_faixa","Observacao"]
+                st.dataframe(r["territoriais"].reindex(columns=campos),hide_index=True,use_container_width=True)
         if not r["pressao_sem_conc"].empty:
             with st.expander("Medições até 5 mca em bairros sem concentração"):
                 st.dataframe(r["pressao_sem_conc"][["Data","Municipio","Bairro","Pressao_MCA","Observacao"]],hide_index=True,use_container_width=True)
