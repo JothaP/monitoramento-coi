@@ -1058,6 +1058,16 @@ def normalizar_municipio(valor):
     return re.sub(r"[^A-Z0-9]", "", normalizar_texto(valor))
 
 
+def unidade_da_cidade_farol(valor):
+    """Define a unidade pela cidade da O.S., sem misturar Timon à API."""
+    cidade = normalizar_municipio(valor)
+    if cidade == "TERESINA":
+        return "THE"
+    if cidade in {"TIMON", "TIMONMA", "TIMONMARANHAO"}:
+        return "TIM"
+    return "API"
+
+
 def carregar_gpkg(caminho):
     """Lê os polígonos do GeoPackage sem geopandas/GDAL.
 
@@ -1278,6 +1288,9 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
     df = df.dropna(subset=["_lat", "_lon"]).reset_index(drop=True)
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
+    # Não agrupa pontos de unidades diferentes (THE / API / TIM).
+    # Preserva a lógica de proximidade entre municípios da mesma unidade.
+    unidades_os = df["Cidade"].fillna("").map(unidade_da_cidade_farol).tolist()
 
     # Grade geográfica para evitar comparação de todos contra todos.
     lat_step = raio_m / 111320.0
@@ -1309,7 +1322,7 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
                 candidatos.extend(buckets.get((cx + dx, cy + dy), []))
         for i in indices:
             for j in candidatos:
-                if j <= i:
+                if j <= i or unidades_os[i] != unidades_os[j]:
                     continue
                 d = distancia_metros(df.at[i, "_lat"], df.at[i, "_lon"], df.at[j, "_lat"], df.at[j, "_lon"])
                 if d is not None and d <= raio_m:
@@ -1341,16 +1354,14 @@ def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
         })
 
     cdf = pd.DataFrame(concentracoes).sort_values(["QTD_OS", "QTD_MATRICULAS"], ascending=False).reset_index(drop=True)
-    # Sequências independentes por abrangência, sem alterar o identificador
-    # interno GRUPO (que vincula as O.S., ativos, eventos e acompanhamentos).
-    # Concentrações que incluam Teresina são atribuídas a THE, evitando
-    # identificadores duplicados entre as abas.
-    contador = {"API": 0, "THE": 0}
+    # Numeração independente THE / API / TIM. O GRUPO é preservado para
+    # vínculos das O.S., eventos, ativos e acompanhamentos já existentes.
+    contador = {"THE": 0, "API": 0, "TIM": 0}
     novos_ids = []
     for _, concentracao in cdf.iterrows():
         grupo = df[df["_grupo"] == concentracao["GRUPO"]]
-        cidades = {normalizar_municipio(c) for c in grupo["Cidade"].dropna()}
-        abrangencia = "THE" if "TERESINA" in cidades else "API"
+        cidade = str(grupo.iloc[0].get("Cidade", "")) if not grupo.empty else ""
+        abrangencia = unidade_da_cidade_farol(cidade)
         contador[abrangencia] += 1
         novos_ids.append(f"{abrangencia} C{contador[abrangencia]:03d}")
     cdf["ID_CONCENTRACAO"] = novos_ids
@@ -2512,7 +2523,7 @@ def modal_importacao():
 def atualizar_evento_cadastrado(indice, original, alteracoes):
     """Atualiza somente as células editadas, com proteção contra edição concorrente."""
     exigir_edicao_farol()
-    aba = obter_aba_para_leitura(NOME_ABA_EVENTOS)
+    aba = obter_aba_para_leitura(NOME_ABA_EVENTOS, SPREADSHEET_ID)
     valores = aba.get_all_values()
     if not valores or indice + 1 >= len(valores):
         raise ValueError("Evento não encontrado. Reabra a janela e tente novamente.")
@@ -2568,52 +2579,75 @@ def modal_eventos():
             )
             st.plotly_chart(fig, width="stretch")
 
+    # A tabela de eventos também aparece quando não existem O.S. para cruzamento.
+    if not df_eventos.empty:
         st.divider()
         st.markdown("### Eventos armazenados")
-        mostrar_eventos = df_eventos.copy()
-        colunas_evento = [c for c in ["Data", "Status", "Cidade", "Serviço", "Protocolo", "Áreas Impactadas", "Descrição do Serviço"] if c in mostrar_eventos.columns]
-        st.dataframe(mostrar_eventos[colunas_evento], width="stretch", hide_index=True)
-
-    # A edição permanece disponível mesmo sem O.S. cadastradas.
-    if PODE_EDITAR_FAROL and not df_eventos.empty:
-        st.divider()
-        st.markdown("### ✏️ Corrigir evento cadastrado")
-        st.caption("Selecione o evento pela identificação e corrija somente Áreas Impactadas, quando necessário. A correção será preservada nas próximas importações.")
-        opcoes = list(range(len(df_eventos)))
-        indice_evento = st.selectbox(
-            "Evento para editar", opcoes,
-            format_func=lambda i: (
-                f"{df_eventos.iloc[i].get('Protocolo', '') or 'Sem protocolo'} · "
-                f"{df_eventos.iloc[i].get('Cidade', '')} · "
-                f"{df_eventos.iloc[i].get('Serviço', '')} · "
-                f"{df_eventos.iloc[i].get('Data', '')} · Evento {i + 1}"
-            ), key="farol_evento_editar_indice",
-        )
-        registro = df_eventos.iloc[indice_evento].to_dict()
-        st.caption(
-            f"Evento {indice_evento + 1} de {len(df_eventos)} — "
-            "a numeração exibida não inclui o cabeçalho da planilha."
-        )
-        with st.form(f"farol_edicao_evento_{indice_evento}"):
-            area_atual = str(registro.get("Áreas Impactadas", "") or "")
-            area_editada = st.text_area(
-                "Áreas Impactadas",
-                value=area_atual,
-                height=110,
-                help="Somente este campo pode ser alterado. A correção ficará protegida nas próximas importações.",
-            )
-            salvar = st.form_submit_button(
-                "💾 Salvar área impactada",
+        colunas_evento = [c for c in [
+            "Data", "Status", "Cidade", "Serviço", "Protocolo",
+            "Áreas Impactadas", "Descrição do Serviço"
+        ] if c in df_eventos.columns]
+        # O índice posicional é mantido exclusivamente no Python; não é gravado
+        # no Sheets nem exibido ao usuário.
+        mostrar_eventos = df_eventos.reset_index(drop=True).loc[:, colunas_evento].copy()
+        if PODE_EDITAR_FAROL:
+            mostrar_eventos.insert(0, "Selecionar", False)
+            selecionados_editor = st.data_editor(
+                mostrar_eventos,
+                hide_index=True,
                 width="stretch",
+                height=300,
+                disabled=colunas_evento,
+                column_config={
+                    "Selecionar": st.column_config.CheckboxColumn(
+                        "Selecionar", help="Marque um único evento para editar.",
+                        default=False, required=True,
+                    )
+                },
+                key="farol_selecao_eventos_tabela",
             )
-        campos = {"Áreas Impactadas": area_editada}
-        if salvar:
-            try:
-                atualizar_evento_cadastrado(indice_evento, registro, campos)
-                st.success("Evento atualizado. O mapa e as associações serão recalculados.")
-                st.rerun()
-            except Exception as erro:
-                st.error(f"Não foi possível salvar o evento: {erro}")
+            indices_marcados = [int(i) for i in selecionados_editor.index[
+                selecionados_editor["Selecionar"].fillna(False).astype(bool)
+            ].tolist()]
+            if len(indices_marcados) > 1:
+                st.warning("Marque somente um evento na tabela para editar.")
+            indice_evento = indices_marcados[0] if len(indices_marcados) == 1 else None
+            # O botão fica imediatamente abaixo da tabela, sem seletor duplicado.
+            if st.button(
+                "✏️ Editar evento selecionado",
+                key="farol_abrir_edicao_evento_tabela",
+                disabled=indice_evento is None,
+                type="primary",
+            ):
+                st.session_state["farol_evento_em_edicao"] = indice_evento
+
+            indice_edicao = st.session_state.get("farol_evento_em_edicao")
+            if isinstance(indice_edicao, int) and 0 <= indice_edicao < len(df_eventos):
+                registro = df_eventos.iloc[indice_edicao].to_dict()
+                st.markdown("### ✏️ Corrigir evento cadastrado")
+                st.caption(
+                    f"Evento selecionado: {registro.get('Protocolo') or 'Sem protocolo'} · "
+                    f"{registro.get('Cidade', '')} · {registro.get('Serviço', '')}. "
+                    "A correção de Áreas Impactadas será preservada nas próximas importações."
+                )
+                with st.form(f"farol_edicao_evento_{indice_edicao}"):
+                    area_editada = st.text_area(
+                        "Áreas Impactadas",
+                        value=str(registro.get("Áreas Impactadas", "") or ""),
+                        height=110,
+                        help="Somente este campo pode ser alterado.",
+                    )
+                    salvar = st.form_submit_button("💾 Salvar área impactada", width="stretch")
+                if salvar:
+                    try:
+                        atualizar_evento_cadastrado(indice_edicao, registro, {"Áreas Impactadas": area_editada})
+                        st.session_state.pop("farol_evento_em_edicao", None)
+                        st.success("Evento atualizado. O mapa e as associações serão recalculados.")
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Não foi possível salvar o evento: {erro}")
+        else:
+            st.dataframe(mostrar_eventos, width="stretch", hide_index=True)
 
 
 def capturar_mapa_folium(mapa, largura=1100, altura=600):
@@ -3042,17 +3076,13 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
 @st.dialog("📄 Configurar relatório operacional", width="large")
 def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidades,
                                eventos, bairros, raio, observacoes, pocos, loggers):
-    st.caption("API: concentrações dos municípios exceto Teresina. THE: somente Teresina. Os filtros do mapa principal não são alterados.")
-    tipo = st.radio("Relatório", ["API", "THE"], horizontal=True,
-                    key="farol_tipo_relatorio_api_the")
+    st.caption("THE: Teresina · API: demais municípios do Piauí · TIM: Timon. Os filtros do mapa principal não são alterados.")
+    tipo = st.radio("Relatório", ["THE", "API", "TIM"], horizontal=True,
+                    key="farol_tipo_relatorio_the_api_tim")
     disponiveis = sorted({cidade for _, c in concentracoes.iterrows()
                          for cidade in cidades_da_concentracao(c, pontos_cluster)},
                         key=normalizar_texto)
-    cidades = ([cidade for cidade in disponiveis
-                if normalizar_municipio(cidade) != "TERESINA"]
-               if tipo == "API" else
-               [cidade for cidade in disponiveis
-                if normalizar_municipio(cidade) == "TERESINA"])
+    cidades = [cidade for cidade in disponiveis if unidade_da_cidade_farol(cidade) == tipo]
     selecionadas = filtrar_concentracoes_relatorio(concentracoes, pontos_cluster, cidades)
     st.caption(f"{len(selecionadas)} concentração(ões) incluída(s) em {tipo}.")
     gerar = st.button("📸 Gerar relatório em PDF", type="primary", width="stretch",
@@ -3062,7 +3092,7 @@ def modal_configurar_relatorio(concentracoes, pontos, pontos_cluster, proximidad
             st.warning("Nenhuma concentração encontrada para a seleção.")
         else:
             try:
-                # O panorama também deve excluir as O.S. de Teresina no relatório API.
+                # O panorama usa somente as O.S. da unidade selecionada.
                 cidades_normalizadas = {normalizar_municipio(c) for c in cidades}
                 pontos_relatorio = pontos.loc[
                     pontos["Cidade"].map(normalizar_municipio).isin(cidades_normalizadas)
@@ -3550,15 +3580,17 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
                 fichas_acomp_visiveis = {}
                 erro_acomp_visivel = erro
                 st.warning(f"Acompanhamentos temporariamente indisponíveis: {erro}")
-            # Mesma divisão geográfica adotada nos relatórios PDF.
-            aba_api, aba_the = st.tabs(["🌐 API — Demais municípios", "📍 THE — Teresina"])
-            for aba, abrangencia in ((aba_api, "API"), (aba_the, "THE")):
+            # Três unidades separadas, com ordenação THE / API / TIM.
+            aba_the, aba_api, aba_tim = st.tabs([
+                "📍 THE — Teresina", "🌐 API — Piauí", "📍 TIM — Timon"
+            ])
+            for aba, abrangencia in ((aba_the, "THE"), (aba_api, "API"), (aba_tim, "TIM")):
                 with aba:
                     cidades_abrangencia = sorted({
                         cidade
                         for _, conc in concentracoes.iterrows()
                         for cidade in cidades_da_concentracao(conc, pontos_cluster)
-                        if (normalizar_municipio(cidade) != "TERESINA") == (abrangencia == "API")
+                        if unidade_da_cidade_farol(cidade) == abrangencia
                     }, key=normalizar_texto)
                     concentracoes_abrangencia = concentracoes.loc[
                         concentracoes["ID_CONCENTRACAO"].astype(str).str.startswith(f"{abrangencia} ")
@@ -3643,7 +3675,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
             resumo_pdf = concentracoes.copy()
             observacoes_df = pd.DataFrame()
         with espaco_relatorio_operacional.container():
-            st.caption("Relatórios API (exceto Teresina) ou THE (somente Teresina), com panorama e fichas individuais.")
+            st.caption("Relatórios THE (Teresina), API (demais municípios do Piauí) ou TIM (Timon), com panorama e fichas individuais.")
             if st.button("📄 Configurar e gerar relatório (PDF)",
                          width="stretch", key="abrir_configuracao_relatorio"):
                 modal_configurar_relatorio(resumo_pdf, analise, pontos_cluster,
