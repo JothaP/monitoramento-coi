@@ -336,6 +336,7 @@ modulo_3 = tem_acesso_modulo("3")
 modulo_4 = tem_acesso_modulo("4")
 modulo_5 = tem_acesso_modulo("5")
 modulo_6 = tem_acesso_modulo("6")
+modulo_7 = tem_acesso_modulo("7")
 ambiente_teste = tem_acesso_modulo("teste")
 
 
@@ -509,16 +510,37 @@ with col6:
 # TERCEIRA LINHA
 # ------------------------------------------------------------
 
-if ambiente_teste:
+if ambiente_teste or modulo_7:
     st.markdown("")
     col7, col8, col9 = st.columns(3)
-    with col7:
-        st.markdown("#### 🧪 Ambiente de Teste")
-        st.markdown("**Ferramentas em desenvolvimento**")
-        st.caption("Acesso exclusivo do administrador")
-        if st.button("Acessar Ambiente de Teste", type="primary",
-                     use_container_width=True, key="acessar_ambiente_teste"):
-            st.switch_page("pages/Ambiente_de_Teste.py")
+
+    # Mantém o Ambiente de Teste à esquerda para o administrador.
+    if ambiente_teste:
+        with col7:
+            st.markdown("#### 🧪 Ambiente de Teste")
+            st.markdown("**Ferramentas em desenvolvimento**")
+            st.caption("Acesso exclusivo do administrador")
+            if st.button(
+                "Acessar Ambiente de Teste",
+                type="primary",
+                use_container_width=True,
+                key="acessar_ambiente_teste",
+            ):
+                st.switch_page("pages/Ambiente_de_Teste.py")
+
+    # Se não houver Ambiente de Teste, o Módulo 7 ocupa a coluna esquerda.
+    if modulo_7:
+        with (col8 if ambiente_teste else col7):
+            st.markdown("#### 📊 Módulo 7")
+            st.markdown("**Relatórios Integrados**")
+            st.caption("Concentrações e baixa pressão")
+            if st.button(
+                "Acessar Relatórios Integrados",
+                type="primary",
+                use_container_width=True,
+                key="acessar_relatorios_integrados",
+            ):
+                st.switch_page("pages/7_Relatorios_Integrados.py")
 
 
 # ============================================================
