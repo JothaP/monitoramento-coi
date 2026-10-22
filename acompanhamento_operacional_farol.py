@@ -333,8 +333,16 @@ def popup_acompanhamento_farol(contexto, pode_editar=True):
         return
 
     concluido = bool(evento and esta_concluido(evento))
+    # A permissão tem uma única fonte: o perfil autenticado no Hub.
+    # Não depender de pode_editar, que pode ter sido transmitido por um fluxo
+    # legado de consulta e bloquear indevidamente administradores e usuários.
     perfil = str(st.session_state.get("perfil", "")).strip().lower()
-    somente_leitura = not (pode_editar and perfil in {"admin", "usuario"})
+    somente_leitura = perfil not in {"admin", "usuario"}
+    if somente_leitura:
+        st.warning(f"Modo consulta · perfil identificado: {perfil or 'não identificado'}. "
+                   "A edição é exclusiva de admin e usuario.")
+    else:
+        st.caption(f"✏️ Edição habilitada para o perfil **{perfil}** · interface v3 (22/10/2026)")
     st.caption("Ficha vinculada à concentração do Farol · histórico preservado no Google Sheets")
     if concluido:
         st.success("Acompanhamento concluído.")
