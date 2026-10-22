@@ -1777,16 +1777,24 @@ with st.sidebar:
         key="filtro_matricula"
     )
 
-    faixa_sel = st.selectbox(
-        "Faixa de Pressão",
-        [
-            "Todas",
+    # É possível combinar várias faixas simultaneamente. A seleção vazia
+    # corresponde a "Todas", preservando a visualização inicial do módulo.
+    faixas_selecionadas = st.multiselect(
+        "Faixas de Pressão",
+        options=[
             "Sem Pressão (0 MCA)",
             "Baixa Pressão (> 0 e ≤ 5 MCA)",
             "Em Atenção (> 5 e ≤ 10 MCA)",
-            "Alta Pressão (> 15 MCA)"
+            "Alta Pressão (> 15 MCA)",
         ],
-        key="filtro_pressao"
+        default=[],
+        placeholder="Todas as faixas",
+        help=(
+            "Selecione uma ou mais faixas para combinar os resultados. "
+            "Sem seleção, todas as medições são consideradas."
+        ),
+        # Chave nova evita incompatibilidade com o estado antigo do selectbox.
+        key="filtro_faixas_pressao",
     )
 
     # ========================================================
@@ -2319,41 +2327,27 @@ if matricula_sel != "Todas":
     ]
 
 
-if faixa_sel == "Sem Pressão (0 MCA)":
+# Aplica uma união lógica (OU) das faixas escolhidas.
+# Sem seleção, mantém a base inteira, como na opção antiga "Todas".
+if faixas_selecionadas and not df_filtrado.empty:
+    pressao_filtro = pd.to_numeric(
+        df_filtrado["Pressao_MCA"], errors="coerce"
+    )
+    mascara_faixas = pd.Series(False, index=df_filtrado.index)
 
-    df_filtrado = df_filtrado[
-        df_filtrado["Pressao_MCA"] == 0
-    ]
+    if "Sem Pressão (0 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.eq(0)
 
-elif faixa_sel == "Baixa Pressão (> 0 e ≤ 5 MCA)":
+    if "Baixa Pressão (> 0 e ≤ 5 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.gt(0) & pressao_filtro.le(5)
 
-    df_filtrado = df_filtrado[
-        (
-            df_filtrado["Pressao_MCA"] > 0
-        )
-        &
-        (
-            df_filtrado["Pressao_MCA"] <= 5
-        )
-    ]
+    if "Em Atenção (> 5 e ≤ 10 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.gt(5) & pressao_filtro.le(10)
 
-elif faixa_sel == "Em Atenção (> 5 e ≤ 10 MCA)":
+    if "Alta Pressão (> 15 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.gt(15)
 
-    df_filtrado = df_filtrado[
-        (
-            df_filtrado["Pressao_MCA"] > 5
-        )
-        &
-        (
-            df_filtrado["Pressao_MCA"] <= 15
-        )
-    ]
-
-elif faixa_sel == "Alta Pressão (> 15 MCA)":
-
-    df_filtrado = df_filtrado[
-        df_filtrado["Pressao_MCA"] > 15
-    ]
+    df_filtrado = df_filtrado.loc[mascara_faixas].copy()
 
 
 # ============================================================
