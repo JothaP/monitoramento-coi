@@ -3163,7 +3163,7 @@ if historico_v2_ativo:
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### 🚰 Farol V2 — Módulo 7")
+    st.markdown("### 🚰 Farol — Módulo 3")
     st.markdown("### 🧭 Navegação")
     if "farol_tela" not in st.session_state:
         st.session_state["farol_tela"] = "mapa"
