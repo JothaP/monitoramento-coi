@@ -1080,6 +1080,442 @@ def gerar_kml(df):
     return kml.kml()
 
 
+
+# ============================================================
+# RELATÓRIO PDF DE BAIXA PRESSÃO — USA SOMENTE df_filtrado
+# Mantém independente a estrutura existente do Módulo 1.
+# ============================================================
+from reportlab.lib import colors as bp_rel_colors
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4 as BP_REL_A4, landscape as bp_rel_landscape
+from reportlab.lib.units import cm as bp_rel_cm
+from reportlab.lib.styles import ParagraphStyle as BP_REL_ParagraphStyle
+from reportlab.platypus import (SimpleDocTemplate as BP_REL_Doc, Paragraph as BP_REL_Paragraph,
+    Spacer as BP_REL_Spacer, Table as BP_REL_Table, TableStyle as BP_REL_TableStyle,
+    Image as BP_REL_Image, PageBreak as BP_REL_PageBreak, KeepTogether as BP_REL_KeepTogether)
+from reportlab.graphics.shapes import Drawing, Circle, String, Rect, Line, PolyLine
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from xml.sax.saxutils import escape as bp_rel_xml_escape
+from pathlib import Path as BP_REL_Path
+import hashlib as bp_rel_hashlib
+import shutil as bp_rel_shutil
+import tempfile as bp_rel_tempfile
+import math
+
+# Cores e faixas iguais nos dashboards do Streamlit e no PDF.
+BP_REL_CORES_FAIXAS_PRESSAO = {
+    "0 mca": "#e64e62",
+    ">5 a 10 mca": "#e6bc34",
+    ">0 a 5 mca": "#f3a53a",
+    ">10 a 15 mca": "#cf71a9",
+    ">15 mca": "#8554b8",
+}
+BP_REL_FUNDO_GRAFICO_PRESSAO = "#0e1117"
+
+
+def bp_rel_contagem_faixas(valores):
+    """Cinco classes mutuamente exclusivas; 0 mca é medição válida."""
+    p = pd.to_numeric(valores, errors="coerce").dropna()
+    return {
+        "0 mca": int(p.eq(0).sum()),
+        ">5 a 10 mca": int(((p > 5) & (p <= 10)).sum()),
+        ">0 a 5 mca": int(((p > 0) & (p <= 5)).sum()),
+        ">10 a 15 mca": int(((p > 10) & (p <= 15)).sum()),
+        ">15 mca": int(p.gt(15).sum()),
+    }
+
+
+def bp_rel_chart_faixas(pressao, fonte="Helvetica"):
+    """Gráfico de rosca vetorial, com o visual escuro da referência."""
+    from reportlab.graphics.shapes import Wedge
+
+    largura, altura = 355, 267
+    d = Drawing(largura, altura)
+    bg = colors.HexColor(BP_REL_FUNDO_GRAFICO_PRESSAO)
+    branco = colors.HexColor("#f7f8fb")
+    d.add(Rect(0, 0, largura, altura, fillColor=bg, strokeColor=None))
+    d.add(String(13, 241, "Distribuição por faixa de pressão",
+                 fontName=fonte, fontSize=11.7, fillColor=branco))
+
+    grupos = bp_rel_contagem_faixas(pressao["_pressao"])
+    total = sum(grupos.values())
+    centro_x, centro_y, raio_externo, raio_interno = 177, 146, 78, 43
+    # O ângulo inicial posiciona a primeira faixa do lado direito, como na imagem.
+    angulo = -180 * grupos["0 mca"] / max(total, 1)
+    for nome, qtd in grupos.items():
+        if qtd <= 0 or not total:
+            continue
+        abertura = 360 * qtd / total
+        inicio = angulo
+        fim = angulo + min(abertura, 359.999)
+        cor = colors.HexColor(BP_REL_CORES_FAIXAS_PRESSAO[nome])
+        d.add(Wedge(centro_x, centro_y, raio_externo, inicio, fim,
+                    fillColor=cor, strokeColor=None))
+        if abertura >= 28:
+            ang_medio = math.radians(inicio + abertura / 2)
+            rr = (raio_externo + raio_interno) / 2
+            texto = f"{100 * qtd / total:.0f}%"
+            x = centro_x + rr * math.cos(ang_medio)
+            y = centro_y + rr * math.sin(ang_medio) - 4
+            largura_texto = pdfmetrics.stringWidth(texto, fonte, 10)
+            cor_texto = (bg if nome == ">5 a 10 mca" else branco)
+            d.add(String(x - largura_texto / 2, y, texto,
+                         fontName=fonte, fontSize=10, fillColor=cor_texto))
+        angulo += abertura
+    d.add(Circle(centro_x, centro_y, raio_interno, fillColor=bg, strokeColor=None))
+
+    # Duas linhas de legenda evitam fontes minúsculas no PDF A4 paisagem.
+    legenda = list(BP_REL_CORES_FAIXAS_PRESSAO.items())
+    for i, (nome, hex_cor) in enumerate(legenda):
+        linha, coluna = divmod(i, 3)
+        x, y = 13 + coluna * 116, 43 - linha * 20
+        d.add(Rect(x, y - 1, 9, 9, fillColor=colors.HexColor(hex_cor), strokeColor=None))
+        d.add(String(x + 15, y, nome, fontName=fonte,
+                     fontSize=7.65, fillColor=branco))
+    return d
+
+
+def bp_rel_chart_bairros(bairros, fonte="Helvetica"):
+    """Média por bairro: barras horizontais azuis, maior média no topo."""
+    largura, altura = 355, 267
+    d = Drawing(largura, altura)
+    bg = colors.HexColor(BP_REL_FUNDO_GRAFICO_PRESSAO)
+    branco = colors.HexColor("#f7f8fb")
+    d.add(Rect(0, 0, largura, altura, fillColor=bg, strokeColor=None))
+    d.add(String(12, 241, "Média das aferições por bairro",
+                 fontName=fonte, fontSize=11.7, fillColor=branco))
+
+    if bairros is None or bairros.empty:
+        d.add(String(18, 132, "Sem aferições no período", fontName=fonte,
+                     fontSize=10, fillColor=branco))
+        return d
+
+    # Mostra os dez bairros de menor média (prioridade operacional), com
+    # barras visualmente ordenadas da maior para a menor, como na referência.
+    amostra = (bairros.sort_values(["Média (mca)", "Medições"],
+                                   ascending=[True, False]).head(10)
+               .sort_values(["Média (mca)", "Medições"],
+                            ascending=[False, False]).copy())
+    maior = max(float(amostra["Média (mca)"].max()), 0)
+    # Limite superior simples, sem distorcer a escala de pressão.
+    escala = max(2, int(math.ceil(maior / 2.0) * 2))
+    x0, xmax = 148, 343
+    largura_grafico = xmax - x0
+    y_topo, y_base = 214, 36
+    qt = len(amostra)
+    passo = min(34, (y_topo - y_base) / max(qt, 1))
+    altura_barra = min(19, passo * 0.65)
+
+    for tick in range(0, escala + 1, 2):
+        x = x0 + largura_grafico * tick / escala
+        d.add(Line(x, 30, x, 225, strokeColor=colors.HexColor("#243040"), strokeWidth=.6))
+        texto = str(tick)
+        d.add(String(x - pdfmetrics.stringWidth(texto, fonte, 7.4) / 2,
+                     16, texto, fontName=fonte, fontSize=7.4,
+                     fillColor=colors.HexColor("#e1e7f0")))
+    d.add(String(238, 3, "Média (mca)", fontName=fonte, fontSize=8,
+                 fillColor=branco))
+
+    for i, (_, r) in enumerate(amostra.iterrows()):
+        y = y_topo - i * passo
+        nome = f"{r['Bairro']} / {r['Município']}".upper()
+        original = nome
+        tamanho = 7.0
+        while len(nome) > 4 and pdfmetrics.stringWidth(nome, fonte, tamanho) > 137:
+            nome = nome[:-1]
+        if nome != original:
+            nome = nome.rstrip() + "…"
+        d.add(String(7, y - 3, nome, fontName=fonte,
+                     fontSize=tamanho, fillColor=branco))
+        media = max(0.0, float(r["Média (mca)"]))
+        if media > 0:
+            d.add(Rect(x0, y - altura_barra / 2, largura_grafico * media / escala,
+                       altura_barra, fillColor=colors.HexColor("#327cb7"), strokeColor=None))
+    return d
+
+
+
+def bp_rel_preparar(df):
+    """A entrada precisa ser o DataFrame JÁ FILTRADO pelo Módulo 1."""
+    base=df.copy()
+    base["_pressao"]=pd.to_numeric(base["Pressao_MCA"],errors="coerce")
+    base=base[base["_pressao"].notna() & (base["_pressao"]>=0)].copy()
+    base["_municipio"]=base["Municipio"].fillna("").astype(str).str.strip()
+    base["_bairro"]=base["Bairro"].fillna("").astype(str).str.strip()
+    base["_data"]=pd.to_datetime(base["Data"],format="%d/%m/%Y",errors="coerce")
+    return base
+
+
+def bp_rel_resumo_bairros(base):
+    """Média amostral por bairro e município, sem declarar valor representativo da rede."""
+    cols=["Município","Bairro","Medições","Matrículas","0 mca","Até 5 mca",
+          "5–10 mca","10–15 mca",">15 mca","Mín. (mca)","Média (mca)",
+          "Mediana (mca)","Máx. (mca)","% até 5 mca"]
+    if base.empty:return pd.DataFrame(columns=cols)
+    linhas=[]
+    for (mun,bairro),grupo in base.groupby(["_municipio","_bairro"],dropna=False):
+        p=grupo["_pressao"].dropna()
+        if p.empty:continue
+        mat=grupo["Matricula"].fillna("").astype(str).str.strip()
+        linhas.append({"Município":mun or "Não informado","Bairro":bairro or "Não informado",
+           "Medições":len(p),"Matrículas":mat[~mat.isin(["","nan","None"])].nunique(),
+           "0 mca":int(p.eq(0).sum()),"Até 5 mca":int(p.le(5).sum()),
+           "5–10 mca":int(((p>5)&(p<=10)).sum()),
+           "10–15 mca":int(((p>10)&(p<=15)).sum()),">15 mca":int(p.gt(15).sum()),
+           "Mín. (mca)":round(float(p.min()),2),"Média (mca)":round(float(p.mean()),2),
+           "Mediana (mca)":round(float(p.median()),2),"Máx. (mca)":round(float(p.max()),2),
+           "% até 5 mca":round(float(p.le(5).mean()*100),1)})
+    return pd.DataFrame(linhas,columns=cols).sort_values(
+        ["% até 5 mca","Até 5 mca","Medições","Bairro"],
+        ascending=[False,False,False,True]).reset_index(drop=True)
+
+
+def bp_rel_mapa(base):
+    """Mapa de pontos, mantendo a regra visual M1: 10 < pressão <= 15 fica oculta."""
+    validos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
+    validos=validos[~((validos["_pressao"]>10)&(validos["_pressao"]<=15))]
+    if validos.empty:return None
+    mapa=folium.Map(location=[float(validos["Latitude"].mean()),float(validos["Longitude"].mean())],
+        zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
+    posicoes=[]
+    for _,r in validos.iterrows():
+        lat=float(r["Latitude"]);lon=float(r["Longitude"])
+        if not (-90<=lat<=90 and -180<=lon<=180):continue
+        press=float(r["_pressao"])
+        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+        pop=(f"<b>{escape(str(r['Bairro']))} / {escape(str(r['Municipio']))}</b><br>"
+             f"Pressão: <b>{press:g} mca</b><br>"
+             f"Data: {escape(str(r['Data']))}<br>"
+             f"Matrícula: {escape(str(r.get('Matricula','')))}")
+        folium.CircleMarker([lat,lon],radius=7,color="#ffffff",weight=1.3,
+            fill=True,fill_color=cor,fill_opacity=.97,
+            tooltip=f"{r['Bairro']}: {press:g} mca",popup=folium.Popup(pop,max_width=360)).add_to(mapa)
+        posicoes.append((lat,lon))
+    if not posicoes:return None
+    if len(posicoes)>1:mapa.fit_bounds(posicoes,padding=(45,45),max_zoom=14)
+    from branca.element import Element
+    mapa.get_root().html.add_child(Element(
+        '<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+        'background:white;padding:8px 11px;border:1px solid #ccd5e0;border-radius:5px;'
+        'font:12px Arial;color:#24364b"><b>Medições de pressão</b><br>'
+        '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
+        '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
+        '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
+    return mapa
+
+
+def bp_rel_imagem_mapa(mapa, largura=1280, altura=650):
+    """Fotografa tiles reais via Chromium/Playwright, sem gerar mapas fictícios."""
+    from playwright.sync_api import sync_playwright
+    html=mapa.get_root().render().replace('</head>',
+        f'<style>html,body{{margin:0;width:{largura}px;height:{altura}px;overflow:hidden}}'
+        f'.folium-map{{width:{largura}px !important;height:{altura}px !important}}</style></head>',1)
+    with bp_rel_tempfile.TemporaryDirectory(prefix="coi_pressao_pdf_") as diretorio:
+        caminho=BP_REL_Path(diretorio)/"mapa.html"
+        caminho.write_text(html,encoding="utf-8")
+        with sync_playwright() as playwright:
+            executavel=(os.environ.get("CHROMIUM_PATH") or bp_rel_shutil.which("chromium")
+               or bp_rel_shutil.which("chromium-browser") or bp_rel_shutil.which("google-chrome"))
+            opcoes={"headless":True,"args":["--no-sandbox","--disable-dev-shm-usage"]}
+            if executavel:opcoes["executable_path"]=executavel
+            navegador=playwright.chromium.launch(**opcoes)
+            try:
+                pagina=navegador.new_page(viewport={"width":largura,"height":altura},device_scale_factor=1.2)
+                pagina.goto(caminho.as_uri(),wait_until="load",timeout=45000)
+                pagina.wait_for_function("typeof L !== 'undefined' && document.querySelector('.leaflet-map-pane') !== null",timeout=30000)
+                pagina.wait_for_timeout(2100)
+                if pagina.locator('.leaflet-tile-loaded').count()==0:
+                    raise RuntimeError("O mapa-base não carregou no Chromium. Verifique a rede.")
+                return pagina.locator('.folium-map').first.screenshot(type="png")
+            finally:navegador.close()
+
+
+def bp_rel_mapa_fallback(base, largura=1280, altura=650):
+    """Plano geográfico esquemático com coordenadas reais caso Chromium/tiles falhem.
+
+    Usa somente coordenadas dos pontos selecionados; jamais simula ruas/mapa-base.
+    """
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    pontos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
+    pontos=pontos[~((pontos["_pressao"]>10)&(pontos["_pressao"]<=15))]
+    imagem=PILImage.new("RGB",(largura,altura),"#f1f5fa")
+    desenho=ImageDraw.Draw(imagem)
+    try:
+        font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",16)
+        forte=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",19)
+    except OSError:
+        font=ImageFont.load_default(); forte=font
+    desenho.text((30,19),"LOCALIZAÇÃO DAS MEDIÇÕES — MAPA-BASE INDISPONÍVEL",font=forte,fill="#193c65")
+    desenho.text((30,50),"Representação por coordenadas geográficas; sem ruas ou limites cartográficos",font=font,fill="#60748b")
+    x0,y0,x1,y1=55,105,largura-55,altura-100
+    desenho.rectangle((x0,y0,x1,y1),outline="#a1b3c5",width=2,fill="#ffffff")
+    if not pontos.empty:
+        lats=pontos["Latitude"].astype(float).tolist()
+        lons=pontos["Longitude"].astype(float).tolist()
+        lat_c=(min(lats)+max(lats))/2
+        # Pondera o eixo horizontal para aproximar escalas lineares em metros.
+        corrigir=max(.2,math.cos(math.radians(lat_c)))
+        xs=[v*corrigir for v in lons]
+        minx,maxx=min(xs),max(xs);miny,maxy=min(lats),max(lats)
+        meio_x=(minx+maxx)/2; meio_y=(miny+maxy)/2
+        spanx=max(maxx-minx,.02);spany=max(maxy-miny,.02)
+        span=max(spanx/(x1-x0),spany/(y1-y0))*1.18
+        for idx,(_,r) in enumerate(pontos.iterrows()):
+            px=(x0+x1)/2+((float(r["Longitude"])*corrigir-meio_x)/span)
+            py=(y0+y1)/2-((float(r["Latitude"])-meio_y)/span)
+            press=float(r["_pressao"])
+            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+            raio=9
+            desenho.ellipse((px-raio,py-raio,px+raio,py+raio),fill=cor,outline="#ffffff",width=2)
+    legenda=[("#e64e62","0 mca"),("#f3a53a",">0–5 mca"),
+             ("#e6bc34",">5–10 mca"),("#8554b8",">15 mca")]
+    for j,(cor,rotulo) in enumerate(legenda):
+        ex=60+j*230
+        desenho.ellipse((ex,altura-63,ex+14,altura-49),fill=cor)
+        desenho.text((ex+22,altura-65),rotulo,font=font,fill="#193c65")
+    buffer_img=io.BytesIO(); imagem.save(buffer_img,format="PNG")
+    return buffer_img.getvalue()
+
+
+def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
+    """PDF gerado EXCLUSIVAMENTE a partir dos registros visíveis após TODOS os filtros."""
+    base=bp_rel_preparar(df_filtrado)
+    if base.empty:raise ValueError("Nenhuma medição válida corresponde aos filtros atuais.")
+    bairros=bp_rel_resumo_bairros(base)
+    medidas=base["_pressao"]
+    buffer=io.BytesIO()
+    doc=BP_REL_Doc(buffer,pagesize=bp_rel_landscape(BP_REL_A4),
+        leftMargin=1.2*bp_rel_cm,rightMargin=1.2*bp_rel_cm,
+        topMargin=1.2*bp_rel_cm,bottomMargin=1.2*bp_rel_cm)
+    regular="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    bold="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    if os.path.isfile(regular) and "COIBPRegular" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("COIBPRegular",regular))
+        pdfmetrics.registerFont(TTFont("COIBPBold",bold))
+        pdfmetrics.registerFontFamily("COIBPRegular",normal="COIBPRegular",bold="COIBPBold")
+    fonte="COIBPRegular" if "COIBPRegular" in pdfmetrics.getRegisteredFontNames() else "Helvetica"
+    titulo=BP_REL_ParagraphStyle("bp_pdf_titulo",fontName=fonte,fontSize=13,leading=17,
+                                 textColor=bp_rel_colors.HexColor("#193c65"),spaceAfter=7)
+    sub=BP_REL_ParagraphStyle("bp_pdf_sub",parent=titulo,fontSize=10.2,leading=14,spaceBefore=7)
+    corpo=BP_REL_ParagraphStyle("bp_pdf_corpo",fontName=fonte,fontSize=8.5,leading=11.8)
+    pequeno=BP_REL_ParagraphStyle("bp_pdf_pequeno",parent=corpo,fontSize=7.5,leading=10)
+    cabecalho=BP_REL_ParagraphStyle("bp_pdf_cabecalho_tabela",parent=pequeno,fontSize=7.5,
+                  leading=10,textColor=bp_rel_colors.HexColor("#193c65"))
+    def paragrafo(s,estilo=corpo):
+        return BP_REL_Paragraph(bp_rel_xml_escape(str(s if s is not None else "")).replace("\n","<br/>"),estilo)
+    def tabela(titulos,linhas,larguras):
+        dados=[[paragrafo(t,cabecalho) for t in titulos]] + [
+            [paragrafo(x,pequeno) for x in linha] for linha in linhas]
+        tab=BP_REL_Table(dados,colWidths=larguras,repeatRows=1,hAlign="LEFT")
+        tab.setStyle(BP_REL_TableStyle([
+            ("BACKGROUND",(0,0),(-1,0),bp_rel_colors.HexColor("#e1eaf4")),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[bp_rel_colors.white,bp_rel_colors.HexColor("#f4f7fb")]),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("LEFTPADDING",(0,0),(-1,-1),4),("RIGHTPADDING",(0,0),(-1,-1),4),
+            ("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),
+        ]))
+        return tab
+    historia=[paragrafo("MONITORAMENTO DE BAIXA PRESSÃO — COI",titulo),
+             paragrafo(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}  |  Relatório gerado em {datetime.now():%d/%m/%Y %H:%M}",corpo)]
+    faixas_texto=", ".join(faixas) if faixas else "Todas as faixas (inclusive 10–15 mca na análise)"
+    filtros=f"Município: {municipio}  |  Bairro: {bairro}  |  Matrícula: {matricula}  |  Faixas: {faixas_texto}"
+    historia.extend([paragrafo("Filtros aplicados: "+filtros,pequeno),BP_REL_Spacer(1,10)])
+
+    def cartao(rotulo,valor,nota):
+        t=BP_REL_Table([[paragrafo(rotulo,pequeno)],
+           [paragrafo(valor,BP_REL_ParagraphStyle("bp_kpi_"+re.sub(r"\W+","_",rotulo),parent=corpo,
+                fontSize=16,leading=19,textColor=bp_rel_colors.HexColor("#193c65")))],
+           [paragrafo(nota,pequeno)]],colWidths=[6.25*bp_rel_cm])
+        t.setStyle(BP_REL_TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),bp_rel_colors.HexColor("#f1f5fa")),
+            ("BOX",(0,0),(-1,-1),.6,bp_rel_colors.HexColor("#dce5ef")),
+            ("LEFTPADDING",(0,0),(-1,-1),7),("RIGHTPADDING",(0,0),(-1,-1),6),
+            ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+        return t
+    crit=int(medidas.le(5).sum())
+    cards=BP_REL_Table([[
+        cartao("MEDIÇÕES",str(len(base)),"aferições filtradas"),
+        cartao("BAIRROS",str(len(bairros)),"monitorados no filtro"),
+        cartao("MÉDIA",f"{medidas.mean():.2f} mca","média amostral"),
+        cartao("ATÉ 5 MCA",f"{crit} ({100*crit/len(base):.0f}%)","inclui leituras de 0 mca"),
+        ]],colWidths=[6.55*bp_rel_cm]*4)
+    cards.setStyle(BP_REL_TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),2),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0)]))
+    historia.extend([cards,BP_REL_Spacer(1,9)])
+    mapa=bp_rel_mapa(base)
+    if mapa is not None:
+        historia.append(paragrafo("MAPA DAS AFERIÇÕES",sub))
+        try:
+            imagem=bp_rel_imagem_mapa(mapa)
+        except Exception:
+            # Falha de browser/mapa-base não deve bloquear o relatório inteiro.
+            imagem=bp_rel_mapa_fallback(base)
+            historia.append(paragrafo("Mapa-base indisponível: pontos exibidos em plano geográfico esquemático, sem ruas.",pequeno))
+        historia.append(BP_REL_Image(io.BytesIO(imagem),width=26.1*bp_rel_cm,height=11.25*bp_rel_cm))
+    else:
+        historia.append(paragrafo("Não há pontos com coordenadas válidas e visíveis no mapa para os filtros selecionados.",corpo))
+    historia.append(BP_REL_Spacer(1,5))
+    historia.append(paragrafo("Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca) e roxo (>15 mca). "
+       "A faixa >10–15 mca é computada nos indicadores, mas permanece oculta no mapa conforme o Módulo 1.",pequeno))
+    historia.append(BP_REL_PageBreak())
+    historia.extend([paragrafo("DASHBOARD DE PRESSÃO — REGISTROS FILTRADOS",titulo),
+                    paragrafo("Distribuição das medições e média das aferições por bairro (somente registros selecionados).",pequeno),
+                    BP_REL_Spacer(1,10)])
+    graficos=BP_REL_Table([[
+        bp_rel_chart_faixas(base,fonte),bp_rel_chart_bairros(bairros,fonte)
+    ]],colWidths=[13.1*bp_rel_cm,13.1*bp_rel_cm],hAlign="LEFT")
+    graficos.setStyle(BP_REL_TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("LEFTPADDING",(0,0),(-1,-1),1),("RIGHTPADDING",(0,0),(-1,-1),1),
+        ("TOPPADDING",(0,0),(-1,-1),0),("BOTTOMPADDING",(0,0),(-1,-1),0)]))
+    historia.append(graficos)
+    historia.append(BP_REL_PageBreak())
+    historia.append(paragrafo("DIAGNÓSTICO POR BAIRRO",titulo))
+    if not bairros.empty:
+        críticos=bairros[bairros["Até 5 mca"]>0]
+        if not críticos.empty:
+            lideres=críticos.sort_values(["Até 5 mca","Medições"],ascending=False).head(4)
+            texto="Pontos de atenção: "+"; ".join(
+                f"{r['Bairro']} / {r['Município']} ({int(r['Até 5 mca'])} de {int(r['Medições'])} medições até 5 mca)"
+                for _,r in lideres.iterrows())+"."
+            historia.append(paragrafo(texto,corpo))
+            historia.append(BP_REL_Spacer(1,7))
+        if (bairros["Medições"]==1).any():
+            historia.append(paragrafo("Bairros com uma única aferição: a média representa somente aquele ponto de medição.",pequeno))
+            historia.append(BP_REL_Spacer(1,5))
+    linhas=[]
+    for _,r in bairros.iterrows():
+        linhas.append([f"{r['Bairro']} / {r['Município']}",int(r["Medições"]),int(r["Matrículas"]),
+              f"{r['Mín. (mca)']:g}",f"{r['Média (mca)']:g}",
+              f"{r['Máx. (mca)']:g}",f"{r['Até 5 mca']}/{r['Medições']}",
+              f"{r['% até 5 mca']:g}%"])
+    historia.append(tabela(["Bairro / Município","n","Matrículas","Mín.","Média",
+                           "Máx.","≤5 mca","% ≤5"],linhas,
+        [9.6*bp_rel_cm,1.4*bp_rel_cm,2.2*bp_rel_cm,2*bp_rel_cm,
+         2*bp_rel_cm,2*bp_rel_cm,3*bp_rel_cm,2.8*bp_rel_cm]))
+    historia.extend([BP_REL_Spacer(1,9),paragrafo(
+        "As médias refletem somente os registros filtrados, não a pressão de toda a rede ou de todas as residências do bairro.",pequeno)])
+    historia.append(BP_REL_PageBreak())
+    historia.extend([paragrafo("REGISTROS INDIVIDUAIS DE PRESSÃO",titulo),
+       paragrafo(f"{len(base)} medições que passaram por TODOS os filtros da tela.",pequeno),
+       BP_REL_Spacer(1,8)])
+    detalhe=[]
+    for _,r in base.sort_values(["_municipio","_bairro","_data","Matricula"],na_position="last").iterrows():
+        obs=str(r.get("Observacao","") or "").strip()
+        if len(obs)>320:obs=obs[:317]+"…"
+        detalhe.append([str(r.get("Data","")),f"{r.get('Bairro','')} / {r.get('Municipio','')}",
+            str(r.get("Matricula","") or ""),f"{float(r['_pressao']):g}",obs])
+    historia.append(tabela(["Data","Bairro / Município","Matrícula","mca","Observação"],
+        detalhe,[2.65*bp_rel_cm,8.5*bp_rel_cm,3.1*bp_rel_cm,1.8*bp_rel_cm,10.15*bp_rel_cm]))
+    doc.build(historia)
+    return buffer.getvalue()
+
+
+
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -1562,6 +1998,9 @@ def modal_previa_upload():
 
             st.rerun()
 
+
+# O botão é exibido em sua posição na sidebar depois de df_filtrado ficar pronto.
+relatorio_pdf_placeholder = None
 
 # ============================================================
 # SIDEBAR
@@ -2098,6 +2537,10 @@ with st.sidebar:
                 use_container_width=True
             )
 
+            # O conteúdo é preenchido depois dos filtros. A posição do botão
+            # continua nesta seção da sidebar, logo após as exportações.
+            relatorio_pdf_placeholder = st.empty()
+
     # ========================================================
     # ATUALIZAÇÃO — DISPONÍVEL PARA TODOS
     # ========================================================
@@ -2348,6 +2791,54 @@ if faixas_selecionadas and not df_filtrado.empty:
         mascara_faixas |= pressao_filtro.gt(15)
 
     df_filtrado = df_filtrado.loc[mascara_faixas].copy()
+
+
+# ============================================================
+# GERAR PDF A PARTIR DOS MESMOS FILTROS EXIBIDOS NA TELA
+# ============================================================
+if relatorio_pdf_placeholder is not None:
+    with relatorio_pdf_placeholder.container():
+        if not periodo_valido or df_filtrado.empty:
+            st.button("📄 Gerar relatório (PDF)", disabled=True,
+                      use_container_width=True, key="bp_rel_botao_desabilitado")
+            st.caption("Sem registros para o período e os filtros selecionados.")
+        else:
+            # Descarta arquivo previamente gerado se algum filtro ou registro mudou.
+            assinatura_dados = bp_rel_hashlib.sha256(
+                pd.util.hash_pandas_object(
+                    df_filtrado[COLUNAS_PADRAO].reset_index(drop=True),
+                    index=False
+                ).values.tobytes()
+            ).hexdigest()
+            assinatura_filtro = (
+                data_inicial.isoformat(), data_final.isoformat(), mun_sel,
+                bairro_sel, matricula_sel, tuple(faixas_selecionadas), assinatura_dados
+            )
+            if st.session_state.get("bp_rel_assinatura") != assinatura_filtro:
+                st.session_state.pop("bp_rel_pdf_gerado", None)
+            if st.button("📄 Gerar relatório (PDF)", type="primary",
+                         use_container_width=True, key="bp_gerar_relatorio_pdf"):
+                try:
+                    with st.spinner("Gerando relatório das medições filtradas..."):
+                        st.session_state["bp_rel_pdf_gerado"] = bp_rel_pdf(
+                            df_filtrado, data_inicial, data_final,
+                            mun_sel, bairro_sel, matricula_sel,
+                            tuple(faixas_selecionadas)
+                        )
+                        st.session_state["bp_rel_assinatura"] = assinatura_filtro
+                except Exception as erro_pdf:
+                    st.session_state.pop("bp_rel_pdf_gerado", None)
+                    st.error(f"Não foi possível gerar o PDF: {erro_pdf}")
+            if st.session_state.get("bp_rel_pdf_gerado") is not None and \
+                    st.session_state.get("bp_rel_assinatura") == assinatura_filtro:
+                st.download_button(
+                    "⬇️ Baixar relatório gerado",
+                    data=st.session_state["bp_rel_pdf_gerado"],
+                    file_name=f"relatorio_baixa_pressao_{datetime.now():%Y%m%d}.pdf",
+                    mime="application/pdf", use_container_width=True,
+                    key="bp_rel_baixar_pdf"
+                )
+                st.caption(f"PDF com {len(df_filtrado)} medição(ões) filtrada(s).")
 
 
 # ============================================================
