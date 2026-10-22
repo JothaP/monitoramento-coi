@@ -1455,13 +1455,15 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
         pontos["_bairro_cruzamento"] = pontos["_bairro_base"]
 
     registros = []
-    for _, evento in df_eventos.iterrows():
+    for indice_evento, evento in df_eventos.reset_index(drop=True).iterrows():
         municipal = evento_abrange_municipio(evento.get("Áreas Impactadas", ""))
         if municipal:
             cidade = normalizar_municipio(evento.get("Cidade", ""))
             bloco = pontos[pontos["Cidade"].map(normalizar_municipio) == cidade]
             if not bloco.empty:
                 registros.append({
+                    "_indice_evento": indice_evento,
+                    "Cidade": evento.get("Cidade", ""),
                     "Evento": evento.get("Descrição do Serviço", "") or evento.get("Serviço", ""),
                     "Protocolo": evento.get("Protocolo", ""),
                     "Status": evento.get("Status", ""),
@@ -1480,6 +1482,8 @@ def relacionar_eventos_pontos(df_eventos, df_pontos, bairros):
             if bloco.empty:
                 continue
             registros.append({
+                "_indice_evento": indice_evento,
+                "Cidade": evento.get("Cidade", ""),
                 "Evento": evento.get("Descrição do Serviço", "") or evento.get("Serviço", ""),
                 "Protocolo": evento.get("Protocolo", ""),
                 "Status": evento.get("Status", ""),
@@ -2555,99 +2559,152 @@ def atualizar_evento_cadastrado(indice, original, alteracoes):
 
 @st.dialog("⚡ Eventos x O.S.", width="large")
 def modal_eventos():
+    """Uma tabela de eventos, editável por seleção, e um gráfico filtrado por município."""
     st.subheader("Eventos x O.S. por bairro")
-
     if df_eventos.empty:
         st.info("A aba EVENTOS ainda não possui dados.")
-    elif df_pontos.empty:
-        st.warning("Há eventos cadastrados, mas ainda não existem O.S. em PONTOS para o cruzamento.")
+        return
+
+    # Selecionar uma cidade evita misturar, no mesmo gráfico, bairros homônimos
+    # de municípios diferentes. O mesmo filtro alimenta a tabela de edição.
+    eventos_base = df_eventos.reset_index(drop=True)
+    cidades = sorted({
+        str(c).strip() for c in eventos_base["Cidade"].fillna("")
+        if str(c).strip()
+    }, key=normalizar_municipio)
+    if cidades:
+        municipio_selecionado = st.selectbox(
+            "Município — eventos e gráfico",
+            cidades,
+            key="farol_eventos_municipio_filtro",
+        )
+        cidade_chave = normalizar_municipio(municipio_selecionado)
+        eventos_visiveis = eventos_base.loc[
+            eventos_base["Cidade"].map(normalizar_municipio) == cidade_chave
+        ].copy()
     else:
-        rel = relacionar_eventos_pontos(df_eventos, df_pontos, bairros)
+        municipio_selecionado = ""
+        cidade_chave = ""
+        eventos_visiveis = eventos_base.copy()
+        st.caption("Os eventos cadastrados não possuem município informado.")
 
-        if rel.empty:
-            st.info("Nenhuma O.S. foi encontrada nos bairros informados em Áreas Impactadas.")
-        else:
-            st.dataframe(rel.sort_values(["O.S. encontradas", "Matrículas"], ascending=False), width="stretch", hide_index=True)
+    # Cada linha do relacionamento corresponde a um bairro impactado por evento.
+    # A análise é calculada uma única vez e exibida na própria tabela de eventos.
+    rel = (
+        relacionar_eventos_pontos(eventos_base, df_pontos, bairros)
+        if not df_pontos.empty else pd.DataFrame()
+    )
+    if not rel.empty:
+        rel_municipio = rel.loc[
+            rel["Cidade"].map(normalizar_municipio) == cidade_chave
+        ].copy() if cidade_chave else rel.copy()
+        resumo_os = (
+            rel.groupby("_indice_evento", as_index=True)["O.S. encontradas"]
+            .sum().astype(int)
+        )
+        resumo_bairros = (
+            rel.groupby("_indice_evento", as_index=True)["Bairro"]
+            .agg(lambda col: ", ".join(dict.fromkeys(str(v) for v in col if str(v).strip())))
+        )
+    else:
+        rel_municipio = pd.DataFrame()
+        resumo_os = pd.Series(dtype=int)
+        resumo_bairros = pd.Series(dtype=str)
 
-            fig = px.bar(
-                rel.sort_values("O.S. encontradas", ascending=False),
-                x="Bairro",
-                y="O.S. encontradas",
-                color="Status",
-                hover_data=["Protocolo", "Matrículas", "Parcial"],
-                title="O.S. encontradas nos bairros impactados pelos eventos",
+    st.markdown("### Eventos armazenados e O.S. relacionadas")
+    colunas_evento = [c for c in [
+        "Data", "Status", "Cidade", "Serviço", "Protocolo",
+        "Áreas Impactadas", "Descrição do Serviço"
+    ] if c in eventos_visiveis.columns]
+    # Preserva o índice de linha original da aba EVENTOS para salvar a edição
+    # correta, mesmo quando a tabela estiver filtrada por município.
+    indices_visiveis = list(eventos_visiveis.index)
+    tabela = eventos_visiveis.loc[:, colunas_evento].copy()
+    tabela["O.S. encontradas"] = [int(resumo_os.get(i, 0)) for i in indices_visiveis]
+    tabela["Bairros com O.S."] = [str(resumo_bairros.get(i, "")) for i in indices_visiveis]
+    tabela = tabela.reset_index(drop=True)
+
+    if PODE_EDITAR_FAROL:
+        tabela.insert(0, "Selecionar", False)
+        selecao = st.data_editor(
+            tabela,
+            hide_index=True,
+            width="stretch",
+            height=330,
+            disabled=[c for c in tabela.columns if c != "Selecionar"],
+            column_config={
+                "Selecionar": st.column_config.CheckboxColumn(
+                    "Selecionar", help="Marque um único evento para editar.",
+                    default=False, required=True,
+                ),
+                "O.S. encontradas": st.column_config.NumberColumn("O.S. encontradas", format="%d"),
+            },
+            key=f"farol_selecao_eventos_{cidade_chave or 'SEM_CIDADE'}",
+        )
+        marcados = [int(i) for i in selecao.index[
+            selecao["Selecionar"].fillna(False).astype(bool)
+        ].tolist()]
+        if len(marcados) > 1:
+            st.warning("Marque somente um evento para editar.")
+        indice_evento = (
+            indices_visiveis[marcados[0]] if len(marcados) == 1 else None
+        )
+        # Botão diretamente abaixo da ÚNICA tabela.
+        if st.button(
+            "✏️ Editar evento selecionado",
+            key="farol_abrir_edicao_evento_tabela",
+            disabled=indice_evento is None,
+            type="primary",
+        ):
+            st.session_state["farol_evento_em_edicao"] = indice_evento
+
+        indice_edicao = st.session_state.get("farol_evento_em_edicao")
+        if indice_edicao not in indices_visiveis:
+            indice_edicao = None
+        if isinstance(indice_edicao, int) and 0 <= indice_edicao < len(eventos_base):
+            registro = eventos_base.iloc[indice_edicao].to_dict()
+            st.markdown("### ✏️ Corrigir evento cadastrado")
+            st.caption(
+                f"Evento selecionado: {registro.get('Protocolo') or 'Sem protocolo'} · "
+                f"{registro.get('Cidade', '')} · {registro.get('Serviço', '')}. "
+                "A correção de Áreas Impactadas será preservada nas próximas importações."
             )
-            st.plotly_chart(fig, width="stretch")
-
-    # A tabela de eventos também aparece quando não existem O.S. para cruzamento.
-    if not df_eventos.empty:
-        st.divider()
-        st.markdown("### Eventos armazenados")
-        colunas_evento = [c for c in [
-            "Data", "Status", "Cidade", "Serviço", "Protocolo",
-            "Áreas Impactadas", "Descrição do Serviço"
-        ] if c in df_eventos.columns]
-        # O índice posicional é mantido exclusivamente no Python; não é gravado
-        # no Sheets nem exibido ao usuário.
-        mostrar_eventos = df_eventos.reset_index(drop=True).loc[:, colunas_evento].copy()
-        if PODE_EDITAR_FAROL:
-            mostrar_eventos.insert(0, "Selecionar", False)
-            selecionados_editor = st.data_editor(
-                mostrar_eventos,
-                hide_index=True,
-                width="stretch",
-                height=300,
-                disabled=colunas_evento,
-                column_config={
-                    "Selecionar": st.column_config.CheckboxColumn(
-                        "Selecionar", help="Marque um único evento para editar.",
-                        default=False, required=True,
-                    )
-                },
-                key="farol_selecao_eventos_tabela",
-            )
-            indices_marcados = [int(i) for i in selecionados_editor.index[
-                selecionados_editor["Selecionar"].fillna(False).astype(bool)
-            ].tolist()]
-            if len(indices_marcados) > 1:
-                st.warning("Marque somente um evento na tabela para editar.")
-            indice_evento = indices_marcados[0] if len(indices_marcados) == 1 else None
-            # O botão fica imediatamente abaixo da tabela, sem seletor duplicado.
-            if st.button(
-                "✏️ Editar evento selecionado",
-                key="farol_abrir_edicao_evento_tabela",
-                disabled=indice_evento is None,
-                type="primary",
-            ):
-                st.session_state["farol_evento_em_edicao"] = indice_evento
-
-            indice_edicao = st.session_state.get("farol_evento_em_edicao")
-            if isinstance(indice_edicao, int) and 0 <= indice_edicao < len(df_eventos):
-                registro = df_eventos.iloc[indice_edicao].to_dict()
-                st.markdown("### ✏️ Corrigir evento cadastrado")
-                st.caption(
-                    f"Evento selecionado: {registro.get('Protocolo') or 'Sem protocolo'} · "
-                    f"{registro.get('Cidade', '')} · {registro.get('Serviço', '')}. "
-                    "A correção de Áreas Impactadas será preservada nas próximas importações."
+            with st.form(f"farol_edicao_evento_{indice_edicao}"):
+                area_editada = st.text_area(
+                    "Áreas Impactadas",
+                    value=str(registro.get("Áreas Impactadas", "") or ""),
+                    height=110,
+                    help="Somente este campo pode ser alterado.",
                 )
-                with st.form(f"farol_edicao_evento_{indice_edicao}"):
-                    area_editada = st.text_area(
-                        "Áreas Impactadas",
-                        value=str(registro.get("Áreas Impactadas", "") or ""),
-                        height=110,
-                        help="Somente este campo pode ser alterado.",
+                salvar = st.form_submit_button("💾 Salvar área impactada", width="stretch")
+            if salvar:
+                try:
+                    atualizar_evento_cadastrado(
+                        indice_edicao, registro, {"Áreas Impactadas": area_editada}
                     )
-                    salvar = st.form_submit_button("💾 Salvar área impactada", width="stretch")
-                if salvar:
-                    try:
-                        atualizar_evento_cadastrado(indice_edicao, registro, {"Áreas Impactadas": area_editada})
-                        st.session_state.pop("farol_evento_em_edicao", None)
-                        st.success("Evento atualizado. O mapa e as associações serão recalculados.")
-                        st.rerun()
-                    except Exception as erro:
-                        st.error(f"Não foi possível salvar o evento: {erro}")
-        else:
-            st.dataframe(mostrar_eventos, width="stretch", hide_index=True)
+                    st.session_state.pop("farol_evento_em_edicao", None)
+                    st.success("Evento atualizado. O mapa e as associações serão recalculados.")
+                    st.rerun()
+                except Exception as erro:
+                    st.error(f"Não foi possível salvar o evento: {erro}")
+    else:
+        st.dataframe(tabela, width="stretch", hide_index=True, height=330)
+
+    # O gráfico utiliza APENAS a cidade selecionada, nunca mistura municípios.
+    st.markdown("### Distribuição das O.S. nos bairros impactados")
+    if rel_municipio.empty:
+        st.info("Nenhuma O.S. encontrada nos bairros dos eventos deste município.")
+    else:
+        fig = px.bar(
+            rel_municipio.sort_values("O.S. encontradas", ascending=False),
+            x="Bairro",
+            y="O.S. encontradas",
+            color="Status",
+            hover_data=["Protocolo", "Matrículas", "Parcial"],
+            title=f"O.S. nos bairros impactados — {municipio_selecionado}" if municipio_selecionado
+                  else "O.S. nos bairros impactados",
+        )
+        st.plotly_chart(fig, width="stretch")
 
 
 def capturar_mapa_folium(mapa, largura=1100, altura=600):
