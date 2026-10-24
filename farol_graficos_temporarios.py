@@ -1,8 +1,9 @@
-"""Evidências de pressão temporárias para o Farol em homologação.
+"""Gráficos de pressão compartilhados por dia para o Farol Operacional.
 
-Armazenamento compartilhado na aba FAROL_GRAFICOS_DIA da planilha de TESTES.
-Sem pastas locais, Drive nem novas permissões. Expiração por data em Fortaleza,
-com descarte físico preguiçoso na primeira consulta do novo dia.
+Armazenamento na aba independente FAROL_GRAFICOS_DIA da planilha cujo ID é
+recebido pelo módulo chamador (produção ou teste). Expiração pelo dia civil
+no fuso America/Fortaleza; limpeza física no primeiro acesso do novo dia.
+Não gravar as imagens em PONTOS, EVENTOS ou outras abas operacionais.
 """
 from __future__ import annotations
 
