@@ -178,17 +178,72 @@ def salvar_grafico(id_planilha, registro, imagem_original):
     colunas = max(aba.col_count, len(nova), 5)
     if colunas > aba.col_count:
         aba.resize(cols=colunas)
-    for linha_num, antiga in enumerate(linhas[1:], start=2):
-        if len(antiga) > 1 and antiga[0] == hoje and antiga[1] == chave:
-            # Limpa partes remanescentes ao substituir imagem maior por menor.
-            tam = max(len(nova), len(antiga))
-            aba.update(range_name=f"A{linha_num}", values=[nova + [""] * (tam - len(nova))],
-                       value_input_option="RAW")
-            indice_do_dia.clear()
-            return "substituído"
+    correspondencias = [
+        (linha_num, antiga)
+        for linha_num, antiga in enumerate(linhas[1:], start=2)
+        if len(antiga) > 1 and antiga[0] == hoje and antiga[1] == chave
+    ]
+    if correspondencias:
+        # O índice usa a última linha do logger; atualizá-la garante que a
+        # substituição apareça mesmo se uploads simultâneos geraram duplicatas.
+        linha_num, antiga = correspondencias[-1]
+        tam = max(len(nova), len(antiga))
+        aba.update(range_name=f"A{linha_num}", values=[nova + [""] * (tam - len(nova))],
+                   value_input_option="RAW")
+        # Elimina duplicatas antigas deste logger sem interferir em outros.
+        for duplicata_num, _ in reversed(correspondencias[:-1]):
+            aba.delete_rows(duplicata_num)
+        indice_do_dia.clear()
+        return "substituído"
     aba.append_row(nova, value_input_option="RAW")
     indice_do_dia.clear()
     return "enviado"
+
+
+def excluir_grafico(id_planilha, registro, imagem_esperada=None):
+    """Exclui a captura do logger no dia atual, incluindo eventuais duplicatas.
+
+    A exclusão se restringe à aba temporária de gráficos; outras bases
+    operacionais nunca são modificadas. A comparação opcional com a imagem
+    que o usuário visualizou impede excluir acidentalmente uma atualização
+    recente feita por outro analista.
+    """
+    hoje = data_hoje()
+    chave = chave_logger(registro)
+    aba, linhas = _linhas(id_planilha, criar=False)
+    if aba is None:
+        return False
+
+    linhas = _limpar_expirados(id_planilha, aba, linhas, hoje)
+    numeros_linha = [
+        n for n, linha in enumerate(linhas[1:], start=2)
+        if len(linha) >= 2 and linha[0] == hoje and linha[1] == chave
+    ]
+    if not numeros_linha:
+        indice_do_dia.clear()
+        return False
+
+    if imagem_esperada is not None:
+        # O índice do dia mantém a última entrada quando houver duplicatas.
+        ultima = linhas[numeros_linha[-1] - 1]
+        try:
+            imagem_atual = base64.b64decode("".join(ultima[4:]), validate=True)
+        except Exception as exc:
+            raise ValueError(
+                "A imagem armazenada está inválida. Atualize a página antes de excluí-la."
+            ) from exc
+        if hashlib.sha256(imagem_atual).digest() != hashlib.sha256(imagem_esperada).digest():
+            indice_do_dia.clear()
+            raise ValueError(
+                "Outro analista atualizou este gráfico. Recarregue a página "
+                "e confira a imagem antes de confirmar a exclusão."
+            )
+
+    # Excluir de baixo para cima mantém estáveis os números das linhas restantes.
+    for numero in reversed(numeros_linha):
+        aba.delete_rows(numero)
+    indice_do_dia.clear()
+    return True
 
 
 def status(id_planilha):
