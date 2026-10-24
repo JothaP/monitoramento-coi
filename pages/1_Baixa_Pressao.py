@@ -17,6 +17,7 @@ import plotly.express as px
 from branca.element import Element
 from html import escape
 import unicodedata
+import re
 
 
 # ============================================================
