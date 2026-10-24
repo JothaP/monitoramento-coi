@@ -2,6 +2,7 @@
 Fontes independentes e acesso somente leitura.
 """
 import io
+import base64
 import json
 import math
 import re
@@ -11,6 +12,7 @@ import tempfile
 from pathlib import Path
 import unicodedata
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from html import escape
 from xml.sax.saxutils import escape as xml_escape
 
@@ -30,6 +32,14 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from streamlit_folium import st_folium
 from auth import verificar_autenticacao, tem_acesso_modulo
+from farol_graficos_temporarios import chave_logger, filtrar_loggers, rotulo_logger
+
+# Mesma abrangência operacional padrão do Módulo 3 (independente do raio
+# usado para formar as concentrações ou associar medições do Módulo 1).
+RAIO_OPERACIONAL_EVIDENCIAS = 750
+FUSO_LOGGERS = ZoneInfo("America/Fortaleza")
+ABA_GRAFICOS_DIA = "FAROL_GRAFICOS_DIA"
+
 
 st.set_page_config(page_title="Relatórios Integrados — COI", page_icon="📊", layout="wide")
 if not verificar_autenticacao():
@@ -1176,9 +1186,121 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                       "da rede de distribuição ou do bairro.",pequeno))
 
 
+def _dia_evidencias():
+    """Dia civil de Teresina, independente do fuso do servidor Streamlit."""
+    return datetime.now(FUSO_LOGGERS).date()
+
+
+def carregar_graficos_do_dia_somente_leitura(spreadsheet_id, dia):
+    """Lê imagens do Farol SEM escrever na aba e sem alterar sua limpeza diária.
+
+    O Módulo 3 é responsável pelos uploads, substituições e limpeza. No
+    Módulo 7, somente os registros da data requisitada são considerados.
+    Importante: os dados Base64 podem ocupar várias colunas do Google Sheets.
+    """
+    try:
+        linhas = cliente_google().open_by_key(spreadsheet_id).worksheet(ABA_GRAFICOS_DIA).get_all_values()
+    except gspread.exceptions.WorksheetNotFound:
+        # Aba pode não existir até a primeira evidência enviada no Módulo 3.
+        return {}
+    hoje = dia.isoformat()
+    indice = {}
+    for linha in linhas[1:]:
+        if len(linha) < 5 or linha[0] != hoje or not linha[1]:
+            continue
+        conteudo = "".join(linha[4:])
+        if not conteudo:
+            continue
+        try:
+            imagem = base64.b64decode(conteudo, validate=True)
+        except (ValueError, base64.binascii.Error):
+            # Um anexo ilegível não deve ser apresentado como evidência.
+            continue
+        # Mesmo critério do Módulo 3: em duplicatas, prevalece a última linha.
+        indice[linha[1]] = {"logger": linha[2], "atualizado_em": linha[3], "imagem": imagem}
+    return indice
+
+
+def loggers_proximos_da_concentracao(c, contexto, raio_operacional):
+    """Reconstrói os campos usados pela chave compartilhada do Módulo 3.
+
+    A proximidade é medida a partir do centro da concentração, assim como no
+    Farol. Não associa o gráfico pelo ID variável THE C001/API C002.
+    """
+    base = contexto.get("LOGGERS", pd.DataFrame())
+    if base is None or base.empty:
+        return pd.DataFrame(columns=["Tipo", "Identificação", "ID Logger", "Nome", "Município", "Distância"])
+    lat_c, lon_c = float(c["Latitude"]), float(c["Longitude"])
+    encontrados = []
+    for _, item in base.iterrows():
+        lat = coordenada(item.get("LATITUDE"), "lat")
+        lon = coordenada(item.get("LONGITUDE"), "lon")
+        if lat is None or lon is None:
+            continue
+        distancia = haversine(lat_c, lon_c, lat, lon)
+        if distancia > raio_operacional:
+            continue
+        encontrados.append({
+            "Tipo": "Logger",
+            "Identificação": str(item.get("IDENTIFICACAO_ATIVO", "") or ""),
+            "ID Logger": str(item.get("ID_LOGGER", "") or ""),
+            "Nome": str(item.get("ENDERECO", "") or ""),
+            "Município": str(item.get("MUNICIPIO", "") or ""),
+            "Distância": f"{distancia:.0f} m" if distancia < 1000 else f"{distancia / 1000:.2f} km",
+            "_distancia": distancia,
+        })
+    if not encontrados:
+        return pd.DataFrame(columns=["Tipo", "Identificação", "ID Logger", "Nome", "Município", "Distância"])
+    return pd.DataFrame(encontrados).sort_values("_distancia").drop(columns="_distancia")
+
+
+def evidencias_loggers_relatorio_integrado(loggers, indice, fonte, largura=26.6*cm):
+    """Cria seção SOMENTE para loggers do raio que possuem gráfico válido."""
+    from PIL import Image as ImagemPIL
+    evidencias = []
+    for logger in filtrar_loggers(loggers):
+        registro = (indice or {}).get(chave_logger(logger))
+        if not registro or not registro.get("imagem"):
+            continue
+        foto = registro["imagem"]
+        try:
+            with ImagemPIL.open(io.BytesIO(foto)) as imagem_pil:
+                largura_foto, altura_foto = imagem_pil.size
+                imagem_pil.verify()
+            if largura_foto <= 0 or altura_foto <= 0:
+                continue
+            larg = min(largura, 25.4*cm)
+            alt = larg * altura_foto / largura_foto
+            if alt > 9.8*cm:
+                fator = 9.8*cm / alt
+                larg *= fator
+                alt *= fator
+            figura = Image(io.BytesIO(foto), width=larg, height=alt)
+            evidencias.append((logger, figura))
+        except Exception:
+            # Captura inválida não gera página nem aviso desnecessário no PDF.
+            continue
+    if not evidencias:
+        return []
+
+    corpo = ParagraphStyle("EvidenciaLoggersM7Corpo", fontName=fonte,
+        fontSize=9, leading=13, textColor=colors.HexColor("#273449"), spaceAfter=5)
+    titulo = ParagraphStyle("EvidenciaLoggersM7Titulo", parent=corpo,
+        fontSize=13, leading=17, spaceAfter=10,
+        textColor=colors.HexColor("#17365D"))
+    secao = [PageBreak(), Paragraph("Evidências gráficas dos loggers próximos", titulo)]
+    for numero, (logger, figura) in enumerate(evidencias, start=1):
+        descricao = f"Logger {numero} — {rotulo_logger(logger)} | Distância: {logger.get('Distância', '')}"
+        secao.append(KeepTogether([
+            Paragraph(xml_escape(descricao), corpo), Spacer(1, .12*cm),
+            figura, Spacer(1, .3*cm),
+        ]))
+    return secao
+
+
 def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
                   concentracoes=None, grupos=None, raio_cluster=500, contexto=None, pressao=None,
-                  pontos_todos=None):
+                  pontos_todos=None, indice_graficos=None, raio_operacional_loggers=RAIO_OPERACIONAL_EVIDENCIAS):
     """Relatório do Farol: panorama + fichas com mapa e O.S. ao lado.
 
     Mantém ativos, eventos, classificação temporal de O.S. e acompanhamento.
@@ -1348,6 +1470,14 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
+        # Evidências do dia atual, idênticas às usadas pelo Módulo 3: não
+        # criar título, espaço reservado ou página para logger sem imagem.
+        loggers_da_ficha = loggers_proximos_da_concentracao(
+            c, contexto, raio_operacional_loggers
+        )
+        historia.extend(evidencias_loggers_relatorio_integrado(
+            loggers_da_ficha, indice_graficos, fonte
+        ))
         if indice<len(resumo)-1:
             historia.append(PageBreak())
     if not pressao.empty:
@@ -1378,6 +1508,7 @@ if executar:
     # Descarta resultados antigos antes de uma nova consulta, evitando exibir diagnósticos desatualizados.
     st.session_state.pop("relatorio_coi_integrado", None)
     st.session_state.pop("pdf_relatorio_integrado_farol", None)
+    st.session_state.pop("pdf_relatorio_integrado_dia", None)
     if inicio>fim:
         st.error("A data inicial não pode ser posterior à data final.")
         st.stop()
@@ -1468,15 +1599,34 @@ if r:
             st.dataframe(resumo[visiveis],hide_index=True,use_container_width=True)
         else:
             st.caption("Não há concentração nesta seleção. Os pontos medidos do Módulo 1 continuam visíveis no mapa.")
+        # Um PDF gerado no dia anterior nunca deve continuar disponível após
+        # a expiração diária das imagens compartilhadas.
+        if (st.session_state.get("pdf_relatorio_integrado_farol") and
+            st.session_state.get("pdf_relatorio_integrado_dia") != _dia_evidencias().isoformat()):
+            st.session_state.pop("pdf_relatorio_integrado_farol", None)
+            st.session_state.pop("pdf_relatorio_integrado_dia", None)
         if st.button("📄 Preparar relatório cartográfico (PDF)", type="primary", key="gerar_pdf_ri_farol"):
+            st.session_state.pop("pdf_relatorio_integrado_farol", None)
+            st.session_state.pop("pdf_relatorio_integrado_dia", None)
             try:
                 with st.spinner("Capturando mapas e montando as fichas operacionais..."):
-                    st.session_state["pdf_relatorio_integrado_farol"] = pdf_relatorio(
+                    dia_graficos = _dia_evidencias()
+                    # Gráficos enviados hoje só acompanham relatórios cujo
+                    # período inclui o dia atual; não atribuí-los a datas antigas.
+                    indice_graficos = (
+                        carregar_graficos_do_dia_somente_leitura(ID_FAROL, dia_graficos)
+                        if r["inicio"] <= dia_graficos <= r["fim"] else {}
+                    )
+                    pdf = pdf_relatorio(
                         resumo,r["associados"],r["territoriais"],r["achados"],r["inicio"],r["fim"],
-                        r["raio"],r["n_os"],r["n_bp"],r["concentracoes"],r["grupos"],r["raio_cluster"],r["contexto"],r["pressao_mapa"],r["os_base"])
+                        r["raio"],r["n_os"],r["n_bp"],r["concentracoes"],r["grupos"],r["raio_cluster"],
+                        r["contexto"],r["pressao_mapa"],r["os_base"],
+                        indice_graficos=indice_graficos,
+                        raio_operacional_loggers=RAIO_OPERACIONAL_EVIDENCIAS)
+                    st.session_state["pdf_relatorio_integrado_farol"] = pdf
+                    st.session_state["pdf_relatorio_integrado_dia"] = dia_graficos.isoformat()
             except Exception as erro_pdf:
-                st.error(f"Não foi possível capturar o mapa para o PDF: {erro_pdf}. "
-                         "Confirme a disponibilidade do Playwright/Chromium, como no Farol.")
+                st.error(f"Não foi possível preparar o PDF integrado: {erro_pdf}")
         if st.session_state.get("pdf_relatorio_integrado_farol"):
             st.download_button("⬇️ Baixar relatório no padrão Farol (PDF)",
                 data=st.session_state["pdf_relatorio_integrado_farol"],
