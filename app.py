@@ -557,19 +557,19 @@ if modulo_7:
 # MÓDULO 8 — POSIÇÃO 8 (CENTRO)
 # ============================================================
 
-# Exibido para todos os perfis, mas sem acesso, inclusive para admin.
-# Não há página de destino nem chamada de navegação nesta fase.
+# Acesso liberado a todos os perfis autenticados: admin, usuario e operador.
+# A própria página também valida a autenticação, inclusive no acesso direto.
 with col8:
     st.markdown("#### 🔍 Módulo 8")
     st.markdown("**Consulta Operacional**")
-    st.caption("Status: Em desenvolvimento")
-    st.button(
+    st.caption("Status: Ativo")
+    if st.button(
         "Acessar Consulta Operacional",
-        type="secondary",
+        type="primary",
         use_container_width=True,
         key="acessar_consulta_operacional",
-        disabled=True,
-    )
+    ):
+        st.switch_page("pages/8_Consulta_Operacional.py")
 
 # ============================================================
 # AMBIENTE DE TESTE — POSIÇÃO 9 (DIREITA)
