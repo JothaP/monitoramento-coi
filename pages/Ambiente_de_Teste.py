@@ -51,7 +51,7 @@ from integracao_acompanhamento_teste import (chave_concentracao, localizar_vincu
 # ============================================================
 
 st.set_page_config(
-    page_title="Ambiente de Teste - Farol V2",
+    page_title="Ambiente de Teste - COI",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -73,6 +73,25 @@ def exigir_edicao_farol():
     """Bloqueia mutações mesmo quando funções são chamadas sem seus botões."""
     if not PODE_EDITAR_FAROL:
         raise PermissionError("Seu perfil permite apenas consultar o Farol Operacional.")
+
+
+# ============================================================
+# SELETOR DE FERRAMENTAS EM TESTE (admin)
+# Mantém o Farol V2 intacto e abre a Consulta sem inicializar o
+# Google Sheets, o histórico ou as rotinas de alteração do Farol.
+# ============================================================
+if PERFIL_FAROL == "admin":
+    ferramenta_teste = st.radio(
+        "🧪 Ferramenta em desenvolvimento",
+        options=["Farol V2", "Consulta Operacional"],
+        horizontal=True,
+        key="ambiente_teste_ferramenta",
+    )
+    if ferramenta_teste == "Consulta Operacional":
+        from consulta_operacional_teste import exibir_consulta_operacional
+
+        exibir_consulta_operacional()
+        st.stop()
 
 # Definir em Streamlit Cloud > App settings > Secrets:
 # farol_v2_spreadsheet_id = "ID_DA_COPIA_DA_PLANILHA"
