@@ -1,6 +1,6 @@
 import streamlit as st
 
-from auth import verificar_autenticacao
+from auth import verificar_autenticacao, tem_acesso_modulo
 
 from pages.ferramentas_adicionais.excel_tools import (
     render_juntar_excel,
@@ -9,6 +9,10 @@ from pages.ferramentas_adicionais.excel_tools import (
     render_remover_duplicidades,
     render_separar_excel,
     render_exportar_excel,
+)
+
+from pages.ferramentas_adicionais.word_tools import (
+    render_formatador_relatorios,
 )
 
 from pages.ferramentas_adicionais.calculadoras import (
@@ -81,6 +85,12 @@ if not st.session_state.get("autenticado"):
         st.switch_page("app.py")
 
     st.stop()
+
+# Defesa também para acesso direto via URL, seguindo as permissões do Hub.
+if not tem_acesso_modulo("6"):
+    st.error("Seu perfil não está autorizado a acessar Ferramentas Adicionais.")
+    st.stop()
+
 
 # ============================================================
 # MODO ESCURO
@@ -177,7 +187,7 @@ st.markdown(
     """
     <div class="titulo-ferramentas">
         <h1>🔧 Ferramentas Adicionais</h1>
-        <p>Ferramentas rápidas para Excel e cálculos operacionais.</p>
+        <p>Ferramentas rápidas para Excel, Word e cálculos operacionais.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -220,6 +230,15 @@ def abrir_separar_excel():
 @st.dialog("📤 Exportar / Converter Excel", width="large")
 def abrir_exportar_excel():
     render_exportar_excel()
+
+
+# ============================================================
+# POPUP — WORD TOOLS
+# ============================================================
+
+@st.dialog("📄 Formatador de Relatórios", width="large")
+def abrir_formatador_relatorios():
+    render_formatador_relatorios()
 
 
 # ============================================================
@@ -304,7 +323,36 @@ st.divider()
 
 
 # ============================================================
-# 6.2 — CALCULADORAS
+# 6.2 — WORD TOOLS
+# ============================================================
+
+st.markdown(
+    """
+    <div class="secao-ferramentas">
+        <h2>📄 Word Tools</h2>
+        <p>
+            Ferramentas para formatação e padronização de documentos Word.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+colunas_word = st.columns(4)
+with colunas_word[0]:
+    if st.button(
+        "📄 Formatador de Relatórios",
+        key="wordtools_botao_formatador_relatorios",
+        use_container_width=True,
+    ):
+        abrir_formatador_relatorios()
+
+
+st.divider()
+
+
+# ============================================================
+# 6.3 — CALCULADORAS
 # ============================================================
 
 st.markdown(
