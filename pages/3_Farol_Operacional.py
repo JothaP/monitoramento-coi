@@ -1003,6 +1003,72 @@ def chave_evento(row):
     return "SEM_PROTOCOLO:" + slug_hash(*[row.get(c, "") for c in campos])
 
 
+
+def consolidar_arquivos_importacao(arquivos, tipo):
+    """Normaliza vários uploads antes de qualquer escrita no Sheets.
+
+    O.S.: a última ocorrência do protocolo prevalece, como no upsert existente.
+    Eventos: linhas repetidas são mescladas sem apagar campos já preenchidos.
+    Se um arquivo falhar, interrompe o lote inteiro (nenhuma escrita parcial).
+    """
+    if tipo not in {"PONTOS", "EVENTOS"}:
+        raise ValueError("Tipo de importação desconhecido.")
+    if not arquivos:
+        raise ValueError("Selecione pelo menos um arquivo.")
+
+    tabelas, detalhes = [], []
+    for arquivo in arquivos:
+        try:
+            original = ler_planilha_upload(arquivo)
+            if original.empty:
+                raise ValueError("não contém registros")
+            if tipo == "PONTOS":
+                formato = identificar_formato_pontos(original)
+                normalizada = preparar_pontos(original)
+            else:
+                formato = "Eventos"
+                normalizada = preparar_eventos(original)
+            if normalizada.empty:
+                raise ValueError("não contém registros aproveitáveis após a padronização")
+            tabelas.append(normalizada)
+            detalhes.append({
+                "Arquivo": arquivo.name,
+                "Formato": formato,
+                "Linhas lidas": len(original),
+                "Registros válidos": len(normalizada),
+            })
+        except Exception as erro:
+            raise ValueError(f"Arquivo '{arquivo.name}': {erro}. Nenhum arquivo deste lote foi importado.") from erro
+
+    combinado = pd.concat(tabelas, ignore_index=True)
+    total_linhas = len(combinado)
+    if tipo == "PONTOS":
+        # chave_ponto é a mesma chave usada pelo upsert PONTOS.
+        chaves = combinado.apply(chave_ponto, axis=1)
+        repetidos = int(chaves.duplicated(keep="last").sum())
+        combinado = combinado.loc[~chaves.duplicated(keep="last")].reset_index(drop=True)
+    else:
+        # A política de atualização dos eventos já existentes é preservar o
+        # campo anterior quando o novo vier vazio. Reproduz essa regra entre
+        # arquivos do próprio lote, mantendo a ordem escolhida no upload.
+        unicos = {}
+        for _, linha in combinado.iterrows():
+            chave = chave_evento(linha)
+            novo = linha.to_dict()
+            if chave in unicos:
+                anterior = unicos[chave]
+                unicos[chave] = {
+                    campo: novo[campo] if str(novo[campo]).strip() else anterior.get(campo, "")
+                    for campo in CABECALHO_EVENTOS
+                }
+            else:
+                unicos[chave] = novo
+        combinado = pd.DataFrame(list(unicos.values()), columns=CABECALHO_EVENTOS)
+        repetidos = total_linhas - len(combinado)
+
+    return combinado, pd.DataFrame(detalhes), total_linhas, repetidos
+
+
 def upsert_pontos(df_novo):
     exigir_edicao_farol()
     atual = carregar_aba(NOME_ABA_PONTOS, CABECALHO_PONTOS)
@@ -2602,51 +2668,86 @@ def modal_importacao():
 
     c1, c2 = st.columns(2)
     with c1:
-        arq_os = st.file_uploader("Base diária de O.S.", type=["xlsx", "xls", "csv"], key="upload_os")
-        if arq_os is not None:
+        arquivos_os = st.file_uploader(
+            "Bases diárias de O.S. (um ou vários arquivos)",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key="upload_os",
+            help="Permite misturar arquivos Power BI e bases alternativas. Todos são consolidados antes da importação.",
+        )
+        if arquivos_os:
             try:
-                previa = ler_planilha_upload(arq_os)
-                formato_os = identificar_formato_pontos(previa)
-                st.caption(f"Formato reconhecido: {formato_os}")
-                st.write(f"**{len(previa):,}** linhas encontradas")
-                # Mostra a estrutura normalizada antes de gravar, para o analista
-                # conferir protocolo, data, serviço e coordenadas da nova origem.
-                if formato_os == "Atividades (base alternativa)":
-                    previa_normalizada = preparar_pontos(previa)
-                    st.dataframe(previa_normalizada.head(10).fillna(""),
-                                 width="stretch", hide_index=True)
-                    sem_geo = int(previa_normalizada[["Latitude", "Longitude"]].isna().any(axis=1).sum())
-                    if sem_geo:
-                        st.warning(f"{sem_geo} O.S. sem coordenadas válidas serão guardadas, "
-                                   "mas não serão exibidas no mapa.")
-                else:
-                    st.dataframe(previa.head(10), width="stretch", hide_index=True)
+                preparados, detalhes, linhas, duplicados = consolidar_arquivos_importacao(
+                    arquivos_os, "PONTOS"
+                )
+                st.caption(f"{len(arquivos_os)} arquivo(s) selecionado(s)")
+                st.dataframe(detalhes, width="stretch", hide_index=True)
+                st.write(f"**{linhas:,}** registros lidos · **{len(preparados):,}** O.S. únicas")
+                if duplicados:
+                    st.warning(
+                        f"{duplicados:,} registro(s) repetido(s) no lote. "
+                        "Para o mesmo protocolo, prevalece a última ocorrência na ordem dos arquivos enviados."
+                    )
+                st.dataframe(preparados.head(10).fillna(""), width="stretch", hide_index=True)
+                sem_geo = int(preparados[["Latitude", "Longitude"]].isna().any(axis=1).sum())
+                if sem_geo:
+                    st.warning(
+                        f"{sem_geo} O.S. sem coordenadas válidas serão armazenadas, "
+                        "mas não aparecerão no mapa."
+                    )
+                st.caption(
+                    "A prévia já reúne todos os arquivos. A importação gravará uma única vez "
+                    "na aba PONTOS, respeitando as regras do histórico diário."
+                )
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
-                    preparados = preparar_pontos(previa)
+                    # Valida o lote completo ANTES de executar qualquer escrita.
                     if ler_controle_historico_v2().get("ativo") == "SIM":
                         preparados = validar_importacao_diaria_v2(preparados)
                     inseridas, total = upsert_pontos(preparados)
                     registrar_atualizacao_base("PONTOS")
-                    st.success(f"Importação concluída: {inseridas:,} linhas processadas. PONTOS agora possui {total:,} registros.")
+                    st.success(
+                        f"Importação concluída: {inseridas:,} O.S. únicas processadas "
+                        f"de {len(arquivos_os)} arquivo(s). PONTOS contém {total:,} registros."
+                    )
                     st.rerun()
-            except Exception as e:
-                st.error(f"Erro na base de O.S.: {e}")
+            except Exception as erro:
+                st.error(f"Erro no lote de O.S.: {erro}")
 
     with c2:
-        arq_eventos = st.file_uploader("Base de eventos", type=["xlsx", "xls", "csv"], key="upload_eventos")
-        if arq_eventos is not None:
+        arquivos_eventos = st.file_uploader(
+            "Bases de eventos (um ou vários arquivos)",
+            type=["xlsx", "xls", "csv"],
+            accept_multiple_files=True,
+            key="upload_eventos",
+        )
+        if arquivos_eventos:
             try:
-                previa_e = ler_planilha_upload(arq_eventos)
-                st.write(f"**{len(previa_e):,}** linhas encontradas")
-                st.dataframe(previa_e.head(10), width="stretch", hide_index=True)
+                preparados_e, detalhes_e, linhas_e, duplicados_e = consolidar_arquivos_importacao(
+                    arquivos_eventos, "EVENTOS"
+                )
+                st.caption(f"{len(arquivos_eventos)} arquivo(s) selecionado(s)")
+                st.dataframe(detalhes_e, width="stretch", hide_index=True)
+                st.write(
+                    f"**{linhas_e:,}** registros lidos · "
+                    f"**{len(preparados_e):,}** eventos únicos"
+                )
+                if duplicados_e:
+                    st.info(
+                        f"{duplicados_e:,} registro(s) repetido(s) foram mesclados "
+                        "pelo protocolo/chave do evento, preservando campos preenchidos."
+                    )
+                st.dataframe(preparados_e.head(10).fillna(""), width="stretch", hide_index=True)
+                st.caption("A importação consolidada será gravada uma única vez na aba EVENTOS.")
                 if st.button("Importar eventos para EVENTOS", type="primary", key="btn_importar_eventos"):
-                    preparados_e = preparar_eventos(previa_e)
                     processados, total = upsert_eventos(preparados_e)
                     registrar_atualizacao_base("EVENTOS")
-                    st.success(f"Importação concluída: {processados:,} linhas processadas. EVENTOS agora possui {total:,} registros.")
+                    st.success(
+                        f"Importação concluída: {processados:,} evento(s) único(s) "
+                        f"de {len(arquivos_eventos)} arquivo(s). EVENTOS contém {total:,} registros."
+                    )
                     st.rerun()
-            except Exception as e:
-                st.error(f"Erro na base de eventos: {e}")
+            except Exception as erro:
+                st.error(f"Erro no lote de eventos: {erro}")
 
     st.divider()
     st.subheader("Resumo do armazenamento")
