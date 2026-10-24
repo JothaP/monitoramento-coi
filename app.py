@@ -176,7 +176,7 @@ if not st.session_state.get(
 
 
             # =================================================
-            # OPERADOR
+            # CONSULTA (identificador interno: operador)
             # =================================================
 
             elif (
@@ -192,7 +192,7 @@ if not st.session_state.get(
                 if sucesso:
 
                     st.success(
-                        "Login de Operador realizado com sucesso!"
+                        "Login de Consulta realizado com sucesso!"
                     )
 
                     st.rerun()
@@ -327,10 +327,12 @@ usuario_atual = st.session_state.get(
     "",
 )
 
-perfil_atual = st.session_state.get(
-    "perfil",
-    "",
-).upper()
+# O identificador interno continua sendo "operador" para preservar o
+# auth.py, as permissões existentes e a senha SENHA_OPERADOR no Secrets.
+# Somente a identificação apresentada ao usuário passa a ser "CONSULTA".
+perfil_interno = str(st.session_state.get("perfil", "")).strip().lower()
+perfil_consulta = perfil_interno == "operador"
+perfil_atual = "CONSULTA" if perfil_consulta else perfil_interno.upper()
 
 
 st.write(
@@ -364,6 +366,10 @@ ambiente_teste = tem_acesso_modulo("teste")
 # ============================================================
 # MÓDULOS
 # ============================================================
+# Perfil CONSULTA: todos os cartões ficam visíveis em suas posições;
+# apenas os botões autorizados permanecem habilitados.
+# Outros perfis mantêm sua exibição atual.
+
 
 # ------------------------------------------------------------
 # PRIMEIRA LINHA
@@ -378,7 +384,7 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    if modulo_1:
+    if modulo_1 or perfil_consulta:
 
         st.markdown("#### 💧 Módulo 1")
         st.markdown("**Baixa Pressão**")
@@ -389,6 +395,7 @@ with col1:
             type="primary",
             use_container_width=True,
             key="acessar_baixa_pressao",
+            disabled=not modulo_1,
         ):
 
             st.switch_page(
@@ -402,7 +409,7 @@ with col1:
 
 with col2:
 
-    if modulo_2:
+    if modulo_2 or perfil_consulta:
 
         st.markdown("#### 🗺️ Módulo 2")
         st.markdown("**Mapeamento de Pressão**")
@@ -413,6 +420,7 @@ with col2:
             type="primary",
             use_container_width=True,
             key="acessar_mapeamento_pressao",
+            disabled=not modulo_2,
         ):
 
             st.switch_page(
@@ -426,7 +434,7 @@ with col2:
 
 with col3:
 
-    if modulo_3:
+    if modulo_3 or perfil_consulta:
 
         st.markdown("#### 🚰 Módulo 3")
         st.markdown("**Farol Operacional**")
@@ -439,6 +447,7 @@ with col3:
             type="primary",
             use_container_width=True,
             key="acessar_farol_operacional",
+            disabled=not modulo_3,
         ):
 
             st.switch_page(
@@ -461,7 +470,7 @@ col4, col5, col6 = st.columns(3)
 
 with col4:
 
-    if modulo_4:
+    if modulo_4 or perfil_consulta:
 
         st.markdown("#### 🛠️ Módulo 4")
         st.markdown("**Ferramentas Operacionais**")
@@ -472,6 +481,7 @@ with col4:
             type="primary",
             use_container_width=True,
             key="acessar_ferramentas_operacionais",
+            disabled=not modulo_4,
         ):
 
             st.switch_page(
@@ -485,7 +495,7 @@ with col4:
 
 with col5:
 
-    if modulo_5:
+    if modulo_5 or perfil_consulta:
 
         st.markdown("#### 📋 Módulo 5")
         st.markdown("**Cadastros e Consultas COI**")
@@ -496,6 +506,7 @@ with col5:
             type="primary",
             use_container_width=True,
             key="acessar_cadastros_consultas",
+            disabled=not modulo_5,
         ):
 
             st.switch_page(
@@ -509,7 +520,7 @@ with col5:
 
 with col6:
 
-    if modulo_6:
+    if modulo_6 or perfil_consulta:
 
         st.markdown("#### 🔧 Módulo 6")
         st.markdown("**Ferramentas Adicionais**")
@@ -520,6 +531,7 @@ with col6:
             type="primary",
             use_container_width=True,
             key="acessar_ferramentas_adicionais",
+            disabled=not modulo_6,
         ):
 
             st.switch_page(
@@ -540,7 +552,7 @@ col7, col8, col9 = st.columns(3)
 # MÓDULO 7 — POSIÇÃO 7 (ESQUERDA)
 # ============================================================
 
-if modulo_7:
+if modulo_7 or perfil_consulta:
     with col7:
         st.markdown("#### 📊 Módulo 7")
         st.markdown("**Relatórios Integrados**")
@@ -550,6 +562,7 @@ if modulo_7:
             type="primary",
             use_container_width=True,
             key="acessar_relatorios_integrados",
+            disabled=not modulo_7,
         ):
             st.switch_page("pages/7_Relatorios_Integrados.py")
 
@@ -575,8 +588,8 @@ with col8:
 # AMBIENTE DE TESTE — POSIÇÃO 9 (DIREITA)
 # ============================================================
 
-# Mantém a permissão de acesso já definida em auth.py.
-if ambiente_teste:
+# Mantém a permissão de acesso de auth.py e exibe o cartão bloqueado para CONSULTA.
+if ambiente_teste or perfil_consulta:
     with col9:
         st.markdown("#### 🧪 Ambiente de Teste")
         st.markdown("**Ferramentas em desenvolvimento**")
@@ -586,6 +599,7 @@ if ambiente_teste:
             type="primary",
             use_container_width=True,
             key="acessar_ambiente_teste",
+            disabled=not ambiente_teste,
         ):
             st.switch_page("pages/Ambiente_de_Teste.py")
 
