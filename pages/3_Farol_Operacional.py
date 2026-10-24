@@ -112,8 +112,9 @@ DIRETORIO_DADOS = os.path.join(RAIZ_PROJETO, "dados")
 ARQUIVO_POCOS_CSV = os.path.join(DIRETORIO_DADOS, "pocos.csv")
 ARQUIVO_LOGGERS_CSV = os.path.join(DIRETORIO_DADOS, "loggers.csv")
 ARQUIVO_KMZ_PADRAO = os.path.join(RAIZ_PROJETO, "TERESINA.kmz")  # Compatibilidade com instalação anterior
-RAIO_OPERACIONAL_PADRAO = 500
-RAIO_CONCENTRACAO_PADRAO = 500
+RAIO_OPERACIONAL_PADRAO = 750
+RAIO_CONCENTRACAO_PADRAO = 750
+MINIMO_OS_CONCENTRACAO_PADRAO = 3
 
 CABECALHO_POCOS = [
     "ID_POCO",
@@ -788,6 +789,63 @@ def ativar_historico_v2():
 # LEITURA DE ARQUIVOS
 # ============================================================
 
+def _ler_xlsx_exportacao_simplificada(dados):
+    """Compatibilidade restrita com exportações OOXML sem a pasta xl/.
+
+    Algumas exportações de atividades geram workbook.xml e sheet1.xml na
+    raiz do ZIP. O pandas/openpyxl não reconhece esse pacote como XLSX
+    convencional. Lê as células e preserva textos, sem modificar o fluxo
+    de leitura das planilhas normais do Power BI.
+    """
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(dados)) as pacote:
+        nomes = set(pacote.namelist())
+        if "workbook.xml" not in nomes or "sheet1.xml" not in nomes:
+            raise ValueError("Este arquivo não corresponde à exportação XLSX alternativa conhecida.")
+
+        compartilhados = []
+        if "sharedStrings.xml" in nomes:
+            raiz_strings = ET.fromstring(pacote.read("sharedStrings.xml"))
+            compartilhados = ["".join(n.text or "" for n in si.iter(namespace + "t"))
+                            for si in raiz_strings.findall(namespace + "si")]
+        cabecalho = None
+        registros = []
+        with pacote.open("sheet1.xml") as arquivo_xml:
+            for _evento, elemento in ET.iterparse(arquivo_xml, events=("end",)):
+                if elemento.tag != namespace + "row":
+                    continue
+                valores = {}
+                for celula in elemento.findall(namespace + "c"):
+                    referencia = celula.get("r", "")
+                    letras = re.match(r"[A-Z]+", referencia)
+                    if letras is None:
+                        continue
+                    coluna = 0
+                    for letra in letras.group():
+                        coluna = coluna * 26 + ord(letra) - ord("A") + 1
+                    indice = coluna - 1
+                    tipo = celula.get("t")
+                    if tipo == "inlineStr":
+                        valor = "".join(n.text or "" for n in celula.iter(namespace + "t"))
+                    else:
+                        campo_valor = celula.find(namespace + "v")
+                        valor = campo_valor.text if campo_valor is not None and campo_valor.text else ""
+                        if tipo == "s" and valor:
+                            valor = compartilhados[int(valor)]
+                    valores[indice] = valor
+                if cabecalho is None:
+                    if valores:
+                        tamanho = max(valores) + 1
+                        cabecalho = [str(valores.get(i, "")).strip() or f"Coluna_{i + 1}"
+                                     for i in range(tamanho)]
+                elif valores and any(str(v).strip() for v in valores.values()):
+                    registros.append([str(valores.get(i, "")) for i in range(len(cabecalho))])
+                elemento.clear()
+        if not cabecalho:
+            raise ValueError("A exportação não contém cabeçalho de colunas.")
+        return pd.DataFrame(registros, columns=cabecalho)
+
+
 def ler_planilha_upload(upload):
     if upload is None:
         return pd.DataFrame()
@@ -800,7 +858,16 @@ def ler_planilha_upload(upload):
             except Exception:
                 pass
         raise ValueError("Não foi possível ler o CSV.")
-    return pd.read_excel(io.BytesIO(dados), dtype=str)
+    try:
+        return pd.read_excel(io.BytesIO(dados), dtype=str)
+    except Exception as erro:
+        # Alguns relatórios XLSX exportados pelo sistema de atividades usam
+        # layout OOXML simplificado; não interferir nos demais formatos.
+        if nome.endswith(".xlsx") and zipfile.is_zipfile(io.BytesIO(dados)):
+            with zipfile.ZipFile(io.BytesIO(dados)) as pacote:
+                if "workbook.xml" in pacote.namelist() and "sheet1.xml" in pacote.namelist():
+                    return _ler_xlsx_exportacao_simplificada(dados)
+        raise ValueError(f"Não foi possível ler o arquivo Excel: {erro}") from erro
 
 
 def localizar_coluna(df, candidatos, obrigatoria=False):
@@ -846,8 +913,61 @@ def mapear_colunas(df, destino):
     return resultado
 
 
+# Correspondência EXATA da exportação alternativa. O fluxo legado Power BI
+# permanece inalterado; nomes parecidos (ex.: Nome do Solicitante) nunca são
+# considerados protocolos na importação da base de atividades.
+MAPA_COLUNAS_ATIVIDADES = {
+    "Nº da O.S": "Cód. Protocolo Origem",
+    "Matrícula": "Matrícula",
+    "Cidade": "Cidade",
+    "Bairro": "Bairro",
+    "Latitude": "Latitude",
+    "Longitude": "Longitude",
+    "Status OS": "Status da Atividade",
+    "Dt. Emissão": "Início do SLA",
+    "Serviço Executado": "Código/Descrição",
+}
+
+
+def identificar_formato_pontos(df):
+    """Reconhece a origem pelas colunas específicas, sem aproximação arriscada."""
+    cabecalhos = {normalizar_cabecalho(c) for c in df.columns}
+    marcadores = {normalizar_cabecalho(c) for c in (
+        "Cód. Protocolo Origem", "Início do SLA", "Código/Descrição")}
+    reconhecidos = marcadores & cabecalhos
+    if len(reconhecidos) >= 2:
+        obrigatorios = {normalizar_cabecalho(c) for c in MAPA_COLUNAS_ATIVIDADES.values()}
+        ausentes = [nome for nome in MAPA_COLUNAS_ATIVIDADES.values()
+                    if normalizar_cabecalho(nome) not in cabecalhos]
+        if ausentes:
+            raise ValueError(
+                "Base alternativa de atividades identificada, mas faltam colunas: "
+                + ", ".join(ausentes)
+                + ". Nenhuma O.S. foi importada."
+            )
+        return "Atividades (base alternativa)"
+    return "Power BI (formato original)"
+
+
 def preparar_pontos(df):
-    out = mapear_colunas(df, CABECALHO_PONTOS)
+    formato = identificar_formato_pontos(df)
+    if formato == "Atividades (base alternativa)":
+        origens = {normalizar_cabecalho(c): c for c in df.columns}
+        out = pd.DataFrame(index=df.index)
+        for destino, esperado in MAPA_COLUNAS_ATIVIDADES.items():
+            origem = origens[normalizar_cabecalho(esperado)]
+            out[destino] = df[origem].map(limpar_valor)
+        # A chave estável é o protocolo de origem. Não criar chaves por nome
+        # do solicitante ou por endereço; isso impediria deduplicação segura.
+        sem_protocolo = int(out["Nº da O.S"].eq("").sum())
+        if sem_protocolo:
+            raise ValueError(
+                f"Base alternativa: {sem_protocolo} O.S. sem Cód. Protocolo Origem. "
+                "Importação interrompida para evitar duplicações."
+            )
+    else:
+        # Caminho Power BI original, preservado integralmente.
+        out = mapear_colunas(df, CABECALHO_PONTOS)
     for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
         out[coluna] = out[coluna].map(lambda valor: normalizar_coordenada(valor, tipo))
     # Preserva as O.S. sem geolocalização para consulta e diagnóstico.
@@ -1281,7 +1401,7 @@ def identificar_bairro_por_ponto(lat, lon, bairros):
 # ============================================================
 
 @st.cache_data(ttl=180, show_spinner=False, max_entries=12)
-def criar_concentracoes(df_pontos, raio_m=500, minimo_os=2):
+def criar_concentracoes(df_pontos, raio_m=RAIO_CONCENTRACAO_PADRAO, minimo_os=MINIMO_OS_CONCENTRACAO_PADRAO):
     df = df_pontos.copy()
     df["_lat"] = df["Latitude"].map(parse_float)
     df["_lon"] = df["Longitude"].map(parse_float)
@@ -1410,7 +1530,7 @@ def _candidatos_no_raio(grade, lat, lon, raio_m, tamanho_celula=0.01):
 
 
 @st.cache_data(ttl=180, show_spinner=False, max_entries=12)
-def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=500):
+def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=RAIO_OPERACIONAL_PADRAO):
     registros = []
     grade_pocos, pocos = _indice_espacial_ativos(df_pocos)
     grade_loggers, loggers = _indice_espacial_ativos(df_loggers)
@@ -1702,7 +1822,7 @@ def adicionar_limites_bairros(mapa, bairros):
     fg.add_to(mapa)
 
 
-def criar_mapa_panorama_v2(concentracoes, raio_m=500, bairros=None, eventos_mapeados=None):
+def criar_mapa_panorama_v2(concentracoes, raio_m=RAIO_CONCENTRACAO_PADRAO, bairros=None, eventos_mapeados=None):
     """Panorama leve: somente mapa-base e concentrações clicáveis.
 
     A ausência das camadas operacionais no panorama é intencional.
@@ -2486,8 +2606,21 @@ def modal_importacao():
         if arq_os is not None:
             try:
                 previa = ler_planilha_upload(arq_os)
+                formato_os = identificar_formato_pontos(previa)
+                st.caption(f"Formato reconhecido: {formato_os}")
                 st.write(f"**{len(previa):,}** linhas encontradas")
-                st.dataframe(previa.head(10), width="stretch", hide_index=True)
+                # Mostra a estrutura normalizada antes de gravar, para o analista
+                # conferir protocolo, data, serviço e coordenadas da nova origem.
+                if formato_os == "Atividades (base alternativa)":
+                    previa_normalizada = preparar_pontos(previa)
+                    st.dataframe(previa_normalizada.head(10).fillna(""),
+                                 width="stretch", hide_index=True)
+                    sem_geo = int(previa_normalizada[["Latitude", "Longitude"]].isna().any(axis=1).sum())
+                    if sem_geo:
+                        st.warning(f"{sem_geo} O.S. sem coordenadas válidas serão guardadas, "
+                                   "mas não serão exibidas no mapa.")
+                else:
+                    st.dataframe(previa.head(10), width="stretch", hide_index=True)
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     preparados = preparar_pontos(previa)
                     if ler_controle_historico_v2().get("ativo") == "SIM":
@@ -2839,7 +2972,7 @@ def nome_arquivo_relatorio(cidades=None, extensao="pdf"):
 
 def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=None,
                                   cidades=None, bairros=None, pocos=None, loggers=None,
-                                  panoramico=False, pontos=None, raio_ativos=500):
+                                  panoramico=False, pontos=None, raio_ativos=RAIO_OPERACIONAL_PADRAO):
     """Panorama completo com O.S. e infraestrutura; fichas com equipamentos próximos."""
     mapa = folium.Map(location=[-5.09, -42.80], zoom_start=13, tiles="OpenStreetMap",
                       control_scale=True, zoom_control=False)
@@ -3315,17 +3448,14 @@ with st.sidebar:
         value=RAIO_OPERACIONAL_PADRAO, step=50,
         help="Distância máxima entre a concentração de O.S. e um Poço/Ativo ou Logger.",
     )
-    raio_concentracao = st.number_input(
-        "Raio da concentração (m)", min_value=50, max_value=5000,
-        value=RAIO_CONCENTRACAO_PADRAO, step=50,
-        help="Distância usada para agrupar O.S. espacialmente.",
+    # Parâmetros estruturais fixos: alterar o raio operacional não modifica
+    # a formação das concentrações nem o mínimo necessário de O.S.
+    raio_concentracao = RAIO_CONCENTRACAO_PADRAO
+    minimo_os = MINIMO_OS_CONCENTRACAO_PADRAO
+    st.caption(
+        f"Parâmetros fixos: concentração de {raio_concentracao} m e "
+        f"mínimo de {minimo_os} O.S. por concentração."
     )
-    minimo_os = st.number_input(
-    "Mínimo de O.S. por concentração",
-    min_value=2,
-    value=3,
-    step=1,
-)
 
     # Desativado por padrão: o navegador move o mapa sem enviar centro/zoom
     # ao Python a cada arrasto. Ative apenas para registrar o enquadramento
