@@ -2515,10 +2515,42 @@ def texto_acompanhamento_relatorio(concentracao):
 
 
 def evidencias_graficas_pdf(ativos, indice_imagens, fonte="Helvetica", largura=26.6*cm):
-    """Cada logger no raio ganha seu espaço no PDF, mesmo sem upload."""
-    loggers = filtrar_loggers(ativos)
-    if not loggers:
+    """Inclui no PDF somente loggers próximos com gráfico válido no dia.
+
+    Loggers sem evidência não geram seção, espaço reservado nem página vazia.
+    A identificação dos demais equipamentos nos mapas/listagens é preservada.
+    """
+    # Verifica a evidência antes de criar o título e a quebra de página.
+    # Um cadastro sem imagem, ou uma captura ilegível, não deve criar
+    # blocos vazios no relatório.
+    evidencias = []
+    for logger in filtrar_loggers(ativos):
+        registro = (indice_imagens or {}).get(chave_logger(logger))
+        if not registro or not registro.get("imagem"):
+            continue
+        foto = registro["imagem"]
+        try:
+            from PIL import Image as ImagemPIL
+            with ImagemPIL.open(io.BytesIO(foto)) as imagem_pil:
+                iw, ih = imagem_pil.size
+                imagem_pil.verify()
+            if iw <= 0 or ih <= 0:
+                continue
+            img_w = min(largura, 25.4*cm)
+            img_h = img_w * ih / iw
+            if img_h > 9.8*cm:
+                fator = 9.8*cm / img_h
+                img_w *= fator
+                img_h *= fator
+            evidencia = Image(io.BytesIO(foto), width=img_w, height=img_h)
+            evidencias.append((logger, registro, evidencia))
+        except Exception:
+            # Imagens inválidas não criam espaços nem títulos no PDF.
+            continue
+
+    if not evidencias:
         return []
+
     estilo = ParagraphStyle(
         "LoggerGraficoCorpo", fontName=fonte, fontSize=9, leading=13,
         textColor=colors.HexColor("#273449"), spaceAfter=5,
@@ -2528,48 +2560,20 @@ def evidencias_graficas_pdf(ativos, indice_imagens, fonte="Helvetica", largura=2
         spaceAfter=10, textColor=colors.HexColor("#17365D"),
     )
     conteudo = [PageBreak(), Paragraph("Evidências gráficas dos loggers próximos", subtitulo)]
-    for i, logger in enumerate(loggers, 1):
-        chave = chave_logger(logger)
-        existente = (indice_imagens or {}).get(chave)
+    for i, (logger, registro, evidencia) in enumerate(evidencias, 1):
         identificacao = rotulo_logger(logger)
         distancia = str(logger.get("Distância", "") or "Não informada")
         elementos = [
             Paragraph(xml_escape(f"Logger {i} — {identificacao} | Distância: {distancia}"), estilo),
             Spacer(1, 0.12*cm),
+            evidencia,
+            Spacer(1, 0.1*cm),
+            Paragraph(
+                xml_escape("Gráfico disponibilizado em " + str(registro.get("atualizado_em", ""))),
+                estilo,
+            ),
+            Spacer(1, 0.3*cm),
         ]
-        if existente and existente.get("imagem"):
-            foto = existente["imagem"]
-            try:
-                # Mantém proporção do gráfico para não distorcer eixos/legendas.
-                from PIL import Image as ImagemPIL
-                with ImagemPIL.open(io.BytesIO(foto)) as teste_img:
-                    iw, ih = teste_img.size
-                img_w = min(largura, 25.4*cm)
-                img_h = img_w * ih / max(iw, 1)
-                if img_h > 9.8*cm:
-                    fator = 9.8*cm / img_h
-                    img_w *= fator
-                    img_h *= fator
-                elementos.append(Image(io.BytesIO(foto), width=img_w, height=img_h))
-                elementos.append(Spacer(1, 0.1*cm))
-                elementos.append(Paragraph(
-                    xml_escape("Gráfico disponibilizado em " + str(existente.get("atualizado_em", ""))), estilo
-                ))
-            except Exception:
-                elementos.append(Paragraph("Imagem indisponível ou incompatível; verifique o arquivo.", estilo))
-        else:
-            espaco = Table(
-                [[Paragraph("Gráfico de pressão não enviado para este logger.", estilo)]],
-                colWidths=[min(largura, 25.4*cm)], rowHeights=[5.4*cm],
-            )
-            espaco.setStyle(TableStyle([
-                ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F4F7FB")),
-                ("BOX", (0,0), (-1,-1), .7, colors.HexColor("#B8C8D8")),
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                ("ALIGN", (0,0), (-1,-1), "CENTER"),
-            ]))
-            elementos.append(espaco)
-        elementos.append(Spacer(1, 0.3*cm))
         conteudo.append(KeepTogether(elementos))
     conteudo.append(Paragraph(
         "Nota: gráficos anexados manualmente; a proximidade geográfica não comprova vínculo hidráulico ou causalidade.",
@@ -2624,7 +2628,7 @@ def interface_graficos_logger(ativos, codigo):
                 st.success(f"Gráfico disponível — atualizado em {atual.get('atualizado_em', '')}")
                 st.image(atual["imagem"], width=550)
             else:
-                st.info("Gráfico ainda não adicionado hoje. O PDF reservará o espaço deste logger.")
+                st.info("Gráfico ainda não adicionado hoje. Este logger não aparecerá na seção de evidências do PDF.")
 
             # Um container garante que o chat_input seja exibido aqui, junto ao
             # respectivo logger, em vez de ficar fixo no rodapé do aplicativo.
