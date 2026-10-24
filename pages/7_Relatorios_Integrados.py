@@ -732,7 +732,7 @@ def carregar_contexto_farol():
                       "eventos_acomp": pd.DataFrame(), "movimentacoes": pd.DataFrame()})
     id_acomp = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
     if id_acomp and id_acomp != ID_FAROL:
-        for aba in ("vinculos_farol_producao", "eventos", "movimentacoes"):
+        for aba in ("vinculos_farol_producao", "eventos"):
             destino = "eventos_acomp" if aba == "eventos" else aba
             contexto[destino] = opcional(id_acomp, aba)
     return contexto
@@ -1346,11 +1346,6 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 acompanhamento.get("loggers",""),acompanhamento.get("retorno_operacao","")]],
                 [6.0*cm,6.0*cm,6.0*cm,8.0*cm]),
                 P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
-            if movimentacoes:
-                historia.append(P("Histórico de movimentações",secao))
-                historia.append(tabela(["Data / Hora","Status","Descrição"],[
-                    [m.get("data_hora",""),m.get("status_momento",""),m.get("descricao","")]
-                    for m in movimentacoes],[4.5*cm,4.5*cm,17.0*cm]))
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
         if indice<len(resumo)-1:
