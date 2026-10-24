@@ -11,6 +11,7 @@ import threading
 import tempfile
 import time as tempo_execucao
 import shutil
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 from html import escape as html_escape
@@ -42,7 +43,16 @@ from google.oauth2.service_account import Credentials
 from streamlit_folium import st_folium
 from branca.element import Element
 
+# Importações de módulos auxiliares na raiz do repositório Streamlit.
+_RAIZ_IMPORT = str(Path(__file__).resolve().parent.parent)
+if _RAIZ_IMPORT not in sys.path:
+    sys.path.insert(0, _RAIZ_IMPORT)
+
 from auth import verificar_autenticacao, tem_acesso_modulo
+from farol_graficos_temporarios import (
+    data_hoje as dia_graficos, indice_do_dia, salvar_grafico,
+    chave_logger, rotulo_logger, filtrar_loggers,
+)
 from integracao_acompanhamento_producao import (chave_concentracao, localizar_vinculo, listar_vinculos, dados_acompanhamento, historico_evento, texto_pdf)
 from acompanhamento_operacional_farol import popup_acompanhamento_farol
 
@@ -1613,6 +1623,7 @@ def pontos_proximos_concentracoes(concentracoes, df_pocos, df_loggers, raio=RAIO
                     "Concentração": c["ID_CONCENTRACAO"],
                     "Tipo": tipo,
                     "Identificação": p.get("IDENTIFICACAO_ATIVO", ""),
+                    "ID Logger": p.get("ID_LOGGER", "") if tipo == "Logger" else "",
                     "Nome": p.get(nome_coluna, ""),
                     "Município": p.get("MUNICIPIO", ""),
                     "Distância (m)": round(d, 1),
@@ -2491,7 +2502,148 @@ def texto_acompanhamento_relatorio(concentracao):
     return texto_pdf(vinculo, dados, historico_evento(vinculo["evento_id"]))
 
 
-def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_mapa=None):
+def evidencias_graficas_pdf(ativos, indice_imagens, fonte="Helvetica", largura=26.6*cm):
+    """Inclui no PDF somente loggers próximos com gráfico válido no dia.
+
+    Loggers sem evidência não geram seção, espaço reservado nem página vazia.
+    A identificação dos demais equipamentos nos mapas/listagens é preservada.
+    """
+    # Verifica a evidência antes de criar o título e a quebra de página.
+    # Um cadastro sem imagem, ou uma captura ilegível, não deve criar
+    # blocos vazios no relatório.
+    evidencias = []
+    for logger in filtrar_loggers(ativos):
+        registro = (indice_imagens or {}).get(chave_logger(logger))
+        if not registro or not registro.get("imagem"):
+            continue
+        foto = registro["imagem"]
+        try:
+            from PIL import Image as ImagemPIL
+            with ImagemPIL.open(io.BytesIO(foto)) as imagem_pil:
+                iw, ih = imagem_pil.size
+                imagem_pil.verify()
+            if iw <= 0 or ih <= 0:
+                continue
+            img_w = min(largura, 25.4*cm)
+            img_h = img_w * ih / iw
+            if img_h > 9.8*cm:
+                fator = 9.8*cm / img_h
+                img_w *= fator
+                img_h *= fator
+            evidencia = Image(io.BytesIO(foto), width=img_w, height=img_h)
+            evidencias.append((logger, registro, evidencia))
+        except Exception:
+            # Imagens inválidas não criam espaços nem títulos no PDF.
+            continue
+
+    if not evidencias:
+        return []
+
+    estilo = ParagraphStyle(
+        "LoggerGraficoCorpo", fontName=fonte, fontSize=9, leading=13,
+        textColor=colors.HexColor("#273449"), spaceAfter=5,
+    )
+    subtitulo = ParagraphStyle(
+        "LoggerGraficoTitulo", parent=estilo, fontSize=13, leading=17,
+        spaceAfter=10, textColor=colors.HexColor("#17365D"),
+    )
+    conteudo = [PageBreak(), Paragraph("Evidências gráficas dos loggers próximos", subtitulo)]
+    for i, (logger, _registro, evidencia) in enumerate(evidencias, 1):
+        identificacao = rotulo_logger(logger)
+        distancia = str(logger.get("Distância", "") or "Não informada")
+        elementos = [
+            Paragraph(xml_escape(f"Logger {i} — {identificacao} | Distância: {distancia}"), estilo),
+            Spacer(1, 0.12*cm),
+            evidencia,
+            Spacer(1, 0.3*cm),
+        ]
+        conteudo.append(KeepTogether(elementos))
+    return conteudo
+
+
+def interface_graficos_logger(ativos, codigo):
+    """Permite colar prints da área de transferência, um por logger.
+
+    O envio usa st.chat_input (Streamlit >=1.59) para receber Ctrl+V.
+    A imagem é compartilhada por usuários autorizados até a virada do dia
+    na aba FAROL_GRAFICOS_DIA, separada dos dados operacionais de produção.
+    """
+    loggers = filtrar_loggers(ativos)
+    if not loggers:
+        return
+
+    st.markdown("#### 📈 Evidências gráficas dos loggers")
+    st.caption(
+        f"{len(loggers)} logger(s) dentro do raio operacional. "
+        "Gráficos compartilhados entre analistas até 23h59 (horário de Teresina)."
+    )
+    with st.expander("📋 Colar gráficos de pressão dos loggers", expanded=False):
+        st.info(
+            "**Como adicionar um gráfico sem salvar arquivo:** "
+            "na ferramenta de monitoramento, pressione **Win + Shift + S**, "
+            "selecione a área do gráfico, clique no campo do logger abaixo, "
+            "pressione **Ctrl + V** e depois clique na **seta de enviar (➤)**. "
+            "Você também pode usar **Ctrl + C** ao copiar uma imagem."
+        )
+        st.caption(
+            "Apenas imagens PNG ou JPG. Limite de 6 MB por captura. "
+            "Enviar novamente substitui a imagem compartilhada do mesmo logger no dia."
+        )
+        aviso = st.session_state.pop("farol_confirmacao_print", None)
+        if aviso and aviso[0] == codigo:
+            st.success(aviso[1])
+        try:
+            graficos = indice_do_dia(SPREADSHEET_ID, dia_graficos())
+        except Exception as erro:
+            st.error(f"Não foi possível consultar os gráficos compartilhados: {erro}")
+            return
+
+        for logger in loggers:
+            chave = chave_logger(logger)
+            atual = graficos.get(chave)
+            nome = rotulo_logger(logger)
+            st.markdown(f"**Logger {html_escape(nome)}** — {html_escape(str(logger.get('Distância', '')))}")
+            if atual:
+                st.success(f"Gráfico disponível — atualizado em {atual.get('atualizado_em', '')}")
+                st.image(atual["imagem"], width=550)
+            else:
+                st.info("Gráfico ainda não adicionado hoje. Este logger não aparecerá na seção de evidências do PDF.")
+
+            # Um container garante que o chat_input seja exibido aqui, junto ao
+            # respectivo logger, em vez de ficar fixo no rodapé do aplicativo.
+            with st.container():
+                captura = st.chat_input(
+                    placeholder=f"Clique aqui, pressione Ctrl+V e envie o print de {nome}",
+                    accept_file=True,
+                    file_type=["png", "jpg", "jpeg"],
+                    key=f"farol_colar_logger_{codigo}_{chave}",
+                    disabled=not PODE_EDITAR_FAROL,
+                )
+            if captura is not None:
+                arquivos = list(captura.files)
+                if not arquivos:
+                    st.warning("Nenhuma imagem foi colada. Faça a captura e pressione Ctrl+V neste campo.")
+                elif len(arquivos) != 1:
+                    st.warning("Cole somente um gráfico por vez neste logger.")
+                else:
+                    try:
+                        exigir_edicao_farol()
+                        arquivo = arquivos[0]
+                        if arquivo.size > 6 * 1024 * 1024:
+                            raise ValueError("A captura não pode ultrapassar 6 MB.")
+                        resultado = salvar_grafico(SPREADSHEET_ID, logger, arquivo.getvalue())
+                        st.session_state["farol_confirmacao_print"] = (
+                            codigo, f"Gráfico do logger {nome} {resultado} e compartilhado com os analistas."
+                        )
+                        # Recarrega o status e a pré-visualização do gráfico
+                        # guardado no Sheets, não apenas a imagem da sessão.
+                        st.rerun()
+                    except Exception as erro:
+                        st.error(f"Não foi possível adicionar o gráfico de {nome}: {erro}")
+            st.divider()
+
+
+def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_mapa=None, indice_imagens=None):
     """Gera PDF em memória, sem gravar ou alterar informações no Sheets."""
     fonte_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     fonte_negrito = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -2591,6 +2743,7 @@ def gerar_pdf_concentracao(concentracao, os_grupo, ativos, eventos_relacionados,
         historia.append(tabela(cols, [[r.get(c, "") for c in cols] for _, r in eventos_relacionados.iterrows()],
                                 [3.1*cm, 2.5*cm, 3.0*cm, 4.5*cm, 4.2*cm, 4.2*cm, 4.6*cm]))
     historia.extend(secao_pdf_acompanhamento(concentracao, largura=26.6*cm))
+    historia.extend(evidencias_graficas_pdf(ativos, indice_imagens, fonte=fonte))
     historia.append(Spacer(1, 0.3*cm))
     historia.append(p("Nota: a relação de eventos é indicativa, baseada na coincidência de bairros e município; não comprova causalidade.", pequeno))
     doc.build(historia)
@@ -2641,6 +2794,8 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
         colunas_eventos = ["Protocolo", "Status", "Cidade", "Bairros coincidentes", "Início", "Término Real", "Serviço", "Descrição do Serviço"]
         st.dataframe(eventos_relacionados.reindex(columns=colunas_eventos).fillna(""),
                      width="stretch", hide_index=True)
+    # A colagem de prints não altera os dados operacionais do Farol.
+    interface_graficos_logger(ativos, codigo)
     # Captura cartográfica apenas sob demanda; evita Chromium em cada rerun do Streamlit.
     if st.button("📸 Preparar PDF com mapa da concentração", key=f"preparar_pdf_{codigo}"):
         try:
@@ -2648,7 +2803,8 @@ def exibir_relatorio_concentracao(codigo, concentracoes, pontos_cluster, proximi
                 mapa_ficha = mapa_exclusivo_concentracao(concentracao, os_grupo, ativos)
                 imagem_ficha = capturar_mapa_folium(mapa_ficha, largura=800, altura=690)
                 st.session_state[f"farol_pdf_individual_{codigo}"] = gerar_pdf_concentracao(
-                    concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_ficha
+                    concentracao, os_grupo, ativos, eventos_relacionados, raio, imagem_ficha,
+                    indice_imagens=indice_do_dia(SPREADSHEET_ID, dia_graficos()),
                 )
         except Exception as erro:
             st.error(f"Não foi possível gerar o PDF cartográfico: {erro}")
@@ -3227,6 +3383,8 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             Paragraph(f"Concentrações: {len(concentracoes)} · O.S., concentrações e equipamentos operacionais.", pequeno),
         ]))
         historia.append(PageBreak())
+        # Imagens do dia: lidas uma única vez para todo o relatório operacional.
+        indice_graficos = indice_do_dia(SPREADSHEET_ID, dia_graficos())
         for indice, (_, c) in enumerate(concentracoes.iterrows()):
             grupo = (pontos_cluster[pontos_cluster["_grupo"] == c["GRUPO"]]
                      if "_grupo" in pontos_cluster.columns else pd.DataFrame())
@@ -3246,7 +3404,7 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 Spacer(1, 5),
             ]
             # Usar os registros dos eventos associados à concentração, e não somente sua quantidade.
-            _, _, eventos_da_concentracao = dados_relatorio_concentracao(
+            _, ativos_da_concentracao, eventos_da_concentracao = dados_relatorio_concentracao(
                 c, pontos_cluster, proximidades, eventos, bairros
             )
             resumo.extend([
@@ -3358,6 +3516,9 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             # O acompanhamento vem DEPOIS de todo o conteúdo original,
             # preservando o mapa e as O.S. que continuam abaixo dele.
             historia.extend(secao_pdf_acompanhamento(c, largura=26.6*cm))
+            historia.extend(evidencias_graficas_pdf(
+                ativos_da_concentracao, indice_graficos, largura=26.6*cm
+            ))
             if indice < len(concentracoes) - 1:
                 historia.append(PageBreak())
     doc.build(historia)
