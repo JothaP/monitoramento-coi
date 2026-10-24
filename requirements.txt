@@ -19,3 +19,4 @@ shapely
 pyproj
 playwright
 fpdf2
+xlrd>=2.0.1
