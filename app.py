@@ -298,6 +298,27 @@ if modo_escuro_hub:
 
 
 # ============================================================
+# VISUAL DE BOTÕES DESABILITADOS (INCLUSIVE NO MODO ESCURO)
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+        .stButton > button:disabled,
+        .stButton > button:disabled:hover {
+            opacity: 0.45 !important;
+            cursor: not-allowed !important;
+            background-color: #71717a !important;
+            color: #ffffff !important;
+            border-color: #71717a !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
 # INFORMAÇÕES DO USUÁRIO
 # ============================================================
 
@@ -510,37 +531,63 @@ with col6:
 # TERCEIRA LINHA
 # ------------------------------------------------------------
 
-if ambiente_teste or modulo_7:
-    st.markdown("")
-    col7, col8, col9 = st.columns(3)
+# A terceira linha permanece visível para todos os perfis autenticados.
+# Os cartões não mudam de posição quando algum módulo está oculto.
+st.markdown("")
+col7, col8, col9 = st.columns(3)
 
-    # O Módulo 7 vem primeiro; Ambiente de Teste é sempre o último botão.
-    if modulo_7:
-        with col7:
-            st.markdown("#### 📊 Módulo 7")
-            st.markdown("**Relatórios Integrados**")
-            st.caption("Concentrações e baixa pressão")
-            if st.button(
-                "Acessar Relatórios Integrados",
-                type="primary",
-                use_container_width=True,
-                key="acessar_relatorios_integrados",
-            ):
-                st.switch_page("pages/7_Relatorios_Integrados.py")
+# ============================================================
+# MÓDULO 7 — POSIÇÃO 7 (ESQUERDA)
+# ============================================================
 
-    # Exclusivo do administrador, depois de todos os módulos.
-    if ambiente_teste:
-        with (col8 if modulo_7 else col7):
-            st.markdown("#### 🧪 Ambiente de Teste")
-            st.markdown("**Ferramentas em desenvolvimento**")
-            st.caption("Acesso exclusivo do administrador")
-            if st.button(
-                "Acessar Ambiente de Teste",
-                type="primary",
-                use_container_width=True,
-                key="acessar_ambiente_teste",
-            ):
-                st.switch_page("pages/Ambiente_de_Teste.py")
+if modulo_7:
+    with col7:
+        st.markdown("#### 📊 Módulo 7")
+        st.markdown("**Relatórios Integrados**")
+        st.caption("Concentrações e baixa pressão")
+        if st.button(
+            "Acessar Relatórios Integrados",
+            type="primary",
+            use_container_width=True,
+            key="acessar_relatorios_integrados",
+        ):
+            st.switch_page("pages/7_Relatorios_Integrados.py")
+
+# ============================================================
+# MÓDULO 8 — POSIÇÃO 8 (CENTRO)
+# ============================================================
+
+# Exibido para todos os perfis, mas sem acesso, inclusive para admin.
+# Não há página de destino nem chamada de navegação nesta fase.
+with col8:
+    st.markdown("#### 🔍 Módulo 8")
+    st.markdown("**Consulta Operacional**")
+    st.caption("Status: Em desenvolvimento")
+    st.button(
+        "Acessar Consulta Operacional",
+        type="secondary",
+        use_container_width=True,
+        key="acessar_consulta_operacional",
+        disabled=True,
+    )
+
+# ============================================================
+# AMBIENTE DE TESTE — POSIÇÃO 9 (DIREITA)
+# ============================================================
+
+# Mantém a permissão de acesso já definida em auth.py.
+if ambiente_teste:
+    with col9:
+        st.markdown("#### 🧪 Ambiente de Teste")
+        st.markdown("**Ferramentas em desenvolvimento**")
+        st.caption("Acesso exclusivo do administrador")
+        if st.button(
+            "Acessar Ambiente de Teste",
+            type="primary",
+            use_container_width=True,
+            key="acessar_ambiente_teste",
+        ):
+            st.switch_page("pages/Ambiente_de_Teste.py")
 
 
 # ============================================================
