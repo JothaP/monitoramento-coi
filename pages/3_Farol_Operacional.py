@@ -2466,8 +2466,8 @@ def secao_pdf_acompanhamento(concentracao, largura=26.6*cm):
     """Acompanhamento compacto abaixo da ficha com mapa, sem alterar a cartografia.
 
     Organização em grade aproveita a largura do A4 paisagem, com fonte legível.
-    Documentos com histórico realmente longo podem continuar em outra página;
-    nenhum registro é ocultado nem a fonte global do PDF é encolhida.
+    Histórico de movimentações não é incluído no PDF, liberando espaço
+    para a descrição e para as evidências dos loggers.
     """
     chave = str(concentracao.get("CHAVE_ACOMPANHAMENTO", "") or "")
     vinculo = next((v for v in listar_vinculos() if v["chave"] == chave), None) if chave else None
@@ -2552,33 +2552,11 @@ def secao_pdf_acompanhamento(concentracao, largura=26.6*cm):
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-    saida.extend([par("VALIDAÇÕES OPERACIONAIS", meta), Spacer(1, 2), val, Spacer(1, 4),
-                  par("DESCRIÇÃO DA OCORRÊNCIA", meta), Spacer(1, 2),
-                  par(dados.get("descricao", "")), Spacer(1, 4),
-                  par("HISTÓRICO DE MOVIMENTAÇÕES", meta), Spacer(1, 2)])
-
-    movimentos = historico_evento(vinculo["evento_id"])
-    # Registro inicial repete a descrição acima. Preservado no Sheets,
-    # mas não repetido na apresentação do relatório.
-    movimentos = [m for m in movimentos if not str(m.get("descricao", "")).startswith("Registro inicial criado. Relato:")]
-    if movimentos:
-        for movimento in movimentos:
-            detalhes = par(f"{movimento.get('data_hora', '')}  |  {movimento.get('status_momento', '')}", meta)
-            descricao = par(movimento.get("descricao", ""))
-            bloco = Table([[detalhes, descricao]],
-                          colWidths=[largura*.29, largura*.71], hAlign="LEFT")
-            bloco.setStyle(TableStyle([
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("BACKGROUND", (0, 0), (-1, -1), fundo),
-                ("LINEBEFORE", (0, 0), (0, 0), 2.5, colors.HexColor("#3975AC")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 7),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]))
-            saida.extend([KeepTogether([bloco, Spacer(1, 3)])])
-    else:
-        saida.append(par("Sem movimentações posteriores ao registro inicial."))
+    # Histórico de movimentações permanece na fonte do acompanhamento, mas
+    # não ocupa espaço nas fichas PDF (individual e consolidada).
+    saida.extend([par("VALIDAÇÕES OPERACIONAIS", meta), Spacer(1, 2), val,
+                  Spacer(1, 4), par("DESCRIÇÃO DA OCORRÊNCIA", meta),
+                  Spacer(1, 2), par(dados.get("descricao", ""))])
     return saida
 
 
@@ -2600,7 +2578,7 @@ def evidencias_graficas_pdf(ativos, indice_imagens, fonte="Helvetica", largura=2
     Loggers sem evidência não geram seção, espaço reservado nem página vazia.
     A identificação dos demais equipamentos nos mapas/listagens é preservada.
     """
-    # Verifica a evidência antes de criar o título e a quebra de página.
+    # Verifica a evidência antes de criar a seção.
     # Um cadastro sem imagem, ou uma captura ilegível, não deve criar
     # blocos vazios no relatório.
     evidencias = []
@@ -2639,16 +2617,25 @@ def evidencias_graficas_pdf(ativos, indice_imagens, fonte="Helvetica", largura=2
         "LoggerGraficoTitulo", parent=estilo, fontSize=13, leading=17,
         spaceAfter=10, textColor=colors.HexColor("#17365D"),
     )
-    conteudo = [PageBreak(), Paragraph("Evidências gráficas dos loggers próximos", subtitulo)]
+    # Sem PageBreak forçado: o ReportLab aproveita o espaço livre após
+    # as O.S. e a descrição. Se um gráfico não couber, ele continua na
+    # próxima página, sem criar uma página só para a quebra de seção.
+    conteudo = [Spacer(1, 0.16*cm)]
     for i, (logger, _registro, evidencia) in enumerate(evidencias, 1):
         identificacao = rotulo_logger(logger)
         distancia = str(logger.get("Distância", "") or "Não informada")
-        elementos = [
+        elementos = []
+        if i == 1:
+            # Não deixar o título isolado ao final de uma página.
+            elementos.append(Paragraph("Evidências gráficas dos loggers próximos", subtitulo))
+        elementos.extend([
             Paragraph(xml_escape(f"Logger {i} — {identificacao} | Distância: {distancia}"), estilo),
             Spacer(1, 0.12*cm),
             evidencia,
-            Spacer(1, 0.3*cm),
-        ]
+            Spacer(1, 0.22*cm),
+        ])
+        # Rótulo e imagem ficam juntos; apenas a paginação necessária
+        # (em especial quando existem vários gráficos) é permitida.
         conteudo.append(KeepTogether(elementos))
     return conteudo
 
@@ -3483,9 +3470,9 @@ def mapa_relatorio_concentracoes(concentracoes, pontos_cluster, concentracao=Non
                 continue
             nome = str(r.get("IDENTIFICACAO_ATIVO", "") or r.get("NOME_POCO", "") or "Equipamento")
             if panoramico:
-                # No PDF, ambos os tipos de equipamento usam laranja.
+                # Panorama: poços/ativos azuis, mantendo a gota; loggers inalterados.
                 icone = (folium.Icon(icon="signal", prefix="fa", color="orange") if eh_logger
-                         else folium.Icon(icon="tint", prefix="fa", color="orange"))
+                         else folium.Icon(icon="tint", prefix="fa", color="blue"))
                 folium.Marker([y, x], icon=icone,
                               z_index_offset=0 if eh_logger else 1000).add_to(mapa)
             else:
