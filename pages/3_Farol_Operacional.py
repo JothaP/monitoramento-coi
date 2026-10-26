@@ -984,8 +984,21 @@ def preparar_pontos(df):
                 "Importação interrompida para evitar duplicações."
             )
     else:
-        # Caminho Power BI original, preservado integralmente.
+        # Caminho Power BI original. Algumas exportações da BASE ANALÍTICA
+        # incluem, depois das O.S., uma linha com o texto "Filtros aplicados:".
+        # Não é O.S.: não possui protocolo nem nenhum outro campo operacional.
+        # Remover SOMENTE esse rodapé evita que a validação dos oito dias
+        # interprete a descrição dos filtros como uma data inválida.
         out = mapear_colunas(df, CABECALHO_PONTOS)
+        outros_campos = [col for col in CABECALHO_PONTOS if col != "Dt. Emissão"]
+        texto_rodape = out["Dt. Emissão"].map(
+            lambda valor: normalizar_texto(valor).startswith("FILTROS APLICADOS:")
+        )
+        linha_sem_os = out["Nº da O.S"].eq("")
+        campos_vazios = out[outros_campos].apply(
+            lambda linha: all(not str(valor).strip() for valor in linha), axis=1
+        )
+        out = out.loc[~(texto_rodape & linha_sem_os & campos_vazios)].copy()
     for coluna, tipo in (("Latitude", "lat"), ("Longitude", "lon")):
         out[coluna] = out[coluna].map(lambda valor: normalizar_coordenada(valor, tipo))
     # Preserva as O.S. sem geolocalização para consulta e diagnóstico.
