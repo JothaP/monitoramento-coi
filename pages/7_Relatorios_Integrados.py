@@ -742,7 +742,7 @@ def carregar_contexto_farol():
                       "eventos_acomp": pd.DataFrame(), "movimentacoes": pd.DataFrame()})
     id_acomp = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
     if id_acomp and id_acomp != ID_FAROL:
-        for aba in ("vinculos_farol_producao", "eventos"):
+        for aba in ("vinculos_farol_producao", "eventos", "movimentacoes"):
             destino = "eventos_acomp" if aba == "eventos" else aba
             contexto[destino] = opcional(id_acomp, aba)
     return contexto
@@ -1051,35 +1051,127 @@ def protocolo_os_relatorio(reg):
     return f"{numero}/{dt.year}-1" if pd.notna(dt) else numero
 
 
-def ficha_acompanhamento(c,grupo,contexto):
-    """Busca vínculo pela chave exata de O.S. usada pelo Farol, sem chamadas extras."""
-    vinc=contexto.get("vinculos_farol_producao",pd.DataFrame())
-    fichas=contexto.get("eventos_acomp",pd.DataFrame())
-    mov=contexto.get("movimentacoes",pd.DataFrame())
-    if vinc.empty or fichas.empty:return None, []
+def _movimentacoes_em_lote(contexto, evento_id):
+    """Plano B de leitura, exclusivamente na planilha independente de acompanhamento."""
+    base = contexto.get("movimentacoes", pd.DataFrame())
+    if base is None or base.empty:
+        return None
+    colunas = {normalizar(c).replace(" ", "_"): c for c in base.columns}
+    col_evento = colunas.get("EVENTO_ID")
+    if col_evento is None:
+        return None
+    selecionadas = base.loc[base[col_evento].astype(str).str.strip() == str(evento_id).strip()]
+    return [
+        {campo: reg.get(origem, "") for campo, origem in (
+            ("data_hora", colunas.get("DATA_HORA")),
+            ("status_momento", colunas.get("STATUS_MOMENTO")),
+            ("descricao", colunas.get("DESCRICAO")),
+            ("id", colunas.get("ID")),
+        ) if origem is not None}
+        for _, reg in selecionadas.iterrows()
+    ]
+
+
+def _ordenar_movimentacoes(registros):
+    """Ordena cronologicamente; não duplica o registro inicial na ficha PDF."""
+    itens = []
+    for pos, reg in enumerate(registros or []):
+        if not isinstance(reg, dict):
+            continue
+        descricao = str(reg.get("descricao", "") or "").strip()
+        if descricao.startswith("Registro inicial criado. Relato:"):
+            continue
+        dt = data_parse(reg.get("data_hora", ""))
+        chave_data = dt if pd.notna(dt) else pd.Timestamp.max
+        itens.append((chave_data, pos, reg))
+    itens.sort(key=lambda x: (x[0], x[1]))
+    return [reg for _, _, reg in itens]
+
+
+def ficha_acompanhamento(c, grupo, contexto):
+    """Associa à ficha exata do Farol e consulta o histórico na fonte do Módulo 3.
+
+    Nunca aproxima acompanhamentos só por município/bairro ou código C001:
+    uma ficha de outra concentração não pode receber movimentações incorretas.
+    """
+    vinc = contexto.get("vinculos_farol_producao", pd.DataFrame())
+    fichas = contexto.get("eventos_acomp", pd.DataFrame())
+    if vinc.empty or fichas.empty:
+        return None, [], None
     try:
         from integracao_acompanhamento_producao import chave_concentracao
-        numeros=sorted({str(x).strip() for x in grupo["Nº da O.S"] if str(x).strip()})
-        chave=chave_concentracao(str(c.get("Município","")),float(c["Latitude"]),float(c["Longitude"]),numeros)
-    except Exception:
-        return None,[]
-    cols={normalizar(z):z for z in vinc.columns}
-    ch=cols.get("CHAVE")
-    ev=cols.get("EVENTO_ID")
-    if not ch or not ev:return None,[]
-    achado=vinc[vinc[ch].astype(str)==chave]
-    if achado.empty:return None,[]
-    evento_id=str(achado.iloc[-1][ev])
-    if "id" not in fichas.columns:return None,[]
-    f=fichas[fichas["id"].astype(str)==evento_id]
-    if f.empty:return None,[]
-    movimentos=[]
-    if not mov.empty and "evento_id" in mov.columns:
-        for _,m in mov[mov["evento_id"].astype(str)==evento_id].iterrows():
-            if not str(m.get("descricao","")).startswith("Registro inicial criado. Relato:"):
-                movimentos.append(m.to_dict())
-    return f.iloc[-1].to_dict(),movimentos
+        numeros = sorted({str(x).strip() for x in grupo["Nº da O.S"] if str(x).strip()})
+        # O Farol utiliza o primeiro município (em ordem alfabética) das O.S.
+        # na chave de acompanhamento. O relatório integrado pode reunir municípios
+        # API, por isso NÃO usamos o texto concatenado de c["Município"].
+        municipios = sorted({str(x).strip() for x in grupo["Cidade"] if str(x).strip()},
+                            key=normalizar)
+        if not municipios:
+            return None, [], None
+        chave = chave_concentracao(municipios[0], float(c["Latitude"]),
+                                  float(c["Longitude"]), numeros)
+    except (KeyError, TypeError, ValueError, ImportError):
+        return None, [], None
+    colunas = {normalizar(z).replace(" ", "_"): z for z in vinc.columns}
+    col_chave, col_evento = colunas.get("CHAVE"), colunas.get("EVENTO_ID")
+    if not col_chave or not col_evento:
+        return None, [], None
+    achado = vinc[vinc[col_chave].astype(str).str.strip() == str(chave).strip()]
+    if achado.empty:
+        return None, [], None
+    evento_id = str(achado.iloc[-1][col_evento]).strip()
+    col_fichas = {normalizar(z).replace(" ", "_"): z for z in fichas.columns}
+    col_id = col_fichas.get("ID")
+    if not col_id:
+        return None, [], None
+    ficha = fichas[fichas[col_id].astype(str).str.strip() == evento_id]
+    if ficha.empty:
+        return None, [], None
 
+    # Mesmo mecanismo de consulta do Módulo 3; leitura apenas, sem gravação.
+    # Se o serviço estiver temporariamente indisponível, tentar a aba lida
+    # em lote e deixar explícita qualquer impossibilidade de obter o histórico.
+    try:
+        from integracao_acompanhamento_producao import historico_evento
+        movimentos = historico_evento(evento_id)
+        if movimentos is None:
+            raise ValueError("Consulta de histórico sem resposta")
+        return ficha.iloc[-1].to_dict(), _ordenar_movimentacoes(movimentos), None
+    except Exception:
+        registros_lote = _movimentacoes_em_lote(contexto, evento_id)
+        if registros_lote is not None:
+            return ficha.iloc[-1].to_dict(), _ordenar_movimentacoes(registros_lote), None
+        return ficha.iloc[-1].to_dict(), [], "Histórico de movimentações temporariamente indisponível."
+
+
+def secao_pdf_movimentacoes(movimentacoes, erro_movimentacoes, largura, normal, pequeno,
+                            secao, P):
+    """Apresentação alinhada à ficha do Módulo 3: data/status + descrição."""
+    azul = colors.HexColor("#193C65")
+    fundo = colors.HexColor("#F1F5FA")
+    saida = [P("HISTÓRICO DE MOVIMENTAÇÕES", secao)]
+    if erro_movimentacoes:
+        return saida + [P(erro_movimentacoes, normal)]
+    if not movimentacoes:
+        return saida + [P("Sem movimentações posteriores ao registro inicial.", normal)]
+    for reg in movimentacoes:
+        momento = str(reg.get("data_hora", "") or "").strip()
+        status = str(reg.get("status_momento", "") or "").strip()
+        cabecalho = "  |  ".join([v for v in (momento, status) if v]) or "Sem data ou status informado"
+        descricao = reg.get("descricao", "") or "Sem descrição informada."
+        bloco = Table([[P(cabecalho, pequeno), P(descricao, normal)]],
+                       colWidths=[largura * .29, largura * .71], hAlign="LEFT")
+        bloco.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("BACKGROUND", (0, 0), (-1, -1), fundo),
+            ("LINEBEFORE", (0, 0), (0, 0), 2.5, colors.HexColor("#3975AC")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        saida.append(KeepTogether([bloco, Spacer(1, 3)]))
+    return saida
 
 
 def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
@@ -1454,7 +1546,7 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 historia.extend([Spacer(1,5),painel])
         # Padrão do Farol: equipamentos são exibidos no mapa e os eventos no
         # painel de O.S. Não criar quadros extras que alterem o layout original.
-        acompanhamento,movimentacoes=ficha_acompanhamento(c,grupo,contexto)
+        acompanhamento,movimentacoes,erro_movimentacoes=ficha_acompanhamento(c,grupo,contexto)
         historia.append(P("ACOMPANHAMENTO OPERACIONAL",secao))
         if acompanhamento:
             historia.append(tabela(["Status / Finalizado","Município / Regional","Reclamações / Unidade"],[[
@@ -1468,6 +1560,9 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 acompanhamento.get("loggers",""),acompanhamento.get("retorno_operacao","")]],
                 [6.0*cm,6.0*cm,6.0*cm,8.0*cm]),
                 P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
+            historia.extend(secao_pdf_movimentacoes(
+                movimentacoes, erro_movimentacoes, 26.6*cm, normal, pequeno, secao, P
+            ))
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
         # Evidências do dia atual, idênticas às usadas pelo Módulo 3: não
