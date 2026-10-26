@@ -733,18 +733,26 @@ def gravar_controle_historico_v2(controle):
 
 
 def validar_importacao_diaria_v2(df, hoje=None):
-    """Etapa 1: importação do dia, sem mistura acidental de datas."""
+    """Aceita O.S. de qualquer dia da janela móvel de oito dias (inclusive).
+
+    Valida o lote completo antes de gravar PONTOS. Assim, dias sem operação
+    podem ser importados depois, inclusive em um mesmo lote com datas mistas.
+    Rejeita datas ausentes/inválidas, anteriores à janela ou futuras.
+    """
     hoje = hoje or datetime.now(FUSO_FAROL).date()
+    inicio, fim = janela_historico_v2(hoje)
     if df.empty:
         raise ValueError("O arquivo não contém O.S. para importar.")
     datas = df["Dt. Emissão"].map(data_os_historico)
     invalidas = int(datas.isna().sum())
-    fora = int(((datas.notna()) & (datas != hoje)).sum())
-    if invalidas or fora:
+    anteriores = int(datas.map(lambda d: d is not None and d < inicio).sum())
+    futuras = int(datas.map(lambda d: d is not None and d > fim).sum())
+    if invalidas or anteriores or futuras:
         raise ValueError(
-            f"Importação interrompida: {invalidas} O.S. sem data válida e {fora} "
-            f"O.S. com emissão diferente de {hoje:%d/%m/%Y}. "
-            "Nesta etapa, importe apenas O.S. abertas hoje."
+            f"Importação interrompida: {invalidas} O.S. sem data válida, "
+            f"{anteriores} anterior(es) à janela e {futuras} com data futura. "
+            f"Período permitido: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y} "
+            "(8 dias corridos, inclusive). Nenhuma O.S. deste lote foi gravada."
         )
     return df
 
@@ -785,7 +793,7 @@ def executar_limpeza_historico_v2(controle, hoje=None):
 
 
 def ativar_historico_v2():
-    """Ativação explícita: registra marco inicial, sem excluir legado de imediato."""
+    """Ativação explícita: marca início da retenção automática, sem bloquear retroativos."""
     exigir_edicao_farol()
     hoje = datetime.now(FUSO_FAROL).date()
     controle = ler_controle_historico_v2()
@@ -1014,12 +1022,14 @@ def chave_evento(row):
 
 
 
-def consolidar_arquivos_importacao(arquivos, tipo):
+def consolidar_arquivos_importacao(arquivos, tipo, validar_janela=False):
     """Normaliza vários uploads antes de qualquer escrita no Sheets.
 
     O.S.: a última ocorrência do protocolo prevalece, como no upsert existente.
     Eventos: linhas repetidas são mescladas sem apagar campos já preenchidos.
     Se um arquivo falhar, interrompe o lote inteiro (nenhuma escrita parcial).
+    Com histórico ativo, valida todas as linhas ANTES de remover duplicatas:
+    nenhum registro fora da janela poderá ser ocultado pela consolidação.
     """
     if tipo not in {"PONTOS", "EVENTOS"}:
         raise ValueError("Tipo de importação desconhecido.")
@@ -1040,6 +1050,8 @@ def consolidar_arquivos_importacao(arquivos, tipo):
                 normalizada = preparar_eventos(original)
             if normalizada.empty:
                 raise ValueError("não contém registros aproveitáveis após a padronização")
+            if tipo == "PONTOS" and validar_janela:
+                validar_importacao_diaria_v2(normalizada)
             tabelas.append(normalizada)
             detalhes.append({
                 "Arquivo": arquivo.name,
@@ -2897,7 +2909,21 @@ def modal_importacao():
         st.error("Acesso somente para visualização.")
         return
     st.subheader("Importação das bases")
-    st.info("O histórico de 8 dias só entra em vigor após ativação explícita. Após ativado, a importação de O.S. aceita apenas emissões do dia; EVENTOS são preservados nesta etapa.")
+    if historico_v2_ativo:
+        inicio_importacao, fim_importacao = janela_historico_v2()
+        st.info(
+            f"Histórico ativo: importe O.S. emitidas de "
+            f"{inicio_importacao:%d/%m/%Y} a {fim_importacao:%d/%m/%Y} "
+            "(8 dias corridos, inclusive). É permitido reunir diferentes dias "
+            "e arquivos em um mesmo lote. Datas inválidas ou fora da janela "
+            "interrompem a importação completa. EVENTOS não são afetados."
+        )
+    else:
+        st.info(
+            "O histórico de 8 dias passa a valer após ativação explícita. "
+            "Quando ativado, permite importar retroativamente O.S. dos 8 dias "
+            "corridos mais recentes. EVENTOS permanecem preservados."
+        )
 
     c1, c2 = st.columns(2)
     with c1:
@@ -2911,7 +2937,7 @@ def modal_importacao():
         if arquivos_os:
             try:
                 preparados, detalhes, linhas, duplicados = consolidar_arquivos_importacao(
-                    arquivos_os, "PONTOS"
+                    arquivos_os, "PONTOS", validar_janela=historico_v2_ativo
                 )
                 st.caption(f"{len(arquivos_os)} arquivo(s) selecionado(s)")
                 st.dataframe(detalhes, width="stretch", hide_index=True)
@@ -2930,7 +2956,7 @@ def modal_importacao():
                     )
                 st.caption(
                     "A prévia já reúne todos os arquivos. A importação gravará uma única vez "
-                    "na aba PONTOS, respeitando as regras do histórico diário."
+                    "na aba PONTOS, respeitando a janela móvel de 8 dias se o histórico estiver ativo."
                 )
                 if st.button("Importar O.S. para PONTOS", type="primary", key="btn_importar_os"):
                     # Valida o lote completo ANTES de executar qualquer escrita.
@@ -3744,12 +3770,9 @@ with st.sidebar:
     st.divider()
     st.markdown("### 📅 Calendário")
     if historico_v2_ativo:
-        inicio_operacao_str = controle_historico_v2.get("inicio_operacao", hoje_historico_v2.isoformat())
-        try:
-            inicio_operacao = date.fromisoformat(inicio_operacao_str)
-        except ValueError:
-            inicio_operacao = hoje_historico_v2
-        primeira_data = max(inicio_operacao, inicio_historico_v2)
+        # A importação retroativa pode trazer O.S. anteriores à data em que
+        # o histórico foi ativado. O calendário deve permitir visualizá-las.
+        primeira_data = inicio_historico_v2
         # Ao entrar no módulo, a data padrão é hoje. Se o usuário escolher
         # outro dia, a escolha é mantida enquanto estiver dentro da janela.
         data_anterior = st.session_state.get("farol_v2_data_consulta")
@@ -3776,7 +3799,7 @@ with st.sidebar:
                          key="farol_v2_ativar_historico"):
                 try:
                     ativar_historico_v2()
-                    st.success("Histórico ativado. A limpeza começa na primeira execução dos próximos dias.")
+                    st.success("Histórico ativado. O calendário e a importação aceitam os últimos 8 dias. A limpeza começa na primeira execução dos próximos dias.")
                     st.rerun()
                 except Exception as erro:
                     st.error(f"Não foi possível ativar o histórico: {erro}")
