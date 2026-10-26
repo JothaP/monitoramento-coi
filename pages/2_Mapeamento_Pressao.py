@@ -13,6 +13,9 @@ import io
 import uuid
 from typing import Optional
 import time
+import re
+import math
+import unicodedata
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -58,6 +61,91 @@ LAT_BASE = -5.0892
 LON_BASE = -42.8019
 SPREADSHEET_ID = "1idCgabn5g5X48hmdE-gqWfrUKUf2XxWGB5M_yJFk0yM"
 COLUNAS_PADRAO = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observacao"]
+CABECALHO_SHEETS = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA", "Observação"]
+
+
+# ============================================================
+# CONFERÊNCIA DO CABEÇALHO DO BANCO DE DADOS
+# ============================================================
+def _chave_cabecalho(campo):
+    texto = unicodedata.normalize("NFKD", str(campo or "").strip().upper())
+    return "".join(ch for ch in texto if ch.isalnum() and not unicodedata.combining(ch))
+
+
+def _eh_data_na_primeira_coluna(valor):
+    texto = str(valor or "").strip()
+    for formato in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            datetime.strptime(texto, formato)
+            return True
+        except ValueError:
+            pass
+    return False
+
+
+def _eh_numero_em_intervalo(valor, inferior, superior):
+    try:
+        n = float(str(valor).strip().replace(",", "."))
+        return math.isfinite(n) and inferior <= n <= superior
+    except (ValueError, TypeError):
+        return False
+
+
+def conferir_estrutura_planilha(ws):
+    """Corrige APENAS o cabeçalho legado deslocado; nunca altera linhas de medições.
+
+    Histórico encontrado: cabeçalho A:H = ID, Data, Município, ...,
+    Observação; porém os registros já estão corretamente em A:G como
+    Data, Município, Pontos, Latitude, Longitude, MCA, Observação.
+    A correção troca somente A1:H1 e mantém os dados das linhas 2+ intactos.
+    Caso apareçam registros reais no formato com ID, falha fechado.
+    """
+    valores = ws.get_all_values()
+    if not valores:
+        ws.update(range_name="A1:G1", values=[CABECALHO_SHEETS], value_input_option="RAW")
+        return
+
+    primeira = list(valores[0])
+    chaves = [_chave_cabecalho(x) for x in primeira]
+    padrao = [_chave_cabecalho(x) for x in CABECALHO_SHEETS]
+
+    if chaves[:7] == padrao and not any(chaves[7:]):
+        return  # Base já correta, não modifica nenhuma célula.
+
+    if chaves[:8] == ["ID"] + padrao and not any(chaves[8:]):
+        for numero_linha, linha in enumerate(valores[1:], start=2):
+            if not any(str(v).strip() for v in linha):
+                continue
+            celulas = list(linha) + [""] * max(0, 8 - len(linha))
+            a, b, c, d, e, f, g, h = celulas[:8]
+            layout_antigo_confirmado = (
+                _eh_data_na_primeira_coluna(a)
+                and str(b).strip() != ""
+                and str(c).strip() != ""
+                and _eh_numero_em_intervalo(d, -90, 90)
+                and _eh_numero_em_intervalo(e, -180, 180)
+                and _eh_numero_em_intervalo(f, 0, float("inf"))
+                and not any(str(v).strip() for v in celulas[7:])
+            )
+            if not layout_antigo_confirmado:
+                raise ValueError(
+                    f"Cabeçalho A:H com ID, mas a linha {numero_linha} não segue "
+                    "o formato A:G mostrado. A correção automática foi bloqueada "
+                    "para preservar os dados; confira essa linha no Google Sheets."
+                )
+        ws.update(
+            range_name="A1:H1",
+            values=[CABECALHO_SHEETS + [""]],
+            value_input_option="RAW",
+        )
+        return
+
+    raise ValueError(
+        "O cabeçalho da aba mapeamento_pressao não corresponde ao formato "
+        "Data, Município, Pontos, Latitude, Longitude, MCA, Observação. "
+        "Nenhum registro foi modificado. Confira a primeira linha da planilha."
+    )
+
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -66,67 +154,28 @@ COLUNAS_PADRAO = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MCA"
 def conectar_google_sheets():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
+        "https://www.googleapis.com/auth/drive",
     ]
-    credentials_dict = json.loads(st.secrets["gcp_json"])
+    config = st.secrets["gcp_json"]
+    credentials_dict = json.loads(config) if isinstance(config, str) else dict(config)
     credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(SPREADSHEET_ID)
 
     try:
         ws = sh.worksheet("mapeamento_pressao")
-    except Exception:
-        try:
-            ws = sh.add_worksheet(
-                title="mapeamento_pressao",
-                rows="1000",
-                cols="20"
-            )
-        except Exception:
-            ws = sh.sheet1
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title="mapeamento_pressao", rows=1000, cols=20)
 
-    try:
-        dados_iniciais = ws.get_all_values()
-
-        if not dados_iniciais or len(dados_iniciais) == 0:
-            ws.append_row([
-                "Data",
-                "Município",
-                "Pontos",
-                "Latitude",
-                "Longitude",
-                "MCA",
-                "Observação"
-            ])
-        else:
-            cabecalho_atual = dados_iniciais[0]
-
-            if (
-                len(cabecalho_atual) >= 6
-                and "Município" not in [str(c).strip() for c in cabecalho_atual]
-            ):
-                ws.insert_row(
-                    [
-                        "Data",
-                        "Município",
-                        "Pontos",
-                        "Latitude",
-                        "Longitude",
-                        "MCA",
-                        "Observação"
-                    ],
-                    index=1
-                )
-    except Exception:
-        pass
-
+    # Não insere outra linha de cabeçalho: isso desalinhará novamente o banco.
+    conferir_estrutura_planilha(ws)
     return ws
 
 
 try:
     worksheet = conectar_google_sheets()
 except Exception as e:
-    st.error(f"❌ Erro ao conectar com o Google Sheets: {e}")
+    st.error(f"❌ Erro ao conferir o banco do Módulo 2: {e}")
     st.stop()
 
 # ============================================================
@@ -315,18 +364,11 @@ def adicionar_ponto(
     mca: float,
     obs: str
 ):
-    worksheet.append_row([
-        str(data_str),
-        str(municipio),
-        str(pontos),
-        float(lat),
-        float(lon),
-        float(mca),
-        str(obs)
-    ])
-
-    time.sleep(0.3)
-    limpar_cache()
+    # Cadastro manual usa a mesma prevenção de duplicidades do upload em lote.
+    return adicionar_lote_seguro([[
+        str(data_str), str(municipio), str(pontos),
+        float(lat), float(lon), float(mca), str(obs or "")
+    ]])
 
 
 def adicionar_lote_seguro(linhas_dados: list):
@@ -397,7 +439,8 @@ def adicionar_lote_seguro(linhas_dados: list):
 
         worksheet.append_rows(
             dados_formatados,
-            value_input_option="USER_ENTERED"
+            value_input_option="RAW",
+            table_range="A1:G"
         )
 
         time.sleep(0.3)
@@ -423,16 +466,17 @@ def atualizar_ponto(
         target_row = linha_real + 2
 
         worksheet.update(
-            f"A{target_row}:G{target_row}",
-            [[
+            range_name=f"A{target_row}:G{target_row}",
+            values=[[
                 str(data_str),
                 str(municipio),
                 str(pontos),
                 float(lat),
                 float(lon),
                 float(mca),
-                str(obs)
-            ]]
+                str(obs or "")
+            ]],
+            value_input_option="RAW"
         )
 
         time.sleep(0.3)
@@ -612,7 +656,7 @@ def modal_novo_ponto():
                 )
 
             else:
-                adicionar_ponto(
+                qtd_inserida = adicionar_ponto(
                     data_para_str(data_cadastro),
                     municipio.strip(),
                     pontos.strip(),
@@ -622,7 +666,10 @@ def modal_novo_ponto():
                     obs.strip()
                 )
 
-                st.success("Ponto cadastrado com sucesso!")
+                if qtd_inserida:
+                    st.success("Ponto cadastrado com sucesso!")
+                else:
+                    st.info("Este ponto já foi registrado nesta data. Nenhuma duplicação foi feita.")
 
                 st.session_state.clicked_lat = None
                 st.session_state.clicked_lon = None
@@ -1074,12 +1121,8 @@ with st.sidebar:
                         0.0
                     )
 
-                    obs_val = str(
-                        row.get(
-                            "Observação",
-                            row.get("Observacao", "")
-                        )
-                    )
+                    obs_bruta = row.get("Observação", row.get("Observacao", ""))
+                    obs_val = "" if pd.isna(obs_bruta) else str(obs_bruta).strip()
 
                     if (
                         municipio_val.strip()
