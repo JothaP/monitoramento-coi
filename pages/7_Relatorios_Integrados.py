@@ -742,7 +742,7 @@ def carregar_contexto_farol():
                       "eventos_acomp": pd.DataFrame(), "movimentacoes": pd.DataFrame()})
     id_acomp = str(st.secrets.get("acompanhamento_operacional_spreadsheet_id", "")).strip()
     if id_acomp and id_acomp != ID_FAROL:
-        for aba in ("vinculos_farol_producao", "eventos", "movimentacoes"):
+        for aba in ("vinculos_farol_producao", "eventos"):
             destino = "eventos_acomp" if aba == "eventos" else aba
             contexto[destino] = opcional(id_acomp, aba)
     return contexto
@@ -1088,11 +1088,11 @@ def _ordenar_movimentacoes(registros):
     return [reg for _, _, reg in itens]
 
 
-def ficha_acompanhamento(c, grupo, contexto):
-    """Associa à ficha exata do Farol e consulta o histórico na fonte do Módulo 3.
+def ficha_acompanhamento(c, grupo, contexto, incluir_movimentacoes=True):
+    """Associa somente à ficha exata do Farol.
 
-    Nunca aproxima acompanhamentos só por município/bairro ou código C001:
-    uma ficha de outra concentração não pode receber movimentações incorretas.
+    A consulta de movimentações é opcional; fica desativada na geração do PDF.
+    Nunca aproxima acompanhamentos só por município/bairro ou código C001.
     """
     vinc = contexto.get("vinculos_farol_producao", pd.DataFrame())
     fichas = contexto.get("eventos_acomp", pd.DataFrame())
@@ -1127,6 +1127,9 @@ def ficha_acompanhamento(c, grupo, contexto):
     ficha = fichas[fichas[col_id].astype(str).str.strip() == evento_id]
     if ficha.empty:
         return None, [], None
+
+    if not incluir_movimentacoes:
+        return ficha.iloc[-1].to_dict(), [], None
 
     # Mesmo mecanismo de consulta do Módulo 3; leitura apenas, sem gravação.
     # Se o serviço estiver temporariamente indisponível, tentar a aba lida
@@ -1193,7 +1196,7 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
     geos=int(base[["_lat","_lon"]].notna().all(axis=1).sum())
     sem_gerar_longo=f"{inicio:%d/%m/%Y} a {fim:%d/%m/%Y} · {', '.join(mun) if mun else 'Municípios não informados'}"
 
-    historia.append(P("MONITORAMENTO DE BAIXA PRESSÃO — MÓDULO 1",titulo))
+    historia.append(P("Baixa Pressão — Relatório de medições",titulo))
     historia.append(P(sem_gerar_longo,normal))
     historia.append(Spacer(1,9))
 
@@ -1233,7 +1236,7 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
         imagem=imagem_folium(mapa,1280,660)
         historia.append(Image(io.BytesIO(imagem),width=26*cm,height=11.5*cm))
     else:
-        historia.append(P("Nenhum marcador exibido pelas faixas visuais do Módulo 1, "
+        historia.append(P("Nenhum marcador exibido pelas faixas visuais da baixa pressão, "
                           "mas todas as medições válidas continuam contabilizadas nos indicadores.",normal))
     historia.append(Spacer(1,7))
     historia.append(P("Mapa: vermelho (0 a 5 mca), amarelo (>5 a 10 mca) e roxo (>15 mca). "
@@ -1390,6 +1393,61 @@ def evidencias_loggers_relatorio_integrado(loggers, indice, fonte, largura=26.6*
     return secao
 
 
+
+def kpis_panorama_farol(n_os, n_concentracoes, n_medicoes, n_com_medicao, raio, normal, pequeno):
+    """Indicadores abaixo do panorama, no padrão visual das medições de baixa pressão.
+
+    Os cálculos seguem os KPIs da página Streamlit, inclusive o critério de
+    existência de ao menos uma medição próxima à O.S. (sem contagem dupla).
+    """
+    azul = colors.HexColor("#193C65")
+    cinza = colors.HexColor("#F1F5FA")
+    borda = colors.HexColor("#DCE5EF")
+    destaque = ParagraphStyle(
+        "PanoramaFarolKpiNumero", parent=normal, fontSize=17.3, leading=20.2,
+        textColor=azul, spaceBefore=0, spaceAfter=0,
+    )
+    legenda = ParagraphStyle(
+        "PanoramaFarolKpiLegenda", parent=pequeno, fontSize=6.7, leading=8.0,
+        textColor=colors.HexColor("#42546A"), spaceBefore=0, spaceAfter=0,
+    )
+    rotulo = ParagraphStyle(
+        "PanoramaFarolKpiRotulo", parent=pequeno, fontSize=7.1, leading=8.5,
+        textColor=colors.HexColor("#25354B"), spaceBefore=0, spaceAfter=0,
+    )
+
+    def cartao(nome, valor, detalhe):
+        bloco = Table([
+            [Paragraph(xml_escape(nome), rotulo)],
+            [Paragraph(xml_escape(str(valor)), destaque)],
+            [Paragraph(xml_escape(detalhe), legenda)],
+        ], colWidths=[6.19*cm], hAlign="LEFT")
+        bloco.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), cinza),
+            ("BOX", (0, 0), (-1, -1), .6, borda),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        return bloco
+
+    painel = Table([[
+        cartao("O.S. NO PERÍODO", n_os, "Registros da seleção"),
+        cartao("CONCENTRAÇÕES", n_concentracoes, "Agrupamentos identificados"),
+        cartao("MEDIÇÕES NO PERÍODO", n_medicoes, "Aferições de pressão"),
+        cartao("COM MEDIÇÃO PRÓXIMA", n_com_medicao, f"Concentrações · até {raio} m"),
+    ]], colWidths=[6.65*cm]*4, hAlign="LEFT")
+    painel.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 1),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 1),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return painel
+
+
 def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
                   concentracoes=None, grupos=None, raio_cluster=500, contexto=None, pressao=None,
                   pontos_todos=None, indice_graficos=None, raio_operacional_loggers=RAIO_OPERACIONAL_EVIDENCIAS):
@@ -1462,12 +1520,18 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
     # PANORAMA do Farol + todos os pontos cartográficos válidos de pressão.
     mapa=mapa_integrado_farol(concentracoes,grupos,pressao.iloc[:0],contexto,raio_cluster,
                              pontos_todos=pontos_todos)
-    imagem=imagem_folium(mapa,1280,700)
+    # Enquadramento panorâmico mais horizontal: preserva a proporção da captura
+    # sem distorcer o mapa, deixando espaço para os 4 indicadores na mesma página.
+    imagem=imagem_folium(mapa,1280,585)
+    medicao_proxima=(int((resumo["Medições próximas"] > 0).sum())
+                     if resumo is not None and not resumo.empty else 0)
     subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais.")
     historia.append(KeepTogether([
         P("Panorama territorial das concentrações",titulo),
-        Image(io.BytesIO(imagem),width=26*cm,height=14.22*cm),
-        Spacer(1,4),P(subtitulo)
+        Image(io.BytesIO(imagem),width=26*cm,height=(26*585/1280)*cm),
+        Spacer(1,3), P(subtitulo), Spacer(1,7),
+        kpis_panorama_farol(n_os, len(concentracoes), n_bp,
+                           medicao_proxima, raio, normal, pequeno),
     ]))
     historia.append(PageBreak())
 
@@ -1546,7 +1610,8 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 historia.extend([Spacer(1,5),painel])
         # Padrão do Farol: equipamentos são exibidos no mapa e os eventos no
         # painel de O.S. Não criar quadros extras que alterem o layout original.
-        acompanhamento,movimentacoes,erro_movimentacoes=ficha_acompanhamento(c,grupo,contexto)
+        # Somente os dados da ficha são usados no PDF. Não consultar o histórico.
+        acompanhamento, _, _ = ficha_acompanhamento(c, grupo, contexto, incluir_movimentacoes=False)
         historia.append(P("ACOMPANHAMENTO OPERACIONAL",secao))
         if acompanhamento:
             historia.append(tabela(["Status / Finalizado","Município / Regional","Reclamações / Unidade"],[[
@@ -1560,9 +1625,6 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 acompanhamento.get("loggers",""),acompanhamento.get("retorno_operacao","")]],
                 [6.0*cm,6.0*cm,6.0*cm,8.0*cm]),
                 P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
-            historia.extend(secao_pdf_movimentacoes(
-                movimentacoes, erro_movimentacoes, 26.6*cm, normal, pequeno, secao, P
-            ))
         else:
             historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
         # Evidências do dia atual, idênticas às usadas pelo Módulo 3: não
