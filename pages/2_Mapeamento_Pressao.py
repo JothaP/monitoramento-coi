@@ -1,3 +1,4 @@
+
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -65,87 +66,121 @@ CABECALHO_SHEETS = ["Data", "Município", "Pontos", "Latitude", "Longitude", "MC
 
 
 # ============================================================
-# CONFERÊNCIA DO CABEÇALHO DO BANCO DE DADOS
+# CONFERÊNCIA DO CABEÇALHO E LEITURA DE LAYOUTS LEGADOS
 # ============================================================
 def _chave_cabecalho(campo):
     texto = unicodedata.normalize("NFKD", str(campo or "").strip().upper())
     return "".join(ch for ch in texto if ch.isalnum() and not unicodedata.combining(ch))
 
 
-def _eh_data_na_primeira_coluna(valor):
-    texto = str(valor or "").strip()
-    for formato in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y"):
+def _data_valida_planilha(valor):
+    """Data da célula em formatos usuais do Sheets, sem inventar datas."""
+    if isinstance(valor, (datetime, date, pd.Timestamp)):
         try:
-            datetime.strptime(texto, formato)
-            return True
+            return pd.Timestamp(valor).strftime("%d/%m/%Y")
+        except (TypeError, ValueError):
+            return ""
+    texto = str(valor or "").strip().strip("'")
+    if not texto or texto.lower() in {"nan", "none", "nat", "-"}:
+        return ""
+    for formato in (
+        "%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d",
+        "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f",
+    ):
+        try:
+            return datetime.strptime(texto, formato).strftime("%d/%m/%Y")
         except ValueError:
             pass
-    return False
+    # Algumas células do Sheets contêm a data como número de série.
+    if re.fullmatch(r"[0-9]{5}(?:[.,][0-9]+)?", texto):
+        try:
+            serial = float(texto.replace(",", "."))
+            if 20000 <= serial <= 90000:
+                return (datetime(1899, 12, 30) + timedelta(days=serial)).strftime("%d/%m/%Y")
+        except (ValueError, OverflowError):
+            pass
+    return ""
 
 
-def _eh_numero_em_intervalo(valor, inferior, superior):
+def _numero_valido_planilha(valor, minimo, maximo):
+    """Aceita decimal com vírgula/ponto e não aceita NaN/Inf."""
+    if valor is None or str(valor).strip().lower() in {"", "nan", "none", "nat"}:
+        return None
+    texto = str(valor).strip().replace(" ", "")
+    if "," in texto and "." in texto:
+        texto = (texto.replace(".", "").replace(",", ".")
+                 if texto.rfind(",") > texto.rfind(".") else texto.replace(",", ""))
+    else:
+        texto = texto.replace(",", ".")
     try:
-        n = float(str(valor).strip().replace(",", "."))
-        return math.isfinite(n) and inferior <= n <= superior
-    except (ValueError, TypeError):
-        return False
+        valor_num = float(texto)
+        if math.isfinite(valor_num) and minimo <= valor_num <= maximo:
+            return valor_num
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return None
+
+
+def _eh_medicao_completa(campos):
+    """Valida os 7 campos de uma medição antes de definir o deslocamento."""
+    campos = list(campos) + [""] * max(0, 7 - len(campos))
+    data, municipio, ponto, lat, lon, mca, _obs = campos[:7]
+    return (
+        bool(_data_valida_planilha(data))
+        and bool(str(municipio).strip())
+        and bool(str(ponto).strip())
+        and _numero_valido_planilha(lat, -90, 90) not in (None, 0)
+        and _numero_valido_planilha(lon, -180, 180) not in (None, 0)
+        and _numero_valido_planilha(mca, 0, float("inf")) is not None
+    )
+
+
+def _formato_cabecalho(cabecalho):
+    chaves = [_chave_cabecalho(v) for v in cabecalho]
+    esperado = [_chave_cabecalho(v) for v in CABECALHO_SHEETS]
+    if chaves[:7] == esperado and not any(chaves[7:]):
+        return "sem_id"
+    if chaves[:8] == ["ID"] + esperado and not any(chaves[8:]):
+        return "com_id"
+    return "desconhecido"
+
+
+def _classificar_linha_medicao(linha, modo_cabecalho):
+    """Localiza os dados sem alterar a planilha; aceita linhas A:G e B:H."""
+    valores = list(linha) + [""] * max(0, 8 - len(linha))
+    sem_id = _eh_medicao_completa(valores[:7])
+    com_id = _eh_medicao_completa(valores[1:8])
+    # Não usar a primeira hipótese se existir um valor extra não explicado em H.
+    if sem_id and not str(valores[7]).strip() and not com_id:
+        return "sem_id", valores[:7]
+    if com_id and modo_cabecalho == "com_id" and not sem_id:
+        return "com_id", valores[1:8]
+    if com_id and not sem_id:
+        return "com_id", valores[1:8]
+    return "invalida", None
 
 
 def conferir_estrutura_planilha(ws):
-    """Corrige APENAS o cabeçalho legado deslocado; nunca altera linhas de medições.
+    """Não migra nem descarta linhas. Identifica os dois layouts já usados no banco.
 
-    Histórico encontrado: cabeçalho A:H = ID, Data, Município, ...,
-    Observação; porém os registros já estão corretamente em A:G como
-    Data, Município, Pontos, Latitude, Longitude, MCA, Observação.
-    A correção troca somente A1:H1 e mantém os dados das linhas 2+ intactos.
-    Caso apareçam registros reais no formato com ID, falha fechado.
+    Cabeçalho A:H com ID pode conviver com linhas antigas A:G, gravadas antes
+    da correção. Exigir que a linha 2 determine o formato de toda a aba
+    bloqueava a aplicação indevidamente.
     """
-    valores = ws.get_all_values()
-    if not valores:
+    cabecalho = ws.row_values(1)
+    if not any(str(v).strip() for v in cabecalho):
         ws.update(range_name="A1:G1", values=[CABECALHO_SHEETS], value_input_option="RAW")
-        return
-
-    primeira = list(valores[0])
-    chaves = [_chave_cabecalho(x) for x in primeira]
-    padrao = [_chave_cabecalho(x) for x in CABECALHO_SHEETS]
-
-    if chaves[:7] == padrao and not any(chaves[7:]):
-        return  # Base já correta, não modifica nenhuma célula.
-
-    if chaves[:8] == ["ID"] + padrao and not any(chaves[8:]):
-        for numero_linha, linha in enumerate(valores[1:], start=2):
-            if not any(str(v).strip() for v in linha):
-                continue
-            celulas = list(linha) + [""] * max(0, 8 - len(linha))
-            a, b, c, d, e, f, g, h = celulas[:8]
-            layout_antigo_confirmado = (
-                _eh_data_na_primeira_coluna(a)
-                and str(b).strip() != ""
-                and str(c).strip() != ""
-                and _eh_numero_em_intervalo(d, -90, 90)
-                and _eh_numero_em_intervalo(e, -180, 180)
-                and _eh_numero_em_intervalo(f, 0, float("inf"))
-                and not any(str(v).strip() for v in celulas[7:])
-            )
-            if not layout_antigo_confirmado:
-                raise ValueError(
-                    f"Cabeçalho A:H com ID, mas a linha {numero_linha} não segue "
-                    "o formato A:G mostrado. A correção automática foi bloqueada "
-                    "para preservar os dados; confira essa linha no Google Sheets."
-                )
-        ws.update(
-            range_name="A1:H1",
-            values=[CABECALHO_SHEETS + [""]],
-            value_input_option="RAW",
+        return "sem_id"
+    modo = _formato_cabecalho(cabecalho)
+    if modo == "desconhecido":
+        raise ValueError(
+            "Cabeçalho não reconhecido na aba mapeamento_pressao. "
+            "Nenhum dado foi modificado. Esperado: Data, Município, Pontos, "
+            "Latitude, Longitude, MCA, Observação (com ou sem ID inicial)."
         )
-        return
-
-    raise ValueError(
-        "O cabeçalho da aba mapeamento_pressao não corresponde ao formato "
-        "Data, Município, Pontos, Latitude, Longitude, MCA, Observação. "
-        "Nenhum registro foi modificado. Confira a primeira linha da planilha."
-    )
-
+    return modo
 
 # ============================================================
 # CONEXÃO COM GOOGLE SHEETS
@@ -275,80 +310,58 @@ def normalizar_data(valor) -> str:
 
 
 def carregar_dados() -> pd.DataFrame:
+    """Lê o banco por posição, inclusive linhas legadas deslocadas com ID."""
     try:
         valores = worksheet.get_all_values()
     except Exception as e:
         st.error(f"Erro ao ler planilha: {e}")
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+        return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
-    if not valores or len(valores) < 2:
-        return pd.DataFrame(columns=COLUNAS_PADRAO)
+    if len(valores) < 2:
+        return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
-    cabecalhos_raw = valores[0]
-    cabecalhos = [normalizar_coluna(c) for c in cabecalhos_raw]
+    modo = _formato_cabecalho(valores[0])
+    if modo == "desconhecido":
+        st.error("Cabeçalho do banco não reconhecido; leitura suspensa para proteger os dados.")
+        return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
-    registros = []
-
+    registros, linhas_nao_interpretadas = [], []
     for idx_linha, linha in enumerate(valores[1:], start=0):
-        if not any(str(c).strip() for c in linha):
+        if not any(str(v).strip() for v in linha):
             continue
+        formato, campos = _classificar_linha_medicao(linha, modo)
+        if campos is None:
+            linhas_nao_interpretadas.append(idx_linha + 2)
+            continue
+        registro = dict(zip(COLUNAS_PADRAO, campos))
+        registro["Data"] = _data_valida_planilha(registro["Data"])
+        registro["_linha_real"] = idx_linha  # Linha física do Sheets: +2.
+        registro["_layout_linha"] = formato
+        registros.append(registro)
 
-        reg = {"_linha_real": idx_linha}
-
-        for i, col in enumerate(cabecalhos):
-            reg[col] = linha[i] if i < len(linha) else ""
-
-        registros.append(reg)
+    if linhas_nao_interpretadas:
+        amostra = ", ".join(map(str, linhas_nao_interpretadas[:12]))
+        restante = " ..." if len(linhas_nao_interpretadas) > 12 else ""
+        st.warning(
+            f"Módulo 2: {len(linhas_nao_interpretadas)} linha(s) da aba "
+            f"mapeamento_pressao não seguem um formato de medição válido "
+            f"(linhas {amostra}{restante}). Elas NÃO foram excluídas nem "
+            "modificadas; continuam disponíveis no Google Sheets para conferência."
+        )
 
     if not registros:
         return pd.DataFrame(columns=COLUNAS_PADRAO + ["_linha_real"])
 
     df = pd.DataFrame(registros)
-
-    for col in COLUNAS_PADRAO:
-        if col not in df.columns:
-            df[col] = ""
-
-    df["Data"] = df["Data"].apply(normalizar_data)
-
-    df["Município"] = (
-        df["Município"]
-        .astype(str)
-        .str.strip()
-        .replace({"nan": "", "None": ""})
+    df["Município"] = df["Município"].astype(str).str.strip()
+    df["Pontos"] = df["Pontos"].astype(str).str.strip()
+    df["Latitude"] = df["Latitude"].map(lambda v: normalizar_coordenada(v, "lat"))
+    df["Longitude"] = df["Longitude"].map(lambda v: normalizar_coordenada(v, "lon"))
+    df["MCA"] = df["MCA"].map(lambda v: parse_float(v, 0.0))
+    df["Observacao"] = df["Observacao"].map(
+        lambda v: "" if str(v).strip().lower() in {"nan", "none", "nat"} else str(v).strip()
     )
-
-    df["Pontos"] = (
-        df["Pontos"]
-        .astype(str)
-        .str.strip()
-        .replace({"nan": "", "None": ""})
-    )
-
-    df["Latitude"] = df["Latitude"].apply(
-        lambda x: normalizar_coordenada(x, "lat")
-    )
-
-    df["Longitude"] = df["Longitude"].apply(
-        lambda x: normalizar_coordenada(x, "lon")
-    )
-
-    df["MCA"] = df["MCA"].apply(
-        lambda x: parse_float(x, 0.0) or 0.0
-    )
-
-    df["Observacao"] = (
-        df["Observacao"]
-        .astype(str)
-        .str.strip()
-        .replace({"nan": "", "None": ""})
-    )
-
-    df = df[df["Pontos"].astype(str).str.strip() != ""]
-
-    colunas_finais = COLUNAS_PADRAO + ["_linha_real"]
-
-    return df[colunas_finais].reset_index(drop=True)
+    return df[COLUNAS_PADRAO + ["_linha_real"]].reset_index(drop=True)
 
 
 def limpar_cache():
@@ -376,78 +389,46 @@ def adicionar_lote_seguro(linhas_dados: list):
         return 0
 
     df_atual = carregar_dados()
-
     chaves_existentes = set()
-
     if not df_atual.empty:
         for _, r in df_atual.iterrows():
-            lat_f = (
-                f"{float(r['Latitude']):.6f}"
-                if pd.notnull(r['Latitude'])
-                else ""
-            )
-
-            lon_f = (
-                f"{float(r['Longitude']):.6f}"
-                if pd.notnull(r['Longitude'])
-                else ""
-            )
-
             chave = (
-                str(r["Data"]).strip(),
-                str(r["Município"]).strip().lower(),
-                str(r["Pontos"]).strip().lower(),
-                lat_f,
-                lon_f
+                str(r["Data"]).strip(), str(r["Município"]).strip().casefold(),
+                str(r["Pontos"]).strip().casefold(),
+                f"{float(r['Latitude']):.6f}" if pd.notnull(r["Latitude"]) else "",
+                f"{float(r['Longitude']):.6f}" if pd.notnull(r["Longitude"]) else "",
             )
-
             chaves_existentes.add(chave)
 
     linhas_novas = []
-
     for linha in linhas_dados:
         d_val, mun_val, p_val, lat_val, lon_val, mca_val, obs_val = linha
-
-        lat_f = f"{float(lat_val):.6f}"
-        lon_f = f"{float(lon_val):.6f}"
-
-        chave_nova = (
-            str(d_val).strip(),
-            str(mun_val).strip().lower(),
-            str(p_val).strip().lower(),
-            lat_f,
-            lon_f
-        )
-
+        lat_n = normalizar_coordenada(lat_val, "lat")
+        lon_n = normalizar_coordenada(lon_val, "lon")
+        mca_n = _numero_valido_planilha(mca_val, 0, float("inf"))
+        data_n = _data_valida_planilha(d_val)
+        if not data_n or not str(mun_val).strip() or not str(p_val).strip() or lat_n is None or lon_n is None or mca_n is None:
+            raise ValueError("Lote contém data, ponto, coordenada ou MCA inválido; nenhum registro foi gravado.")
+        chave_nova = (data_n, str(mun_val).strip().casefold(), str(p_val).strip().casefold(),
+                      f"{lat_n:.6f}", f"{lon_n:.6f}")
         if chave_nova not in chaves_existentes:
-            linhas_novas.append(linha)
+            linhas_novas.append([data_n, str(mun_val).strip(), str(p_val).strip(),
+                                 f"{lat_n:.6f}", f"{lon_n:.6f}", str(mca_n), str(obs_val or "")])
             chaves_existentes.add(chave_nova)
 
     if linhas_novas:
-        dados_formatados = [
-            [
-                d,
-                mun,
-                p,
-                float(lat),
-                float(lon),
-                float(mca),
-                obs
-            ]
-            for d, mun, p, lat, lon, mca, obs in linhas_novas
-        ]
-
-        worksheet.append_rows(
-            dados_formatados,
-            value_input_option="RAW",
-            table_range="A1:G"
-        )
-
+        # Respeita o cabeçalho real sem reescrever linhas antigas A:G.
+        modo = conferir_estrutura_planilha(worksheet)
+        if modo == "com_id":
+            dados = [[f"MP-{uuid.uuid4().hex[:16].upper()}"] + campos for campos in linhas_novas]
+            tabela = "A1:H"
+        else:
+            dados = linhas_novas
+            tabela = "A1:G"
+        worksheet.append_rows(dados, value_input_option="RAW", table_range=tabela)
         time.sleep(0.3)
         limpar_cache()
-
         return len(linhas_novas)
-
     return 0
 
 
@@ -461,29 +442,31 @@ def atualizar_ponto(
     mca: float,
     obs: str
 ) -> bool:
-
     try:
-        target_row = linha_real + 2
-
-        worksheet.update(
-            range_name=f"A{target_row}:G{target_row}",
-            values=[[
-                str(data_str),
-                str(municipio),
-                str(pontos),
-                float(lat),
-                float(lon),
-                float(mca),
-                str(obs or "")
-            ]],
-            value_input_option="RAW"
-        )
-
+        target_row = int(linha_real) + 2
+        atual = worksheet.row_values(target_row)
+        modo = conferir_estrutura_planilha(worksheet)
+        formato, _ = _classificar_linha_medicao(atual, modo)
+        if formato == "invalida":
+            raise ValueError(
+                f"Linha {target_row} não corresponde a uma medição reconhecida. "
+                "A edição foi bloqueada para proteger os dados."
+            )
+        data_n = _data_valida_planilha(data_str)
+        lat_n = normalizar_coordenada(lat, "lat")
+        lon_n = normalizar_coordenada(lon, "lon")
+        mca_n = _numero_valido_planilha(mca, 0, float("inf"))
+        if not data_n or lat_n is None or lon_n is None or mca_n is None:
+            raise ValueError("Data, coordenadas ou MCA inválido.")
+        campos = [data_n, str(municipio), str(pontos), f"{lat_n:.6f}",
+                  f"{lon_n:.6f}", str(mca_n), str(obs or "")]
+        # Preserva a coluna ID de registros B:H e o formato A:G nos legados.
+        colunas = ("B", "H") if formato == "com_id" else ("A", "G")
+        worksheet.update(range_name=f"{colunas[0]}{target_row}:{colunas[1]}{target_row}",
+                         values=[campos], value_input_option="RAW")
         time.sleep(0.3)
         limpar_cache()
-
         return True
-
     except Exception as e:
         st.error(f"Erro ao atualizar: {e}")
         return False
