@@ -14,7 +14,8 @@ import uuid
 from typing import Optional
 import time
 import plotly.express as px
-from branca.element import Element
+from branca.element import Element, MacroElement
+from jinja2 import Template
 from html import escape
 import unicodedata
 import re
@@ -3312,7 +3313,7 @@ if not df_filtrado.empty:
                     marker_html = f"""
                     <div
                         class="bp-marker-wrapper bp-individual-marker-wrapper"
-                        data-bp-priority="1"
+                        data-bp-priority="{4 if pressao == 0 else 3 if pressao <= 5 else 2 if pressao <= 15 else 1}"
                         style="
                             position:relative;
                             width:42px;
@@ -3347,7 +3348,7 @@ if not df_filtrado.empty:
                     marker_html = f"""
                     <div
                         class="bp-marker-wrapper bp-individual-marker-wrapper"
-                        data-bp-priority="1"
+                        data-bp-priority="{4 if pressao == 0 else 3 if pressao <= 5 else 2 if pressao <= 15 else 1}"
                         style="
                             position:relative;
                             width:42px;
@@ -3931,6 +3932,11 @@ map_style_html = """
         width: 90px;
 
         padding: 5px 7px;
+
+        /* Visibilidade resolvida pela rotina de colisões do mapa. */
+        visibility: hidden;
+
+        white-space: nowrap;
     }
 
 
@@ -3967,542 +3973,151 @@ m.get_root().html.add_child(
 
 
 # ============================================================
-# DESCONGESTIONAMENTO DINÂMICO DOS RÓTULOS
+# DESCONGESTIONAMENTO DOS RÓTULOS — SOMENTE MEDIÇÕES INDIVIDUAIS
 # ============================================================
-map_name = m.get_name()
-
-declutter_js = """
-<script>
+# A lógica deve executar DEPOIS que o Folium criar o mapa e os marcadores.
+# Um MacroElement é renderizado após os marcadores, ao contrário de um
+# Element anexado ao HTML da página, que era executado cedo demais.
+# Mantemos TODOS os pins e pop-ups: se um rótulo não couber, só o rótulo
+# fica oculto. Ele é reavaliado automaticamente após zoom/pan.
+class ReorganizarRotulosIndividuais(MacroElement):
+    def __init__(self):
+        super().__init__()
+        self._name = "ReorganizarRotulosIndividuais"
+        self._template = Template(r"""
+{% macro script(this, kwargs) %}
 (function() {
-
-    function iniciarDeclutter() {
-
-        if (typeof MAP_NAME_PLACEHOLDER === "undefined") {
-
-            setTimeout(
-                iniciarDeclutter,
-                150
-            );
-
-            return;
-        }
-
-
-        var map = MAP_NAME_PLACEHOLDER;
-
-
-        function caixasSeSobrepoem(
-            a,
-            b,
-            margem
-        ) {
-
-            return !(
-                a.right + margem < b.left ||
-                a.left - margem > b.right ||
-                a.bottom + margem < b.top ||
-                a.top - margem > b.bottom
-            );
-        }
-
-
-        function estaDentroDoMapa(
-            caixa,
-            areaMapa,
-            margem
-        ) {
-
-            return !(
-                caixa.left < areaMapa.left + margem ||
-                caixa.right > areaMapa.right - margem ||
-                caixa.top < areaMapa.top + margem ||
-                caixa.bottom > areaMapa.bottom - margem
-            );
-        }
-
-
-        function aplicarPosicao(
-            rotulo,
-            posicao
-        ) {
-
-            rotulo.style.left = "";
-            rotulo.style.top = "";
-            rotulo.style.transform = "";
-
-
-            if (posicao === "top") {
-
-                rotulo.style.left = "50%";
-
-                if (
-                    rotulo.classList.contains(
-                        "bp-label-card-bairro"
-                    )
-                ) {
-
-                    rotulo.style.top = "-80px";
-
-                } else {
-
-                    rotulo.style.top = "-180px";
-
-                }
-
-                rotulo.style.transform =
-                    "translate(-50%, -100%)";
-
-            }
-
-            else if (posicao === "bottom") {
-
-                rotulo.style.left = "50%";
-                rotulo.style.top = "78px";
-                rotulo.style.transform =
-                    "translate(-50%, 0)";
-
-            }
-
-            else if (posicao === "right") {
-
-                rotulo.style.left = "52px";
-                rotulo.style.top = "32px";
-                rotulo.style.transform =
-                    "translate(0, -50%)";
-
-            }
-
-            else if (posicao === "left") {
-
-                rotulo.style.left = "-12px";
-                rotulo.style.top = "32px";
-                rotulo.style.transform =
-                    "translate(-100%, -50%)";
-
-            }
-
-            else if (posicao === "top-right") {
-
-                rotulo.style.left = "48px";
-                rotulo.style.top = "-8px";
-                rotulo.style.transform =
-                    "translate(0, -100%)";
-
-            }
-
-            else if (posicao === "top-left") {
-
-                rotulo.style.left = "-8px";
-                rotulo.style.top = "-8px";
-                rotulo.style.transform =
-                    "translate(-100%, -100%)";
-
-            }
-
-            else if (posicao === "bottom-right") {
-
-                rotulo.style.left = "48px";
-                rotulo.style.top = "78px";
-                rotulo.style.transform =
-                    "translate(0, 0)";
-
-            }
-
-            else if (posicao === "bottom-left") {
-
-                rotulo.style.left = "-8px";
-                rotulo.style.top = "78px";
-                rotulo.style.transform =
-                    "translate(-100%, 0)";
-
-            }
-        }
-
-
-        function recalcularRotulos() {
-
-            var container = map.getContainer();
-
-            if (!container) {
-                return;
-            }
-
-            var areaMapa =
-                container.getBoundingClientRect();
-
-            var marcadores =
-                container.querySelectorAll(
-                    ".pressao-bairro-marker .bp-marker-wrapper, " +
-                    ".pressao-individual-marker .bp-marker-wrapper"
-                );
-
-            if (!marcadores.length) {
-                return;
-            }
-
-            var candidatos = [];
-
-            marcadores.forEach(
-                function(wrapper) {
-
-                    var rotulo =
-                        wrapper.querySelector(
-                            ".bp-label-card"
-                        );
-
-                    if (!rotulo) {
-                        return;
-                    }
-
-                    var svg =
-                        wrapper.querySelector(
-                            ".bp-pin-svg"
-                        );
-
-                    if (svg) {
-
-                        var path =
-                            svg.querySelector(
-                                "path"
-                            );
-
-                        if (path) {
-
-                            var corPin =
-                                path.getAttribute(
-                                    "fill"
-                                );
-
-                            if (corPin) {
-
-                                wrapper.style.setProperty(
-                                    "--bp-color",
-                                    corPin
-                                );
-                            }
-                        }
-                    }
-
-                    rotulo.style.display =
-                        "block";
-
-                    rotulo.style.visibility =
-                        "hidden";
-
-                    aplicarPosicao(
-                        rotulo,
-                        "top"
-                    );
-
-                    var prioridade =
-                        parseInt(
-                            wrapper.getAttribute(
-                                "data-bp-priority"
-                            ) || "0",
-                            10
-                        );
-
-                    if (isNaN(prioridade)) {
-                        prioridade = 0;
-                    }
-
-                    var individual =
-                        wrapper.classList.contains(
-                            "bp-individual-marker-wrapper"
-                        );
-
-                    candidatos.push({
-
-                        wrapper: wrapper,
-
-                        rotulo: rotulo,
-
-                        prioridade: prioridade,
-
-                        individual: individual,
-
-                        ordem: candidatos.length
-
-                    });
-
-                }
-            );
-
-
-            candidatos.sort(
-                function(a, b) {
-
-                    if (
-                        a.individual
-                        !==
-                        b.individual
-                    ) {
-
-                        return a.individual
-                            ? 1
-                            : -1;
-                    }
-
-                    if (
-                        b.prioridade
-                        !==
-                        a.prioridade
-                    ) {
-
-                        return (
-                            b.prioridade
-                            -
-                            a.prioridade
-                        );
-                    }
-
-                    return (
-                        a.ordem
-                        -
-                        b.ordem
-                    );
-
-                }
-            );
-
-
-            var posicoes = [
-
-                "top",
-
-                "bottom",
-
-                "right",
-
-                "left",
-
-                "top-right",
-
-                "top-left",
-
-                "bottom-right",
-
-                "bottom-left"
-
-            ];
-
-
-            var aceitos = [];
-
-            var margem = 8;
-
-            var margemMapa = 4;
-
-
-            candidatos.forEach(
-                function(item) {
-
-                    var encontrouPosicao = false;
-
-                    var pinEl =
-                        item.wrapper.querySelector(
-                            ".bp-pin-svg"
-                        )
-                        ||
-                        item.wrapper;
-
-                    var caixaPin =
-                        pinEl.getBoundingClientRect();
-
-
-                    for (
-                        var p = 0;
-                        p < posicoes.length;
-                        p++
-                    ) {
-
-                        var posicao =
-                            posicoes[p];
-
-                        aplicarPosicao(
-                            item.rotulo,
-                            posicao
-                        );
-
-                        var caixa =
-                            item.rotulo
-                            .getBoundingClientRect();
-
-
-                        if (
-                            !estaDentroDoMapa(
-                                caixa,
-                                areaMapa,
-                                margemMapa
-                            )
-                        ) {
-
-                            continue;
-                        }
-
-
-                        if (
-                            caixasSeSobrepoem(
-                                caixa,
-                                caixaPin,
-                                4
-                            )
-                        ) {
-
-                            continue;
-                        }
-
-
-                        var conflito = false;
-
-
-                        for (
-                            var i = 0;
-                            i < aceitos.length;
-                            i++
-                        ) {
-
-                            if (
-                                caixasSeSobrepoem(
-                                    caixa,
-                                    aceitos[i],
-                                    margem
-                                )
-                            ) {
-
-                                conflito = true;
-
-                                break;
-                            }
-                        }
-
-
-                        if (!conflito) {
-
-                            item.rotulo.style.visibility =
-                                "visible";
-
-                            aceitos.push(
-                                caixa
-                            );
-
-                            encontrouPosicao = true;
-
-                            break;
-                        }
-
-                    }
-
-
-                    if (!encontrouPosicao) {
-
-                        item.rotulo.style.visibility =
-                            "hidden";
-
-                    }
-
-                }
-            );
-        }
-
-
-        var agendamento = null;
-
-
-        function agendarRecalculo() {
-
-            if (agendamento) {
-
-                clearTimeout(
-                    agendamento
-                );
-            }
-
-            agendamento = setTimeout(
-                function() {
-
-                    recalcularRotulos();
-
-                    requestAnimationFrame(
-                        function() {
-
-                            recalcularRotulos();
-
-                        }
-                    );
-
-                    agendamento = null;
-
-                },
-                80
-            );
-        }
-
-
-        map.on(
-            "zoomend",
-            agendarRecalculo
-        );
-
-
-        map.on(
-            "moveend",
-            agendarRecalculo
-        );
-
-
-        map.on(
-            "resize",
-            agendarRecalculo
-        );
-
-
-        window.addEventListener(
-            "resize",
-            agendarRecalculo
-        );
-
-
-        setTimeout(
-            recalcularRotulos,
-            100
-        );
-
-
-        setTimeout(
-            recalcularRotulos,
-            250
-        );
-
-
-        setTimeout(
-            recalcularRotulos,
-            500
-        );
-
-
-        setTimeout(
-            recalcularRotulos,
-            900
-        );
-
+    var mapa = {{this._parent.get_name()}};
+    var temporizador = null;
+
+    var posicoes = [
+        {esquerda:"50%", topo:"22px", trans:"translate(-50%, -100%)"},
+        {esquerda:"48px", topo:"47px", trans:"translate(0, -50%)"},
+        {esquerda:"-6px", topo:"47px", trans:"translate(-100%, -50%)"},
+        {esquerda:"48px", topo:"25px", trans:"translate(0, -100%)"},
+        {esquerda:"-6px", topo:"25px", trans:"translate(-100%, -100%)"},
+        {esquerda:"50%", topo:"77px", trans:"translate(-50%, 0)"},
+        {esquerda:"48px", topo:"74px", trans:"translate(0, 0)"},
+        {esquerda:"-6px", topo:"74px", trans:"translate(-100%, 0)"}
+    ];
+
+    function colide(a, b, espaco) {
+        return a.left < b.right + espaco &&
+               a.right + espaco > b.left &&
+               a.top < b.bottom + espaco &&
+               a.bottom + espaco > b.top;
     }
 
+    function dentro(rect, area) {
+        return rect.left >= area.left + 5 &&
+               rect.right <= area.right - 5 &&
+               rect.top >= area.top + 5 &&
+               rect.bottom <= area.bottom - 5;
+    }
 
-    iniciarDeclutter();
+    function alterarPosicao(rotulo, posicao) {
+        rotulo.style.left = posicao.esquerda;
+        rotulo.style.top = posicao.topo;
+        rotulo.style.transform = posicao.trans;
+    }
 
+    function reorganizar() {
+        var container = mapa.getContainer();
+        if (!container) return;
+
+        var limites = container.getBoundingClientRect();
+        var wrappers = container.querySelectorAll(
+            ".pressao-individual-marker .bp-individual-marker-wrapper"
+        );
+
+        if (!wrappers.length) return;
+        var itens = [];
+        var pinos = [];
+
+        wrappers.forEach(function(wrapper, indice) {
+            var rotulo = wrapper.querySelector(".bp-label-card-individual");
+            var pino = wrapper.querySelector(".bp-pin-svg");
+            if (!pino) return;
+            var caixaPin = pino.getBoundingClientRect();
+            if (!caixaPin.width || !caixaPin.height) return;
+
+            // Evita contar como obstáculo um marcador fora do mapa visível.
+            if (caixaPin.right < limites.left ||
+                caixaPin.left > limites.right ||
+                caixaPin.bottom < limites.top ||
+                caixaPin.top > limites.bottom) return;
+
+            pinos.push({indice:indice, caixa:caixaPin});
+            if (!rotulo) return;
+            rotulo.style.visibility = "hidden";
+            rotulo.style.display = "block";
+
+            var caminho = pino.querySelector("path");
+            if (caminho) {
+                var cor = caminho.getAttribute("fill");
+                if (cor) wrapper.style.setProperty("--bp-color", cor);
+            }
+
+            itens.push({
+                indice:indice,
+                rotulo:rotulo,
+                prioridade: Number(wrapper.getAttribute("data-bp-priority") || 0),
+                caixaPin:caixaPin
+            });
+        });
+
+        // As leituras críticas têm prioridade visual quando o mapa está cheio.
+        itens.sort(function(a,b) {
+            return (b.prioridade - a.prioridade) || (a.indice - b.indice);
+        });
+
+        var ocupados = [];
+        var maximoRotulos = 150;
+        var exibidos = 0;
+        itens.forEach(function(item) {
+            if (exibidos >= maximoRotulos) return;
+            for (var p = 0; p < posicoes.length; p++) {
+                alterarPosicao(item.rotulo, posicoes[p]);
+                var caixa = item.rotulo.getBoundingClientRect();
+                if (!caixa.width || !caixa.height || !dentro(caixa, limites)) continue;
+                if (colide(caixa, item.caixaPin, 3)) continue;
+
+                // Nunca cobre outro pin, mesmo quando seu rótulo está oculto.
+                var cobrePino = pinos.some(function(outro) {
+                    return outro.indice !== item.indice && colide(caixa, outro.caixa, 2);
+                });
+                if (cobrePino) continue;
+
+                if (ocupados.some(function(c) {return colide(caixa,c,6);})) continue;
+                item.rotulo.style.visibility = "visible";
+                ocupados.push(caixa);
+                exibidos++;
+                break;
+            }
+        });
+    }
+
+    function agendar() {
+        if (temporizador !== null) clearTimeout(temporizador);
+        temporizador = setTimeout(function() {
+            temporizador = null;
+            // Antes de medir, aguarda estabilizar o posicionamento do Leaflet.
+            requestAnimationFrame(reorganizar);
+        }, 90);
+    }
+
+    mapa.whenReady(function() {
+        agendar();
+        mapa.on("zoomend moveend resize", agendar);
+        window.addEventListener("resize", agendar);
+    });
 })();
-</script>
-"""
+{% endmacro %}
+""")
 
-declutter_js = declutter_js.replace(
-    "MAP_NAME_PLACEHOLDER",
-    map_name
-)
 
-m.get_root().html.add_child(
-    Element(declutter_js)
-)
+if modo_visualizacao == "Medições individuais" and mostrar_rotulos:
+    m.add_child(ReorganizarRotulosIndividuais())
 
 
 # ============================================================
