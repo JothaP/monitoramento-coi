@@ -3929,9 +3929,10 @@ map_style_html = """
 
     .bp-label-card-individual {
 
-        width: 90px;
+        /* Rótulo compacto: permanece junto ao pin, nunca solto no mapa. */
+        width: 82px;
 
-        padding: 5px 7px;
+        padding: 4px 5px;
 
         /* Visibilidade resolvida pela rotina de colisões do mapa. */
         visibility: hidden;
@@ -3978,8 +3979,8 @@ m.get_root().html.add_child(
 # A lógica deve executar DEPOIS que o Folium criar o mapa e os marcadores.
 # Um MacroElement é renderizado após os marcadores, ao contrário de um
 # Element anexado ao HTML da página, que era executado cedo demais.
-# Mantemos TODOS os pins e pop-ups: se um rótulo não couber, só o rótulo
-# fica oculto. Ele é reavaliado automaticamente após zoom/pan.
+# Mantemos TODOS os pins e pop-ups: se um rótulo não couber junto do pin,
+# só o rótulo fica oculto. Ele é reavaliado após zoom/pan.
 class ReorganizarRotulosIndividuais(MacroElement):
     def __init__(self):
         super().__init__()
@@ -3990,16 +3991,29 @@ class ReorganizarRotulosIndividuais(MacroElement):
     var mapa = {{this._parent.get_name()}};
     var temporizador = null;
 
-    var posicoes = [
-        {esquerda:"50%", topo:"22px", trans:"translate(-50%, -100%)"},
-        {esquerda:"48px", topo:"47px", trans:"translate(0, -50%)"},
-        {esquerda:"-6px", topo:"47px", trans:"translate(-100%, -50%)"},
-        {esquerda:"48px", topo:"25px", trans:"translate(0, -100%)"},
-        {esquerda:"-6px", topo:"25px", trans:"translate(-100%, -100%)"},
-        {esquerda:"50%", topo:"77px", trans:"translate(-50%, 0)"},
-        {esquerda:"48px", topo:"74px", trans:"translate(0, 0)"},
-        {esquerda:"-6px", topo:"74px", trans:"translate(-100%, 0)"}
-    ];
+    // Distância visual máxima = poucos pixels entre bordas de rótulo e pin.
+    // Não usamos deslocamentos progressivos para longe do marcador.
+    var distanciaDoPin = 3;
+
+    function posicoesProximas(pin, largura, altura) {
+        var centroX = (pin.left + pin.right) / 2;
+        var topo = pin.top;
+        var base = pin.bottom;
+        var margem = distanciaDoPin;
+
+        // Ordem de preferência: acima do pin, depois nas laterais e abaixo.
+        // Todas as opções ficam a 3px da caixa do próprio marcador.
+        return [
+            {x:centroX - largura/2, y:topo - altura - margem},
+            {x:pin.right + margem, y:topo - altura*0.18},
+            {x:pin.left - largura - margem, y:topo - altura*0.18},
+            {x:pin.right + margem, y:topo + 12},
+            {x:pin.left - largura - margem, y:topo + 12},
+            {x:centroX - largura/2 - 17, y:topo - altura - margem},
+            {x:centroX - largura/2 + 17, y:topo - altura - margem},
+            {x:centroX - largura/2, y:base + margem}
+        ];
+    }
 
     function colide(a, b, espaco) {
         return a.left < b.right + espaco &&
@@ -4015,10 +4029,11 @@ class ReorganizarRotulosIndividuais(MacroElement):
                rect.bottom <= area.bottom - 5;
     }
 
-    function alterarPosicao(rotulo, posicao) {
-        rotulo.style.left = posicao.esquerda;
-        rotulo.style.top = posicao.topo;
-        rotulo.style.transform = posicao.trans;
+    function alterarPosicao(rotulo, wrapper, posicao) {
+        var referencia = wrapper.getBoundingClientRect();
+        rotulo.style.left = (posicao.x - referencia.left) + "px";
+        rotulo.style.top = (posicao.y - referencia.top) + "px";
+        rotulo.style.transform = "none";
     }
 
     function reorganizar() {
@@ -4060,6 +4075,7 @@ class ReorganizarRotulosIndividuais(MacroElement):
 
             itens.push({
                 indice:indice,
+                wrapper:wrapper,
                 rotulo:rotulo,
                 prioridade: Number(wrapper.getAttribute("data-bp-priority") || 0),
                 caixaPin:caixaPin
@@ -4076,19 +4092,33 @@ class ReorganizarRotulosIndividuais(MacroElement):
         var exibidos = 0;
         itens.forEach(function(item) {
             if (exibidos >= maximoRotulos) return;
+
+            // Mede o próprio cartão antes de calcular posições locais ao pin.
+            // A caixa é reposicionada no mesmo referencial do Leaflet.
+            item.rotulo.style.transform = "none";
+            item.rotulo.style.left = "0px";
+            item.rotulo.style.top = "0px";
+            var medida = item.rotulo.getBoundingClientRect();
+            if (!medida.width || !medida.height) return;
+
+            var posicoes = posicoesProximas(
+                item.caixaPin, medida.width, medida.height
+            );
+
             for (var p = 0; p < posicoes.length; p++) {
-                alterarPosicao(item.rotulo, posicoes[p]);
+                alterarPosicao(item.rotulo, item.wrapper, posicoes[p]);
                 var caixa = item.rotulo.getBoundingClientRect();
                 if (!caixa.width || !caixa.height || !dentro(caixa, limites)) continue;
-                if (colide(caixa, item.caixaPin, 3)) continue;
+                if (colide(caixa, item.caixaPin, 1)) continue;
 
-                // Nunca cobre outro pin, mesmo quando seu rótulo está oculto.
+                // Não cobre outros pins nem rótulos existentes. Se não houver
+                // espaço perto do marcador, oculta só o cartão desse ponto.
                 var cobrePino = pinos.some(function(outro) {
                     return outro.indice !== item.indice && colide(caixa, outro.caixa, 2);
                 });
                 if (cobrePino) continue;
 
-                if (ocupados.some(function(c) {return colide(caixa,c,6);})) continue;
+                if (ocupados.some(function(c) {return colide(caixa,c,4);})) continue;
                 item.rotulo.style.visibility = "visible";
                 ocupados.push(caixa);
                 exibidos++;
