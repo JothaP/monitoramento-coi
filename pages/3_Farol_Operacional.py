@@ -3593,23 +3593,38 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
                 return [[protocolo_os_relatorio(r), str(r.get("Matrícula", "")),
                          str(r.get("Status OS", ""))] for _, r in base.iterrows()]
 
-            def tabela_os(linhas, largura_total=11.85*cm):
+            def tabela_os(linhas, largura_total=11.85*cm, titulo_continuacao=None):
                 cab = [[Paragraph("<b>O.S. / Ano</b>", pequeno),
                         Paragraph("<b>Matrícula</b>", pequeno),
                         Paragraph("<b>Status</b>", pequeno)]]
                 cab.extend([[Paragraph(xml_escape(str(v)), pequeno) for v in linha] for linha in linhas])
                 larguras = [largura_total * 0.37, largura_total * 0.27, largura_total * 0.36]
-                t = Table(cab, colWidths=larguras, repeatRows=1, hAlign="LEFT")
+                # Continuação: incorporar o título ao cabeçalho da tabela,
+                # evitando que o ReportLab envie uma tabela longa inteira
+                # para a página seguinte só para manter o título junto dela.
+                # O cabeçalho da categoria e o das colunas são repetidos.
+                linha_cabecalho = 0
+                estilos_extras = []
+                if titulo_continuacao:
+                    cab.insert(0, [Paragraph("<b>" + xml_escape(titulo_continuacao) + "</b>", pequeno), "", ""])
+                    linha_cabecalho = 1
+                    estilos_extras.extend([
+                        ("SPAN", (0, 0), (-1, 0)),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F4F7FB")),
+                        ("TOPPADDING", (0, 0), (-1, 0), 7),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+                    ])
+                t = Table(cab, colWidths=larguras, repeatRows=linha_cabecalho+1, hAlign="LEFT")
                 t.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DEE8F2")),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                    ("BACKGROUND", (0, linha_cabecalho), (-1, linha_cabecalho), colors.HexColor("#DEE8F2")),
+                    ("ROWBACKGROUNDS", (0, linha_cabecalho+1), (-1, -1),
                      [colors.white, colors.HexColor("#F4F7FB")]),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 3),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 2),
                     ("TOPPADDING", (0, 0), (-1, -1), 2),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-                ]))
+                ] + estilos_extras))
                 return t
 
             categorias = [
@@ -3665,24 +3680,20 @@ def gerar_pdf_operacional(concentracoes, pontos, pontos_cluster, proximidades, e
             historia.append(ficha)
             historia.append(Spacer(1, 7))
 
-            # Se houver excedente, continuar abaixo do mapa com o mesmo
-            # fundo cinza, cabeçalho azul-claro e listras da tabela lateral.
+            # A tabela de continuação fica diretamente na história do PDF:
+            # não é embrulhada em uma célula única (causa de LayoutError).
+            # Com cabeçalhos integrados e repeatRows=2, o conteúdo é dividido
+            # por linhas, a categoria acompanha suas O.S. e não se perde
+            # nenhum registro, mesmo quando há centenas de O.S. por ficha.
             for (nome, linhas), exibidas in zip(categorias, contagens):
                 restantes = linhas[exibidas:]
                 if not restantes:
                     continue
-                conteudo_extra = [Paragraph(f"<b>{nome} — continuação</b>", pequeno),
-                                  Spacer(1, 4), tabela_os(restantes, largura_total=25.6*cm)]
-                painel_extra = Table([[conteudo_extra]], colWidths=[26.6*cm], hAlign="LEFT")
-                painel_extra.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F4F7FB")),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-                    ("TOPPADDING", (0, 0), (-1, -1), 8),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                ]))
-                historia.append(Spacer(1, 6))
-                historia.append(painel_extra)
+                historia.append(tabela_os(
+                    restantes,
+                    largura_total=25.6*cm,
+                    titulo_continuacao=f"{nome} — continuação",
+                ))
             # O acompanhamento vem DEPOIS de todo o conteúdo original,
             # preservando o mapa e as O.S. que continuam abaixo dele.
             historia.extend(secao_pdf_acompanhamento(c, largura=26.6*cm))
@@ -4005,7 +4016,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
         # Panorama sem O.S./equipamentos, mas com bairros e eventos de todos os municípios analisados.
-        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular vermelho para abrir a concentração.")
+        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular azul para abrir a concentração.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
         codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
         selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
