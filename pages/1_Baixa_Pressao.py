@@ -3332,25 +3332,11 @@ if not df_filtrado.empty:
                             class="bp-label-card bp-label-card-individual"
                             data-bp-default="top"
                         >
-
-                            <div class="bp-label-title">
-                                {escape(bairro)}
-                            </div>
-
                             <div class="bp-label-data">
-
                                 <span class="bp-label-pressure">
                                     {pressao_formatada} MCA
                                 </span>
-
-                                <span class="bp-label-separator"></span>
-
-                                <span>
-                                    {escape(classificacao)}
-                                </span>
-
                             </div>
-
                         </div>
 
                     </div>
@@ -3942,23 +3928,21 @@ map_style_html = """
 
     .bp-label-card-individual {
 
-        width: 145px;
+        width: 90px;
 
         padding: 5px 7px;
     }
 
 
-    .bp-label-card-individual .bp-label-title {
-
-        font-size: 10px;
-    }
-
-
     .bp-label-card-individual .bp-label-data {
 
-        font-size: 8.5px;
+        font-size: 10px;
 
-        gap: 5px;
+        margin-top: 0;
+
+        gap: 0;
+
+        justify-content: center;
     }
 
 
