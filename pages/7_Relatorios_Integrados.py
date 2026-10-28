@@ -1599,15 +1599,26 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
         for (nome,linhas),ja_exibidas in zip(categorias,contagens):
             restantes=linhas[ja_exibidas:]
             if restantes:
-                painel=Table([[[P(f"{nome} — continuação"),Spacer(1,4),
-                                 tabela_os(restantes,25.6*cm)]]],colWidths=[26.6*cm],hAlign="LEFT")
-                painel.setStyle(TableStyle([
-                    ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#f4f7fb")),
-                    ("LEFTPADDING",(0,0),(-1,-1),10),
-                    ("RIGHTPADDING",(0,0),(-1,-1),10),
-                    ("TOPPADDING",(0,0),(-1,-1),8),
-                    ("BOTTOMPADDING",(0,0),(-1,-1),8)]))
-                historia.extend([Spacer(1,5),painel])
+                # IMPORTANTE: não envolver todas as O.S. restantes em uma
+                # Table de célula única. Uma célula com outra tabela dentro
+                # não pode ser quebrada pelo ReportLab entre duas páginas;
+                # listas longas geravam LayoutError (célula maior que a página).
+                # A tabela de O.S. fica diretamente na história do PDF, para
+                # permitir quebra por linha e repetição automática do cabeçalho.
+                cabecalho_continuacao = Paragraph(
+                    "<b>" + xml_escape(f"{nome} — continuação") + "</b>",
+                    ParagraphStyle(
+                        "farol_integra_continuacao_os",
+                        parent=pequeno,
+                        spaceBefore=9,
+                        spaceAfter=5,
+                        keepWithNext=1,
+                    ),
+                )
+                historia.extend([
+                    cabecalho_continuacao,
+                    tabela_os(restantes, 25.6*cm),
+                ])
         # Padrão do Farol: equipamentos são exibidos no mapa e os eventos no
         # painel de O.S. Não criar quadros extras que alterem o layout original.
         # Somente os dados da ficha são usados no PDF. Não consultar o histórico.
