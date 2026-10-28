@@ -4005,7 +4005,7 @@ if st.session_state.get("farol_tela", "mapa") == "mapa":
         k4.metric("Pontos operacionais próximos", len(proximidades))
 
         # Panorama sem O.S./equipamentos, mas com bairros e eventos de todos os municípios analisados.
-        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular azul para abrir a concentração.")
+        st.caption("Panorama: limites de bairros e áreas impactadas por eventos; selecione o símbolo circular vermelho para abrir a concentração.")
         _inicio_renderizacao = tempo_execucao.perf_counter()
         codigos_validos = set(concentracoes["ID_CONCENTRACAO"].astype(str))
         selecionada = str(st.session_state.get("farol_v2_concentracao", "") or "")
