@@ -1658,33 +1658,47 @@ def obter_identificador_upload(
 # ============================================================
 
 def limpar_filtros_tela():
+    """Restaura todos os filtros antes de os widgets serem desenhados.
 
-    chaves_widgets = [
+    Esta função é chamada por on_click: callbacks do Streamlit executam
+    ANTES da renderização seguinte. Alterar apenas o argumento default=
+    de um widget já registrado não limpa seu valor em session_state.
+    """
+
+    # Multiseleções (Cidade, Bairro, Ano, Mês e Dia).
+    for chave in (
         "filtragem_cidades",
         "filtragem_bairros",
         "filtragem_anos",
         "filtragem_meses",
         "filtragem_dias",
+    ):
+        st.session_state[chave] = []
+
+    # Horários de abertura e observação do lote.
+    for chave in (
         "filtragem_hora_inicial",
         "filtragem_hora_final",
         "filtragem_observacao_lote",
-        "upload_arquivo_eventos",
-    ]
+    ):
+        st.session_state[chave] = ""
 
-    # --------------------------------------------------------
-    # Flag usada para informar aos widgets, na próxima
-    # execução, que devem iniciar vazios.
-    # --------------------------------------------------------
+    # st.file_uploader não permite atribuir None diretamente ao seu estado.
+    # Trocar a chave do componente cria um uploader vazio na próxima renderização,
+    # sem apagar as bases carregadas no hub do Gerador de Lotes.
+    versao_atual = int(st.session_state.get("filtragem_eventos_upload_versao", 0))
+    st.session_state["filtragem_eventos_upload_versao"] = versao_atual + 1
 
-    st.session_state[
-        "filtragem_resetar"
-    ] = True
+    # A versão anterior usava a chave fixa. Removê-la impede que um upload
+    # antigo reapareça durante a migração para o novo componente versionado.
+    st.session_state.pop("upload_arquivo_eventos", None)
+    st.session_state.pop(f"upload_arquivo_eventos_v{versao_atual}", None)
 
-    # --------------------------------------------------------
-    # Estados relacionados ao processamento
-    # --------------------------------------------------------
+    # Desativa a lógica antiga de reset, que alterava apenas os defaults.
+    st.session_state["filtragem_resetar"] = False
 
-    for chave in [
+    # Remove cruzamentos, prévias, lotes e logs do filtro anterior.
+    for chave in (
         "arquivo_eventos_processado",
         "df_eventos",
         "df_comparacao_eventos",
@@ -1692,16 +1706,8 @@ def limpar_filtros_tela():
         "df_resultado_lote",
         "df_log",
         "nome_arquivo_resultado",
-    ]:
-
-        st.session_state.pop(
-            chave,
-            None,
-        )
-
-    # --------------------------------------------------------
-    # Limpa resultado global do módulo
-    # --------------------------------------------------------
+    ):
+        st.session_state.pop(chave, None)
 
     limpar_resultado()
 
@@ -1774,7 +1780,7 @@ def render_filtragem():
         arquivo_eventos = st.file_uploader(
             "Enviar arquivo de Eventos",
             type=["xlsx"],
-            key="upload_arquivo_eventos",
+            key=f"upload_arquivo_eventos_v{st.session_state.get('filtragem_eventos_upload_versao', 0)}",
         )
 
     # ========================================================
@@ -2505,21 +2511,15 @@ def render_filtragem():
 
     with col_btn2:
 
-        limpar = st.button(
+        st.button(
             "🧹 Limpar Filtros",
             use_container_width=True,
             key="filtragem_limpar",
+            on_click=limpar_filtros_tela,
         )
 
-    # ========================================================
-    # LIMPAR FILTROS
-    # ========================================================
-
-    if limpar:
-
-        limpar_filtros_tela()
-
-        st.rerun()
+    # O callback executa antes da reconstrução da tela; o Streamlit faz
+    # o rerun automaticamente e todos os controles exibem os valores vazios.
 
     # ========================================================
     # APLICAÇÃO DOS FILTROS
