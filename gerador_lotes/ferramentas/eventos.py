@@ -628,12 +628,16 @@ def preparar_eventos(df_eventos: pd.DataFrame, regra_janela=REGRA_PADRAO):
         "Previsao de Termino",
     )
 
-    coluna_descricao = encontrar_coluna(
+    coluna_servico = encontrar_coluna(
         df,
-        "Descrição do Serviço",
-        "Descricao do Servico",
-        "Descrição",
-        "Descricao",
+        "Serviço",
+        "Servico",
+    )
+
+    coluna_codigo_ativo = encontrar_coluna(
+        df,
+        "Código do Ativo",
+        "Codigo do Ativo",
     )
 
     faltantes = []
@@ -774,18 +778,20 @@ def preparar_eventos(df_eventos: pd.DataFrame, regra_janela=REGRA_PADRAO):
     eventos["fim_janela_exclusivo"] = (regra_janela == "dia_inteiro")
 
     # --------------------------------------------------------
-    # DESCRIÇÃO
+    # OBSERVAÇÃO: SERVIÇO / CÓDIGO DO ATIVO
     # --------------------------------------------------------
 
-    if coluna_descricao is not None:
-        eventos["descricao"] = (
-            df[coluna_descricao]
-            .fillna("")
-            .astype(str)
-            .str.strip()
+    if coluna_servico is not None:
+        eventos["servico"] = df[coluna_servico].apply(limpar_texto_observacao)
+    else:
+        eventos["servico"] = ""
+
+    if coluna_codigo_ativo is not None:
+        eventos["codigo_ativo"] = df[coluna_codigo_ativo].apply(
+            lambda valor: limpar_texto_observacao(valor, codigo_ativo=True)
         )
     else:
-        eventos["descricao"] = ""
+        eventos["codigo_ativo"] = ""
 
     # --------------------------------------------------------
     # TODO MUNICÍPIO
@@ -938,21 +944,41 @@ def formatar_periodo_evento(
 # OBSERVAÇÃO
 # ============================================================
 
-def montar_observacao(descricao):
+def limpar_texto_observacao(valor, codigo_ativo=False):
+    """Normaliza valores vazios sem transformar NaN em texto na observação."""
+    if valor is None:
+        return ""
 
-    descricao = (
-        ""
-        if descricao is None
-        else str(descricao).strip()
-    )
+    try:
+        if pd.isna(valor):
+            return ""
+    except (TypeError, ValueError):
+        pass
 
-    descricao = re.sub(
-        r"\s+",
-        " ",
-        descricao,
-    )
+    texto = re.sub(r"\s+", " ", str(valor).strip())
+    if texto.casefold() in {"", "nan", "nat", "none", "null", "<na>", "-"}:
+        return ""
+    if codigo_ativo and normalizar_texto(texto) in {
+        "NAO INFORMADO", "NAO INFORMADA", "ATIVO NAO INFORMADO",
+        "CODIGO NAO INFORMADO", "SEM INFORMACAO", "SEM CODIGO",
+        "SEM ATIVO", "NAO CONSTA", "N A", "S N"
+    }:
+        return ""
+    return texto
 
-    return descricao[:280]
+
+def montar_observacao(servico, codigo_ativo=""):
+    """Formato: Serviço/Código do Ativo; sem barra se um campo estiver vazio."""
+    servico = limpar_texto_observacao(servico)
+    codigo_ativo = limpar_texto_observacao(codigo_ativo, codigo_ativo=True)
+
+    if servico and codigo_ativo:
+        observacao = f"{servico}/{codigo_ativo}"
+    else:
+        observacao = servico or codigo_ativo
+
+    # Mantém o limite de tamanho existente no layout de exportação.
+    return observacao[:280]
 
 
 # ============================================================
@@ -1100,9 +1126,12 @@ def cruzar_eventos_com_backlog(
         inicio_janela = evento.get("inicio_janela")
         fim_efetivo = evento.get("fim_efetivo")
 
-        descricao = str(
-            evento.get("descricao", "") or ""
-        ).strip()
+        servico_evento = evento.get("servico", "")
+        codigo_ativo_evento = evento.get("codigo_ativo", "")
+        observacao_evento = montar_observacao(
+            servico_evento,
+            codigo_ativo_evento,
+        )
 
         if (
             not cidade
@@ -1245,7 +1274,6 @@ def cruzar_eventos_com_backlog(
                 # Associa cada protocolo à observação do evento.
                 # Um protocolo pode aparecer em mais de um evento:
                 # nesse caso, reúne as observações distintas na mesma linha.
-                observacao_evento = montar_observacao(descricao)
                 for _, protocolo in chaves_os_evento:
                     codigo = str(protocolo).strip()
                     if codigo and codigo.upper() not in {"NAN", "NONE", "NAT"}:
@@ -1270,9 +1298,7 @@ def cruzar_eventos_com_backlog(
                         "Hora Final": (
                             fim_previsto.strftime("%H:%M")
                         ),
-                        "Observação": montar_observacao(
-                            descricao
-                        ),
+                        "Observação": observacao_evento,
                     }
                 )
 
