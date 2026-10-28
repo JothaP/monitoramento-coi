@@ -3934,8 +3934,9 @@ map_style_html = """
 
         padding: 4px 5px;
 
-        /* Visibilidade resolvida pela rotina de colisões do mapa. */
-        visibility: hidden;
+        /* Rótulos sempre presentes: o JavaScript só ajusta a posição. */
+        visibility: visible;
+        transition: none;
 
         white-space: nowrap;
     }
@@ -3974,13 +3975,14 @@ m.get_root().html.add_child(
 
 
 # ============================================================
-# DESCONGESTIONAMENTO DOS RÓTULOS — SOMENTE MEDIÇÕES INDIVIDUAIS
+# RÓTULOS INDIVIDUAIS — ANCORADOS, SEM OCULTAÇÃO POR COLISÃO
 # ============================================================
-# A lógica deve executar DEPOIS que o Folium criar o mapa e os marcadores.
-# Um MacroElement é renderizado após os marcadores, ao contrário de um
-# Element anexado ao HTML da página, que era executado cedo demais.
-# Mantemos TODOS os pins e pop-ups: se um rótulo não couber junto do pin,
-# só o rótulo fica oculto. Ele é reavaliado após zoom/pan.
+# Mantém todas as medições visíveis. Posiciona cada rótulo tocando a borda
+# do pin sempre que possível. Em áreas densas, busca posições alternativas
+# progressivamente mais distantes. Não utiliza display:none/visibility:hidden
+# para resolver colisões; quando a geometria não permite separação completa,
+# escolhe a posição de menor interferência e mantém o rótulo visível.
+# A rotina roda após a criação dos pins e novamente após zoom/pan/resize.
 class ReorganizarRotulosIndividuais(MacroElement):
     def __init__(self):
         super().__init__()
@@ -3991,139 +3993,196 @@ class ReorganizarRotulosIndividuais(MacroElement):
     var mapa = {{this._parent.get_name()}};
     var temporizador = null;
 
-    // Distância visual máxima = poucos pixels entre bordas de rótulo e pin.
-    // Não usamos deslocamentos progressivos para longe do marcador.
-    var distanciaDoPin = 3;
+    // Retângulos em coordenadas da janela (getBoundingClientRect).
+    function retangulo(x, y, largura, altura) {
+        return {left:x, top:y, right:x+largura, bottom:y+altura};
+    }
 
-    function posicoesProximas(pin, largura, altura) {
-        var centroX = (pin.left + pin.right) / 2;
-        var topo = pin.top;
-        var base = pin.bottom;
-        var margem = distanciaDoPin;
+    function intersecao(a, b) {
+        var w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        var h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return (w > 0 && h > 0) ? w*h : 0;
+    }
 
-        // Ordem de preferência: acima do pin, depois nas laterais e abaixo.
-        // Todas as opções ficam a 3px da caixa do próprio marcador.
-        return [
-            {x:centroX - largura/2, y:topo - altura - margem},
-            {x:pin.right + margem, y:topo - altura*0.18},
-            {x:pin.left - largura - margem, y:topo - altura*0.18},
-            {x:pin.right + margem, y:topo + 12},
-            {x:pin.left - largura - margem, y:topo + 12},
-            {x:centroX - largura/2 - 17, y:topo - altura - margem},
-            {x:centroX - largura/2 + 17, y:topo - altura - margem},
-            {x:centroX - largura/2, y:base + margem}
+    function pontosCandidatos(pin, largura, altura) {
+        var cx = (pin.left + pin.right) / 2;
+        var cy = (pin.top + pin.bottom) / 2;
+        var w = largura, h = altura;
+        var candidatos = [];
+        var vistos = {};
+
+        function colocar(x, y, afastamento) {
+            var chave = Math.round(x)+":"+Math.round(y);
+            if (vistos[chave]) return;
+            vistos[chave] = true;
+            candidatos.push({rect:retangulo(x,y,w,h), distancia:afastamento});
+        }
+
+        // Primeiras posições: o cartão literalmente TOCA o pin (0 px).
+        // As laterais ficam centralizadas na cabeça da gota.
+        var cyCabeça = pin.top + Math.min(15, (pin.bottom-pin.top)*0.35);
+        var bases = [
+            {x:cx-w/2, y:pin.top-h},
+            {x:pin.right, y:cyCabeça-h/2},
+            {x:pin.left-w, y:cyCabeça-h/2},
+            {x:cx-w/2, y:pin.bottom},
+            {x:pin.right, y:pin.top-h},
+            {x:pin.left-w, y:pin.top-h},
+            {x:pin.right, y:pin.bottom},
+            {x:pin.left-w, y:pin.bottom}
         ];
+        bases.forEach(function(p) {colocar(p.x,p.y,0);});
+
+        // Mais opções próximas antes de afastar vertical ou horizontalmente.
+        [-26,-13,13,26].forEach(function(dx) {
+            colocar(cx-w/2+dx,pin.top-h,Math.abs(dx));
+            colocar(cx-w/2+dx,pin.bottom,Math.abs(dx));
+        });
+        [-16,16].forEach(function(dy) {
+            colocar(pin.right,cyCabeça-h/2+dy,Math.abs(dy));
+            colocar(pin.left-w,cyCabeça-h/2+dy,Math.abs(dy));
+        });
+
+        // Apenas se necessário: anéis progressivos para regiões congestionadas.
+        [6,12,20,30,44,60,80,105,135].forEach(function(d) {
+            colocar(cx-w/2,pin.top-h-d,d);
+            colocar(pin.right+d,cyCabeça-h/2,d);
+            colocar(pin.left-w-d,cyCabeça-h/2,d);
+            colocar(cx-w/2,pin.bottom+d,d);
+            colocar(pin.right+d,pin.top-h-d,d*1.42);
+            colocar(pin.left-w-d,pin.top-h-d,d*1.42);
+            colocar(pin.right+d,pin.bottom+d,d*1.42);
+            colocar(pin.left-w-d,pin.bottom+d,d*1.42);
+        });
+        return candidatos;
     }
 
-    function colide(a, b, espaco) {
-        return a.left < b.right + espaco &&
-               a.right + espaco > b.left &&
-               a.top < b.bottom + espaco &&
-               a.bottom + espaco > b.top;
+    function avaliar(item, candidato, itens, pinos, limites) {
+        var r = candidato.rect;
+        var pontuacao = candidato.distancia * 0.65;
+
+        // Evita cartões recortados pelo mapa. Penaliza em vez de ocultar.
+        var sobra = Math.max(0,limites.left+2-r.left) +
+                    Math.max(0,r.right-limites.right+2) +
+                    Math.max(0,limites.top+2-r.top) +
+                    Math.max(0,r.bottom-limites.bottom+2);
+        pontuacao += sobra * 350;
+
+        // Não deixar o próprio cartão encobrir a gota correspondente.
+        pontuacao += intersecao(r,item.pin) * 20;
+
+        // As gotas sempre permanecem no mapa; a rotina evita encobri-las.
+        pinos.forEach(function(p) {
+            if (p.id !== item.id) {
+                pontuacao += intersecao(r,p.rect) * 16;
+            }
+        });
+
+        // Conflito com outros cartões: custo muito maior que afastamento.
+        itens.forEach(function(outro) {
+            if (outro.id !== item.id && outro.posicao) {
+                var sobreposicao = intersecao(r,outro.posicao);
+                if (sobreposicao > 0) pontuacao += 2500 + sobreposicao * 14;
+            }
+        });
+        return pontuacao;
     }
 
-    function dentro(rect, area) {
-        return rect.left >= area.left + 5 &&
-               rect.right <= area.right - 5 &&
-               rect.top >= area.top + 5 &&
-               rect.bottom <= area.bottom - 5;
-    }
-
-    function alterarPosicao(rotulo, wrapper, posicao) {
-        var referencia = wrapper.getBoundingClientRect();
-        rotulo.style.left = (posicao.x - referencia.left) + "px";
-        rotulo.style.top = (posicao.y - referencia.top) + "px";
-        rotulo.style.transform = "none";
+    function melhorPosicao(item, itens, pinos, limites) {
+        var melhor = null, custoMinimo = Infinity;
+        item.candidatos.forEach(function(candidato) {
+            var custo = avaliar(item,candidato,itens,pinos,limites);
+            if (custo < custoMinimo) {
+                melhor = candidato;
+                custoMinimo = custo;
+            }
+        });
+        return melhor;
     }
 
     function reorganizar() {
         var container = mapa.getContainer();
         if (!container) return;
-
         var limites = container.getBoundingClientRect();
         var wrappers = container.querySelectorAll(
             ".pressao-individual-marker .bp-individual-marker-wrapper"
         );
-
         if (!wrappers.length) return;
-        var itens = [];
-        var pinos = [];
 
-        wrappers.forEach(function(wrapper, indice) {
+        var itens = [], pinos = [];
+        wrappers.forEach(function(wrapper, i) {
             var rotulo = wrapper.querySelector(".bp-label-card-individual");
-            var pino = wrapper.querySelector(".bp-pin-svg");
-            if (!pino) return;
-            var caixaPin = pino.getBoundingClientRect();
-            if (!caixaPin.width || !caixaPin.height) return;
+            var svg = wrapper.querySelector(".bp-pin-svg");
+            if (!svg || !rotulo) return;
+            var pin = svg.getBoundingClientRect();
+            if (!pin.width || !pin.height) return;
 
-            // Evita contar como obstáculo um marcador fora do mapa visível.
-            if (caixaPin.right < limites.left ||
-                caixaPin.left > limites.right ||
-                caixaPin.bottom < limites.top ||
-                caixaPin.top > limites.bottom) return;
+            // Marcadores fora da tela não entram no cálculo; a etiqueta não é
+            // removida, apenas fica naturalmente fora da área visível.
+            if (pin.right < limites.left || pin.left > limites.right ||
+                pin.bottom < limites.top || pin.top > limites.bottom) return;
 
-            pinos.push({indice:indice, caixa:caixaPin});
-            if (!rotulo) return;
-            rotulo.style.visibility = "hidden";
             rotulo.style.display = "block";
-
-            var caminho = pino.querySelector("path");
-            if (caminho) {
-                var cor = caminho.getAttribute("fill");
-                if (cor) wrapper.style.setProperty("--bp-color", cor);
+            rotulo.style.visibility = "hidden"; // apenas durante a medição deste ciclo
+            rotulo.style.transform = "none";
+            var largura = rotulo.offsetWidth;
+            var altura = rotulo.offsetHeight;
+            if (!largura || !altura) {
+                rotulo.style.visibility = "visible";
+                return;
             }
 
-            itens.push({
-                indice:indice,
-                wrapper:wrapper,
-                rotulo:rotulo,
-                prioridade: Number(wrapper.getAttribute("data-bp-priority") || 0),
-                caixaPin:caixaPin
-            });
+            var caminho = svg.querySelector("path");
+            var cor = caminho && caminho.getAttribute("fill");
+            if (cor) wrapper.style.setProperty("--bp-color",cor);
+
+            var item = {
+                id:i, wrapper:wrapper, rotulo:rotulo, pin:pin,
+                prioridade:Number(wrapper.getAttribute("data-bp-priority") || 0),
+                posicao:null,
+                candidatos:pontosCandidatos(pin,largura,altura)
+            };
+            itens.push(item);
+            pinos.push({id:i,rect:pin});
         });
 
-        // As leituras críticas têm prioridade visual quando o mapa está cheio.
+        // Prioridade no desempate para pressão zero, SEM eliminar outros rótulos.
         itens.sort(function(a,b) {
-            return (b.prioridade - a.prioridade) || (a.indice - b.indice);
+            return (b.prioridade - a.prioridade) || (a.id - b.id);
         });
 
-        var ocupados = [];
-        var maximoRotulos = 150;
-        var exibidos = 0;
+        // Primeira alocação: procura espaços vazios junto aos respectivos pins.
         itens.forEach(function(item) {
-            if (exibidos >= maximoRotulos) return;
+            var melhor = melhorPosicao(item,itens,pinos,limites);
+            item.posicao = melhor ? melhor.rect : null;
+        });
 
-            // Mede o próprio cartão antes de calcular posições locais ao pin.
-            // A caixa é reposicionada no mesmo referencial do Leaflet.
-            item.rotulo.style.transform = "none";
-            item.rotulo.style.left = "0px";
-            item.rotulo.style.top = "0px";
-            var medida = item.rotulo.getBoundingClientRect();
-            if (!medida.width || !medida.height) return;
+        // Reajuste local: permite mover uma etiqueta que bloqueia outras.
+        // Não muda os pins e nunca descarta rótulos.
+        for (var rodada=0; rodada<3; rodada++) {
+            var mudou = false;
+            itens.forEach(function(item) {
+                var anterior = item.posicao;
+                item.posicao = null;
+                var melhor = melhorPosicao(item,itens,pinos,limites);
+                item.posicao = melhor ? melhor.rect : anterior;
+                if (item.posicao && anterior &&
+                    (item.posicao.left !== anterior.left || item.posicao.top !== anterior.top)) {
+                    mudou = true;
+                }
+            });
+            if (!mudou) break;
+        }
 
-            var posicoes = posicoesProximas(
-                item.caixaPin, medida.width, medida.height
-            );
-
-            for (var p = 0; p < posicoes.length; p++) {
-                alterarPosicao(item.rotulo, item.wrapper, posicoes[p]);
-                var caixa = item.rotulo.getBoundingClientRect();
-                if (!caixa.width || !caixa.height || !dentro(caixa, limites)) continue;
-                if (colide(caixa, item.caixaPin, 1)) continue;
-
-                // Não cobre outros pins nem rótulos existentes. Se não houver
-                // espaço perto do marcador, oculta só o cartão desse ponto.
-                var cobrePino = pinos.some(function(outro) {
-                    return outro.indice !== item.indice && colide(caixa, outro.caixa, 2);
-                });
-                if (cobrePino) continue;
-
-                if (ocupados.some(function(c) {return colide(caixa,c,4);})) continue;
-                item.rotulo.style.visibility = "visible";
-                ocupados.push(caixa);
-                exibidos++;
-                break;
+        itens.forEach(function(item) {
+            var r = item.posicao;
+            if (r) {
+                var origem = item.wrapper.getBoundingClientRect();
+                item.rotulo.style.left = (r.left-origem.left)+"px";
+                item.rotulo.style.top = (r.top-origem.top)+"px";
             }
+            // Mesmo em densidade extrema, a etiqueta permanece visível.
+            item.rotulo.style.visibility = "visible";
         });
     }
 
@@ -4131,15 +4190,14 @@ class ReorganizarRotulosIndividuais(MacroElement):
         if (temporizador !== null) clearTimeout(temporizador);
         temporizador = setTimeout(function() {
             temporizador = null;
-            // Antes de medir, aguarda estabilizar o posicionamento do Leaflet.
             requestAnimationFrame(reorganizar);
-        }, 90);
+        },90);
     }
 
     mapa.whenReady(function() {
         agendar();
-        mapa.on("zoomend moveend resize", agendar);
-        window.addEventListener("resize", agendar);
+        mapa.on("zoomend moveend resize viewreset",agendar);
+        window.addEventListener("resize",agendar);
     });
 })();
 {% endmacro %}
@@ -4148,7 +4206,6 @@ class ReorganizarRotulosIndividuais(MacroElement):
 
 if modo_visualizacao == "Medições individuais" and mostrar_rotulos:
     m.add_child(ReorganizarRotulosIndividuais())
-
 
 # ============================================================
 # LEGENDA DAS CORES
