@@ -14,6 +14,7 @@ import uuid
 from typing import Optional
 import time
 import plotly.express as px
+import plotly.graph_objects as go
 from branca.element import Element, MacroElement
 from jinja2 import Template
 from html import escape
@@ -3046,6 +3047,53 @@ def bp_amostrar_perfil(caminho, vertices):
     return distancias, cotas
 
 
+def bp_medicao_proxima_extremo(vertice, base_medioes, limite_metros=35.0):
+    """Identifica uma leitura próxima sem confundir proximidade com coincidência exata.
+
+    O traçado é livre, não fica automaticamente ancorado nos pinos. Por isso,
+    só associamos uma medição de pressão ao extremo quando está no raio
+    indicado e exibimos a distância até o registro original.
+    """
+    from pyproj import Geod
+
+    if base_medioes is None or base_medioes.empty:
+        return None
+
+    longitude, latitude = map(float, vertice)
+    geod = Geod(ellps="WGS84")
+    mais_proxima = None
+
+    for _, registro in base_medioes.iterrows():
+        try:
+            lat_reg = float(registro["Latitude"])
+            lon_reg = float(registro["Longitude"])
+            pressao = float(registro["Pressao_MCA"])
+            if not all(math.isfinite(v) for v in (lat_reg, lon_reg, pressao)):
+                continue
+            _, _, distancia = geod.inv(longitude, latitude, lon_reg, lat_reg)
+            if distancia <= limite_metros and (
+                mais_proxima is None or distancia < mais_proxima["distancia_m"]
+            ):
+                mais_proxima = {
+                    "pressao_mca": pressao,
+                    "distancia_m": distancia,
+                    "bairro": str(registro.get("Bairro", "")).strip(),
+                }
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+    return mais_proxima
+
+
+def bp_texto_pressao_proxima(medicao):
+    """Texto explícito, com indicação de distância, sem criar vínculo hidráulico."""
+    if not medicao:
+        return "Nenhuma medição de pressão localizada a até 35 m desse extremo"
+    valor = f"{medicao['pressao_mca']:.2f}".replace(".", ",")
+    distancia = f"{medicao['distancia_m']:.0f}".replace(".", ",")
+    return f"Medição de pressão próxima: {valor} MCA (a {distancia} m)"
+
+
 # ============================================================
 # MAPA
 # ============================================================
@@ -3273,13 +3321,51 @@ if bp_dem_pronto and st.session_state.bp_relevo_visivel:
     except Exception as bp_exc:
         st.warning(f"Não foi possível exibir o relevo: {bp_exc}")
 
-# Exibe o ultimo perfil no mapa após reruns do Streamlit.
+# Exibe o último perfil no mapa, com direção inequívoca A → B.
 if st.session_state.bp_trajeto_altimetrico:
     folium.PolyLine(
         locations=[[vertice[1], vertice[0]] for vertice in st.session_state.bp_trajeto_altimetrico],
         color="#0B75BC", weight=4, opacity=0.95,
-        tooltip="Traçado do perfil de elevação",
+        tooltip="Perfil topográfico: A (início) → B (fim)",
     ).add_to(m)
+
+    # Cada extremo recebe a própria cota, visível no mapa, independente
+    # da pressão que já aparece nos marcadores de medição.
+    if bp_dem_pronto:
+        try:
+            bp_d_mapa, bp_cotas_mapa = bp_amostrar_perfil(
+                str(BP_DEM_CAMINHO), st.session_state.bp_trajeto_altimetrico
+            )
+            for bp_letra, bp_vertice, bp_cota, bp_cor in (
+                ("A", st.session_state.bp_trajeto_altimetrico[0], bp_cotas_mapa[0], "#0B75BC"),
+                ("B", st.session_state.bp_trajeto_altimetrico[-1], bp_cotas_mapa[-1], "#D97706"),
+            ):
+                bp_cota_texto = (
+                    f"{float(bp_cota):.1f}".replace(".", ",") + " m"
+                    if math.isfinite(float(bp_cota)) else "sem cota"
+                )
+                bp_chip_html = (
+                    '<div style="display:inline-flex;align-items:center;gap:4px;'
+                    'white-space:nowrap;background:#ffffff;color:#142A3C;'
+                    'border:1px solid #CAD5E0;border-left:4px solid ' + bp_cor + ';'
+                    'border-radius:6px;padding:4px 7px;font:700 11px Arial,sans-serif;'
+                    'box-shadow:0 2px 5px #0003;pointer-events:none;">'
+                    + bp_letra + ' · ' + bp_cota_texto + '</div>'
+                )
+                folium.Marker(
+                    location=[float(bp_vertice[1]), float(bp_vertice[0])],
+                    icon=folium.DivIcon(
+                        html=bp_chip_html,
+                        icon_size=(110, 25),
+                        icon_anchor=(10, -7),  # abaixo do extremo, bem perto do pino
+                        class_name="bp-cota-extremo",
+                    ),
+                    tooltip=f"Ponto {bp_letra}: cota do terreno {bp_cota_texto}",
+                    z_index_offset=2000,
+                ).add_to(m)
+        except Exception:
+            # A advertência detalhada sobre DEM/perfil aparece abaixo do mapa.
+            pass
 
 if bp_dem_pronto and st.session_state.bp_relevo_visivel:
     folium.LayerControl(collapsed=True).add_to(m)
@@ -4562,45 +4648,136 @@ if bp_dem_pronto and st.session_state.bp_modo_perfil and map_data:
     if geometria_topo.get("type") == "LineString":
         coords = geometria_topo.get("coordinates", [])
         if isinstance(coords, list) and len(coords) >= 2:
-            st.session_state.bp_trajeto_altimetrico = coords
+            # Só atualiza se a linha mudou. O rerun redesenha imediatamente
+            # os chips A/B com cotas, sem exigir outra interação do usuário.
+            if coords != st.session_state.bp_trajeto_altimetrico:
+                st.session_state.bp_trajeto_altimetrico = coords
+                st.rerun()
 
 if bp_dem_pronto and st.session_state.bp_trajeto_altimetrico:
     try:
+        bp_vertices = st.session_state.bp_trajeto_altimetrico
         bp_distancias, bp_altitudes = bp_amostrar_perfil(
-            str(BP_DEM_CAMINHO), st.session_state.bp_trajeto_altimetrico
+            str(BP_DEM_CAMINHO), bp_vertices
         )
         bp_serie = pd.DataFrame({
             "Distância (m)": bp_distancias,
-            "Altitude (m)": bp_altitudes,
+            "Cota do terreno (m)": bp_altitudes,
         })
-        bp_validos = bp_serie.dropna(subset=["Altitude (m)"])
+        bp_validos = bp_serie.dropna(subset=["Cota do terreno (m)"])
+
         if bp_validos.empty:
             st.warning("O perfil desenhado está fora da cobertura altimétrica do GeoTIFF.")
         else:
-            st.markdown("#### 📈 Perfil de elevação do terreno")
-            primeiro = bp_serie["Altitude (m)"].iloc[0]
-            ultimo = bp_serie["Altitude (m)"].iloc[-1]
-            variacao = (
-                float(ultimo) - float(primeiro)
-                if pd.notna(primeiro) and pd.notna(ultimo) else None
+            st.markdown("#### 📈 Perfil de elevação do terreno — A → B")
+
+            bp_cota_a = float(bp_altitudes[0])
+            bp_cota_b = float(bp_altitudes[-1])
+            bp_a_valido = math.isfinite(bp_cota_a)
+            bp_b_valido = math.isfinite(bp_cota_b)
+            bp_variacao = bp_cota_b - bp_cota_a if bp_a_valido and bp_b_valido else None
+
+            # Próximo significa localização geográfica a <=35 m,
+            # não significa que a rota acompanhe a tubulação entre esses pontos.
+            bp_pressao_a = bp_medicao_proxima_extremo(bp_vertices[0], df_filtrado)
+            bp_pressao_b = bp_medicao_proxima_extremo(bp_vertices[-1], df_filtrado)
+
+            # O gráfico é deliberadamente apresentado ANTES dos indicadores:
+            # na V5 ficava abaixo deles e podia parecer ausente sem rolar a página.
+            figura_altimetria = go.Figure()
+            figura_altimetria.add_trace(go.Scatter(
+                x=bp_distancias,
+                y=bp_altitudes,
+                mode="lines",
+                name="Cota do terreno",
+                line=dict(color="#0B75BC", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(11,117,188,0.10)",
+                hovertemplate="Distância: %{x:.0f} m<br>Cota: %{y:.1f} m<extra></extra>",
+                connectgaps=False,
+            ))
+            for bp_letra, bp_dist, bp_cota, bp_cor in (
+                ("A", bp_distancias[0], bp_cota_a, "#0B75BC"),
+                ("B", bp_distancias[-1], bp_cota_b, "#D97706"),
+            ):
+                if math.isfinite(bp_cota):
+                    figura_altimetria.add_trace(go.Scatter(
+                        x=[bp_dist], y=[bp_cota], mode="markers+text",
+                        marker=dict(size=11, color=bp_cor, line=dict(color="white", width=2)),
+                        text=[f"{bp_letra} · {bp_cota:.1f} m"],
+                        textposition="top center",
+                        textfont=dict(color=bp_cor, size=12),
+                        hovertemplate=f"Ponto {bp_letra}<br>Cota: %{{y:.1f}} m<extra></extra>",
+                        showlegend=False,
+                    ))
+            bp_cota_minima = float(bp_validos["Cota do terreno (m)"].min())
+            bp_cota_maxima = float(bp_validos["Cota do terreno (m)"].max())
+            bp_margem_y = max(2.0, (bp_cota_maxima - bp_cota_minima) * 0.20)
+            figura_altimetria.update_layout(
+                title=dict(text="Variação altimétrica ao longo do traçado", x=0.02),
+                height=300,
+                margin=dict(l=20, r=25, t=55, b=20),
+                xaxis_title="Distância desde o ponto A (m)",
+                yaxis_title="Cota do terreno (m)",
+                yaxis=dict(range=[bp_cota_minima - bp_margem_y, bp_cota_maxima + bp_margem_y]),
+                showlegend=False,
+                hovermode="x unified",
+                # Fundo e tipografia explícitos para manter boa leitura mesmo
+                # quando a aplicação Streamlit estiver em modo escuro.
+                paper_bgcolor="#F7FAFC",
+                plot_bgcolor="#FFFFFF",
+                font=dict(color="#17324A", size=12),
             )
-            c_k1, c_k2, c_k3, c_k4 = st.columns(4)
-            c_k1.metric("Comprimento", f"{bp_distancias[-1]:,.0f} m".replace(",", "."))
-            c_k2.metric("Cota mínima", f"{bp_validos['Altitude (m)'].min():.1f} m")
-            c_k3.metric("Cota máxima", f"{bp_validos['Altitude (m)'].max():.1f} m")
-            c_k4.metric("Desnível final − inicial", f"{variacao:+.1f} m" if variacao is not None else "Sem cobertura")
-            figura_altimetria = px.area(
-                bp_serie, x="Distância (m)", y="Altitude (m)",
-                title="Elevação estimada ao longo do traçado",
+            figura_altimetria.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.20)")
+            figura_altimetria.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.20)")
+            try:
+                st.plotly_chart(
+                    figura_altimetria, use_container_width=True,
+                    config={"displaylogo": False},
+                )
+            except Exception as bp_erro_grafico:
+                # Alternativa nativa caso a versão de Plotly/Streamlit não
+                # consiga renderizar o objeto interativo.
+                st.line_chart(
+                    bp_serie.set_index("Distância (m)")["Cota do terreno (m)"],
+                    use_container_width=True,
+                )
+                st.caption(f"Gráfico apresentado no modo simplificado: {bp_erro_grafico}")
+
+            st.markdown("**Identificação dos extremos do traçado**")
+            bp_res_a, bp_res_b, bp_res_desnivel, bp_res_extensao = st.columns(4)
+            bp_res_a.metric(
+                "A · Início", f"{bp_cota_a:.1f} m" if bp_a_valido else "Sem cota"
             )
-            figura_altimetria.update_traces(line_color="#0B75BC", fillcolor="rgba(11,117,188,0.13)")
-            figura_altimetria.update_layout(height=310, margin=dict(l=20, r=20, t=45, b=20))
-            st.plotly_chart(figura_altimetria, use_container_width=True)
+            bp_res_b.metric(
+                "B · Fim", f"{bp_cota_b:.1f} m" if bp_b_valido else "Sem cota"
+            )
+            bp_res_desnivel.metric(
+                "Desnível B − A", f"{bp_variacao:+.1f} m" if bp_variacao is not None else "Sem cobertura"
+            )
+            bp_res_extensao.metric(
+                "Comprimento", f"{bp_distancias[-1]:,.0f} m".replace(",", ".")
+            )
+
+            bp_pcol_a, bp_pcol_b = st.columns(2)
+            with bp_pcol_a:
+                st.caption("**Ponto A:** " + bp_texto_pressao_proxima(bp_pressao_a))
+            with bp_pcol_b:
+                st.caption("**Ponto B:** " + bp_texto_pressao_proxima(bp_pressao_b))
+
+            bp_idx_min = bp_serie["Cota do terreno (m)"].idxmin()
+            bp_idx_max = bp_serie["Cota do terreno (m)"].idxmax()
+            bp_pos_min = float(bp_serie.loc[bp_idx_min, "Distância (m)"])
+            bp_pos_max = float(bp_serie.loc[bp_idx_max, "Distância (m)"])
             st.caption(
-                "A altitude representa a superfície amostrada pelo modelo digital de elevação, "
-                "não a cota da tubulação. Um desnível, sozinho, não comprova perda de carga "
-                "nem identifica gargalos hidráulicos. O traçado segue os pontos desenhados, "
-                "e não necessariamente o alinhamento real da rede."
+                f"**Mínima no percurso:** {bp_cota_minima:.1f} m (a {bp_pos_min:.0f} m do A).  "
+                f"**Máxima no percurso:** {bp_cota_maxima:.1f} m (a {bp_pos_max:.0f} m do A). "
+                "Essas cotas podem ocorrer entre os extremos, não necessariamente em A ou B."
+            )
+            st.caption(
+                "As cotas representam a superfície amostrada pelo Copernicus DSM, "
+                "não a cota da tubulação. O perfil não acompanha automaticamente a rede, "
+                "e o desnível sozinho não comprova perda de carga ou gargalo hidráulico."
             )
     except Exception as bp_exc:
         st.warning(f"Não foi possível calcular o perfil de elevação: {bp_exc}")
