@@ -1,13 +1,13 @@
 """SAI — importacao semiautomatica de medicoes de pressao.
 
-Origem: arquivos XLSX/CSV exportados e sincronizados no OneDrive corporativo.
+Origem: XLSX/CSV recebidos em pasta privada do Google Drive via Power Automate.
 Destino: worksheet 'baixa_pressao' ja utilizada pelo Modulo 1, mais o diario
          'sai_sync_pressao' no mesmo Google Sheets.
 
-Execucao: GitHub Actions (cron de 30 em 30 minutos) ou manual para diagnostico.
+Execução: serviço Python do SAI no GitHub Actions a cada 30 minutos; não depende do app aberto.
 Este codigo NAO precisa ser executado no notebook do analista.
 
-Nunca enviar credenciais, planilhas brutas ou dados de clientes ao GitHub.
+Nunca enviar credenciais, planilhas brutas ou dados de clientes ao repositório GitHub.
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -30,11 +29,6 @@ import pandas as pd
 COLUNAS_SAI = [
     "ID", "Data", "Municipio", "Bairro", "Latitude", "Longitude",
     "Pressao_MCA", "Observacao", "Matricula",
-]
-COLUNAS_DIARIO = [
-    "DataHora", "ArquivoID", "VersaoETag", "Arquivo", "Origem",
-    "Elegiveis", "Inseridos", "JaExistentes", "SemPressaoNumerica",
-    "Status", "Detalhes",
 ]
 FUSO = ZoneInfo("America/Sao_Paulo")
 TERMOS_EXCLUSAO = ("vazamento", "obstrucao", "obstrução", "entupido", "quebrado")
@@ -236,188 +230,241 @@ def filtrar_ja_existentes(linhas: list[list], linhas_sheet: list[list]) -> tuple
     return novos, repetidos
 
 
-def google_sheets():
-    """Credenciais de conta de servico, independentes do Streamlit Cloud."""
+
+
+def conectar_google():
+    """Usa a mesma conta de serviço do SAI; não escreve arquivos no Drive."""
     import gspread
     from google.oauth2.service_account import Credentials
-    raw = os.environ["GCP_SERVICE_ACCOUNT_JSON"].strip()
-    creds = Credentials.from_service_account_info(json.loads(raw), scopes=[
-        "https://www.googleapis.com/auth/spreadsheets",
-    ])
-    spreadsheet_id = os.environ["SAI_SHEET_ID"].strip()
-    return gspread.authorize(creds).open_by_key(spreadsheet_id)
+    from googleapiclient.discovery import build
+    credenciais = json.loads(os.environ['SAI_GCP_JSON'])
+    scopes = [
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive.readonly',
+    ]
+    cred = Credentials.from_service_account_info(credenciais, scopes=scopes)
+    sheets = gspread.authorize(cred).open_by_key(os.environ['SAI_SHEET_ID'])
+    drive = build('drive', 'v3', credentials=cred, cache_discovery=False)
+    return sheets, drive
 
 
-def configurar_destino(spreadsheet):
-    """Exige formato compativel com o importador atual; nunca migra cabecalhos sozinho."""
-    ws = spreadsheet.worksheet("baixa_pressao")
-    primeira = ws.row_values(1)
-    if [normalizar_cabecalho(x) for x in primeira[:9]] != [normalizar_cabecalho(x) for x in COLUNAS_SAI]:
-        raise ValueError("A aba baixa_pressao não possui as nove colunas esperadas. Nenhuma alteração feita.")
+COLUNAS_DIARIO = [
+    'DataHora', 'ArquivoID', 'MD5Drive', 'HashSHA256', 'Arquivo',
+    'LinhasOrigem', 'Elegiveis', 'Inseridos', 'JaExistentes',
+    'SemPressaoNumerica', 'Status', 'Detalhes',
+]
+SUCESSOS = {'IMPORTADO', 'SEM_NOVOS', 'SEM_ELEGIVEIS', 'SEM_ALTERACOES'}
+
+
+def abrir_abas(spreadsheet, dry_run=False):
+    """Em homologação, nunca cria abas nem modifica a planilha."""
+    from gspread.exceptions import WorksheetNotFound
+    ws = spreadsheet.worksheet('baixa_pressao')
+    cab = ws.row_values(1)
+    if [normalizar_cabecalho(x) for x in cab[:len(COLUNAS_SAI)]] != [
+        normalizar_cabecalho(x) for x in COLUNAS_SAI
+    ]:
+        raise ValueError('Cabeçalho de baixa_pressao divergente; nenhuma importação realizada')
     try:
-        diario = spreadsheet.worksheet("sai_sync_pressao")
-        cab = diario.row_values(1)
-        if [normalizar_cabecalho(x) for x in cab] != [normalizar_cabecalho(x) for x in COLUNAS_DIARIO]:
-            raise ValueError("A aba sai_sync_pressao possui cabeçalho inesperado.")
-    except Exception as erro:
-        if erro.__class__.__name__ != "WorksheetNotFound":
-            raise
-        diario = spreadsheet.add_worksheet(title="sai_sync_pressao", rows=1000, cols=len(COLUNAS_DIARIO))
-        diario.append_row(COLUNAS_DIARIO, value_input_option="RAW")
+        diario = spreadsheet.worksheet('sai_sync_pressao')
+    except WorksheetNotFound:
+        if dry_run:
+            diario = None
+        else:
+            diario = spreadsheet.add_worksheet(title='sai_sync_pressao', rows=1000, cols=12)
+            diario.append_row(COLUNAS_DIARIO, value_input_option='RAW')
+    else:
+        if diario.row_values(1) != COLUNAS_DIARIO:
+            raise ValueError('Cabeçalho de sai_sync_pressao divergente; verifique a aba')
     return ws, diario
 
 
-def logar(diario, *, item_id, etag, nome, resumo: Resultado, inseridos, repetidos, status, detalhes=""):
-    agora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M:%S")
+def ler_diario(diario):
+    if diario is None:
+        return set(), set()
+    dados = diario.get_all_values()
+    finalizados = set()
+    hashes_finalizados = set()
+    for linha in dados[1:]:
+        if len(linha) > 10 and linha[10] in SUCESSOS:
+            finalizados.add((linha[1], linha[2]))
+            hashes_finalizados.add(linha[3])
+    return finalizados, hashes_finalizados
+
+
+def logar(diario, *, meta, hash_sha, resumo, novos, repetidos, status, detalhes=''):
+    now = datetime.now(FUSO).strftime('%d/%m/%Y %H:%M:%S')
     diario.append_row([
-        agora, item_id, etag, nome, resumo.origem, len(resumo.linhas),
-        inseridos, repetidos, resumo.sem_pressao_numerica, status,
-        str(detalhes)[:350],
-    ], value_input_option="RAW")
+        now, meta['id'], meta.get('md5Checksum') or meta.get('modifiedTime',''),
+        hash_sha, meta['name'], resumo.origem, len(resumo.linhas),
+        novos, repetidos, resumo.sem_pressao_numerica, status, detalhes[:350],
+    ], value_input_option='RAW')
 
 
-def arquivos_processados(diario) -> set[tuple[str, str]]:
-    valores = diario.get_all_values()
-    return {
-        (r[1], r[2]) for r in valores[1:]
-        if len(r) > 9 and r[9] in {"IMPORTADO", "SEM_NOVOS", "SEM_ELEGIVEIS"}
-    }
+def listar_arquivos_drive(drive, folder_id):
+    """Só XLSX/CSV reais da pasta; não lê planilhas Google nativas."""
+    q = "'{}' in parents and trashed = false".format(folder_id.replace("'", "\\'"))
+    pagina = None
+    dados = []
+    while True:
+        resposta = drive.files().list(
+            q=q, fields='nextPageToken,files(id,name,size,mimeType,md5Checksum,modifiedTime)',
+            pageSize=100, pageToken=pagina, supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute()
+        for item in resposta.get('files', []):
+            name = item.get('name', '')
+            if name.lower().endswith(('.xlsx', '.csv')) and not name.startswith('~$'):
+                dados.append(item)
+        pagina = resposta.get('nextPageToken')
+        if not pagina:
+            break
+    return sorted(dados, key=lambda x: (x.get('modifiedTime',''), x.get('name','')))
 
 
-def registrar_lote(ws, resumo: Resultado) -> tuple[int, int]:
+def baixar_drive(drive, meta):
+    tamanho_max = int(os.getenv('SAI_MAX_FILE_MB','20')) * 1024 * 1024
+    if int(meta.get('size') or 0) > tamanho_max:
+        raise ValueError('Tamanho superior ao limite permitido')
+    from googleapiclient.http import MediaIoBaseDownload
+    buff = io.BytesIO()
+    request = drive.files().get_media(fileId=meta['id'], supportsAllDrives=True)
+    downloader = MediaIoBaseDownload(buff, request, chunksize=1024*1024)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+        if buff.tell() > tamanho_max:
+            raise ValueError('Arquivo excede o limite configurado')
+    return buff.getvalue()
+
+
+def carregar_chaves_sheet(ws):
+    """Uma leitura por execução, não uma consulta Google por cada O.S./medição."""
     valores = ws.get_all_values()
-    # get_all_values retorna cabecalho mais linhas; indices 0..8 conforme COLUNAS_SAI.
-    novos, repetidos = filtrar_ja_existentes(resumo.linhas, valores[1:])
-    for inicio in range(0, len(novos), 400):
-        ws.append_rows(novos[inicio:inicio + 400], value_input_option="USER_ENTERED")
-    return len(novos), repetidos
-
-
-def token_microsoft(session):
-    import requests
-    tenant = os.environ["MS_TENANT_ID"].strip()
-    payload = {
-        "client_id": os.environ["MS_CLIENT_ID"],
-        "client_secret": os.environ["MS_CLIENT_SECRET"],
-        "grant_type": "client_credentials",
-        "scope": "https://graph.microsoft.com/.default",
-    }
-    r = session.post(f"https://login.microsoftonline.com/{quote(tenant, safe='')}/oauth2/v2.0/token", data=payload, timeout=30)
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def graph_get(session, token: str, endpoint: str):
-    r = session.get(endpoint, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    r.raise_for_status()
-    return r.json()
-
-
-def listar_arquivos_onedrive(session, token: str) -> list[dict]:
-    drive = os.environ["MS_DRIVE_ID"].strip()
-    pasta_id = os.environ.get("MS_FOLDER_ID", "").strip()
-    pasta_caminho = os.environ.get("MS_FOLDER_PATH", "SAI/Medicoes_Pressao/Entrada").strip(" /")
-    base = f"https://graph.microsoft.com/v1.0/drives/{quote(drive, safe='')}"
-    if not pasta_id:
-        caminho_codificado = "/".join(quote(p, safe="") for p in pasta_caminho.split("/"))
-        pasta = graph_get(session, token, f"{base}/root:/{caminho_codificado}")
-        pasta_id = pasta["id"]
-    url = f"{base}/items/{quote(pasta_id, safe='')}/children?$top=200"
-    saida = []
-    while url:
-        pagina = graph_get(session, token, url)
-        for item in pagina.get("value", []):
-            nome = item.get("name", "")
-            if "file" in item and nome.lower().endswith((".xlsx", ".csv")) and not nome.startswith("~$"):
-                saida.append(item)
-        url = pagina.get("@odata.nextLink")
-    return saida
-
-
-def baixar_arquivo_onedrive(session, token, item: dict):
-    drive = os.environ["MS_DRIVE_ID"].strip()
-    item_id = item["id"]
-    url = f"https://graph.microsoft.com/v1.0/drives/{quote(drive, safe='')}/items/{quote(item_id, safe='')}/content"
-    resposta = session.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=120)
-    resposta.raise_for_status()
-    limite = int(os.getenv("SAI_MAX_ARQUIVO_MB", "30")) * 1024 * 1024
-    if len(resposta.content) > limite:
-        raise ValueError("Arquivo excede o limite configurado para processamento.")
-    return resposta.content
-
-
-def executar_agendado():
-    import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
-
-    # Verifica o acesso ao destino antes de tentar ler dados sensiveis do OneDrive.
-    planilha = google_sheets()
-    ws, diario = configurar_destino(planilha)
-    finalizados = arquivos_processados(diario)
-    sessao = requests.Session()
-    sessao.mount("https://", HTTPAdapter(max_retries=Retry(
-        total=3, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(("GET", "POST")),
-    )))
-    token = token_microsoft(sessao)
-    arquivos = listar_arquivos_onedrive(sessao, token)
-    pendentes = [a for a in arquivos if (a["id"], a.get("eTag", "")) not in finalizados]
-    pendentes.sort(key=lambda a: (a.get("lastModifiedDateTime", ""), a.get("name", "")))
-    limite = int(os.getenv("SAI_MAX_ARQUIVOS_POR_EXECUCAO", "20"))
-    print(f"SAI: {len(arquivos)} arquivo(s) encontrados; {len(pendentes)} pendente(s).")
-    falhas = 0
-    for item in pendentes[:limite]:
-        nome = item.get("name", "")
-        etag = item.get("eTag", "")
-        try:
-            conteudo = baixar_arquivo_onedrive(sessao, token, item)
-            dados = ler_arquivo(nome, conteudo)
-            resumo = converter_bruta(dados, nome)
-            if resumo.linhas:
-                inseridos, repetidos = registrar_lote(ws, resumo)
-                status = "IMPORTADO" if inseridos else "SEM_NOVOS"
-            else:
-                inseridos, repetidos, status = 0, 0, "SEM_ELEGIVEIS"
-            detalhes = f"Coordenadas invalidas: {resumo.sem_coordenadas}; sem data: {resumo.sem_data}"
-            logar(diario, item_id=item["id"], etag=etag, nome=nome, resumo=resumo,
-                  inseridos=inseridos, repetidos=repetidos, status=status, detalhes=detalhes)
-            print(f"{nome}: {status} | origem={resumo.origem}, elegiveis={len(resumo.linhas)}, novos={inseridos}.")
-        except Exception as e:
-            falhas += 1
-            # Não registrar pareceres, matrículas, coordenadas ou conteúdo pessoal.
-            # Falhas não são consideradas processadas: haverá nova tentativa no
-            # próximo agendamento. O diário permite detectar o problema no SAI.
-            print(f"Falha ao processar '{nome}': {e.__class__.__name__}", file=sys.stderr)
+    chaves = set()
+    for row in valores[1:]:
+        if len(row) >= 6:
             try:
-                logar(diario, item_id=item["id"], etag=etag, nome=nome,
-                      resumo=Resultado(origem=0, linhas=[]), inseridos=0,
-                      repetidos=0, status="ERRO", detalhes=e.__class__.__name__)
+                chaves.add(chave_medicao(row))
+            except (ValueError, TypeError):
+                continue
+    return chaves
+
+
+def novos_sem_duplicacao(linhas, chaves):
+    novos = []
+    repetidos = 0
+    for row in linhas:
+        chave = chave_medicao(row)
+        if chave not in chaves:
+            novos.append(row)
+            chaves.add(chave)
+        else:
+            repetidos += 1
+    return novos, repetidos
+
+
+def executar_sincronizacao():
+    import hashlib
+    sheet, drive = conectar_google()
+    dry_run = os.getenv('SAI_DRY_RUN', 'true').lower() in ('true','1','yes')
+    ws, diario = abrir_abas(sheet, dry_run=dry_run)
+    finalizados, hashes_finalizados = ler_diario(diario)
+    metas = listar_arquivos_drive(drive, os.environ['SAI_DRIVE_FOLDER_ID'])
+    print(f'SAI: {len(metas)} arquivo(s) elegível(is) na pasta de entrada')
+    # Não há credenciais Microsoft nem consultas diretas ao OneDrive.
+    pendentes = [meta for meta in metas if (meta['id'], meta.get('md5Checksum') or meta.get('modifiedTime','')) not in finalizados]
+    limite = int(os.getenv('SAI_MAX_FILES_PER_RUN', '20'))
+    chaves = None
+    falhas = 0
+    for meta in pendentes[:limite]:
+        try:
+            content = baixar_drive(drive, meta)
+            hash_sha = hashlib.sha256(content).hexdigest()
+            if (meta['id'], meta.get('md5Checksum') or meta.get('modifiedTime','')) in finalizados:
+                continue
+            if hash_sha in hashes_finalizados:
+                resumo = Resultado(origem=0, linhas=[])
+                if not dry_run:
+                    logar(diario, meta=meta, hash_sha=hash_sha, resumo=resumo,
+                          novos=0, repetidos=0, status='SEM_ALTERACOES',
+                          detalhes='Arquivo de conteúdo idêntico já processado')
+                finalizados.add((meta['id'], meta.get('md5Checksum') or meta.get('modifiedTime','')))
+                print('SAI: conteúdo já processado, ignorado')
+                continue
+            df = ler_arquivo(meta['name'], content)
+            resultado = converter_bruta(df, meta['name'])
+            if not resultado.linhas:
+                status, novos_qtd, repetidos = 'SEM_ELEGIVEIS', 0, 0
+            else:
+                if chaves is None:
+                    chaves = carregar_chaves_sheet(ws)
+                # Novos sem duplicação em relação à planilha oficial (inclusive dados manuais).
+                # Somente acrescenta chaves à memória após confirmar a gravação do lote.
+                novos = []
+                repetidos = 0
+                chaves_novas = set()
+                for row in resultado.linhas:
+                    ck = chave_medicao(row)
+                    if ck in chaves or ck in chaves_novas:
+                        repetidos += 1
+                    else:
+                        novos.append(row)
+                        chaves_novas.add(ck)
+                if os.getenv('SAI_DRY_RUN', 'true').lower() in ('true','1','yes'):
+                    print(f'SAI: SIMULAÇÃO: {len(novos)} registro(s) seriam importados')
+                    continue
+                for inicio in range(0, len(novos), 200):
+                    lote = novos[inicio:inicio+200]
+                    ws.append_rows(lote, value_input_option='RAW')
+                    chaves.update(chave_medicao(r) for r in lote)
+                novos_qtd = len(novos)
+                status = 'IMPORTADO' if novos_qtd else 'SEM_NOVOS'
+            if dry_run:
+                print(f'SAI: SIMULAÇÃO: arquivo={meta["name"]}; elegíveis={len(resultado.linhas)}; sem escrita')
+                continue
+            logar(diario, meta=meta, hash_sha=hash_sha, resumo=resultado,
+                  novos=novos_qtd, repetidos=repetidos, status=status,
+                  detalhes=(f'Coord. inválidas: {resultado.sem_coordenadas}; '
+                            f'sem data: {resultado.sem_data}'))
+            hashes_finalizados.add(hash_sha)
+            finalizados.add((meta['id'], meta.get('md5Checksum') or meta.get('modifiedTime','')))
+            print(f'SAI: {meta["name"]}: {status}; novos={novos_qtd}; repetidos={repetidos}')
+        except Exception as exc:
+            falhas += 1
+            # Não expor dados de clientes, nomes de matrículas nem conteúdo da base em logs.
+            print(f'SAI: falha de processamento: {exc.__class__.__name__}', file=sys.stderr)
+            try:
+                if dry_run:
+                    continue
+                logar(diario, meta=meta, hash_sha=meta.get('md5Checksum',''),
+                      resumo=Resultado(origem=0,linhas=[]), novos=0,repetidos=0,
+                      status='ERRO', detalhes=exc.__class__.__name__)
             except Exception:
-                print("Não foi possível registrar a falha na aba de auditoria.", file=sys.stderr)
+                pass
     if falhas:
-        raise RuntimeError(f"Foram detectadas {falhas} falha(s) de importacao. Verifique os logs do workflow.")
+        raise RuntimeError(f'{falhas} arquivo(s) apresentaram erro; consultar log sai_sync_pressao')
 
 
-def executar_validacao_local(nome: str):
-    caminho = Path(nome)
-    resumo = converter_bruta(ler_arquivo(caminho.name, caminho.read_bytes()), caminho.name)
-    print(f"Validação local: origem={resumo.origem}; elegíveis={len(resumo.linhas)}; "
-          f"sem MCA numérico={resumo.sem_pressao_numerica}; "
-          f"sem coordenadas={resumo.sem_coordenadas}; sem data={resumo.sem_data}.")
-    # Nunca salva conteúdo sensível nem apresenta registros em logs.
-    return resumo
+def validar_local(path):
+    arquivo = Path(path)
+    r = converter_bruta(ler_arquivo(arquivo.name,arquivo.read_bytes()),arquivo.name)
+    print(f'SAI validação local: atividades={r.origem}; elegíveis={len(r.linhas)}; '
+          f'0 MCA={sum(row[6] == 0 for row in r.linhas)}; '
+          f'sem cota numérica={r.sem_pressao_numerica}; sem data={r.sem_data}')
+    return r
 
 
 def main():
-    p = argparse.ArgumentParser(description="Sincronizar medições do SAI: OneDrive → Google Sheets")
-    p.add_argument("--arquivo-local", help="Arquivo bruto para validação local, sem upload ou acesso externo")
-    a = p.parse_args()
-    if a.arquivo_local:
-        executar_validacao_local(a.arquivo_local)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--arquivo-local', help='Validação sem acesso a Drive/Sheets')
+    args = parser.parse_args()
+    if args.arquivo_local:
+        validar_local(args.arquivo_local)
     else:
-        executar_agendado()
+        executar_sincronizacao()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
