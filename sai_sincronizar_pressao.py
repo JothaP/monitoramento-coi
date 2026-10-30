@@ -403,16 +403,30 @@ def executar_sincronizacao():
                 # Somente acrescenta chaves à memória após confirmar a gravação do lote.
                 novos = []
                 repetidos = 0
+                repetidos_planilha = 0
+                repetidos_arquivo = 0
                 chaves_novas = set()
                 for row in resultado.linhas:
                     ck = chave_medicao(row)
-                    if ck in chaves or ck in chaves_novas:
+                    if ck in chaves:
                         repetidos += 1
+                        repetidos_planilha += 1
+                    elif ck in chaves_novas:
+                        repetidos += 1
+                        repetidos_arquivo += 1
                     else:
                         novos.append(row)
                         chaves_novas.add(ck)
-                if os.getenv('SAI_DRY_RUN', 'true').lower() in ('true','1','yes'):
-                    print(f'SAI: SIMULAÇÃO: {len(novos)} registro(s) seriam importados')
+                if dry_run:
+                    print(
+                        f'SAI: SIMULAÇÃO (SEM GRAVAÇÃO) | arquivo={meta["name"]} '
+                        f'| atividades={resultado.origem} '
+                        f'| elegiveis={len(resultado.linhas)} '
+                        f'| ja_na_planilha={repetidos_planilha} '
+                        f'| repetidos_no_arquivo={repetidos_arquivo} '
+                        f'| novos={len(novos)} '
+                        f'| descartados={resultado.origem-len(resultado.linhas)}'
+                    )
                     continue
                 for inicio in range(0, len(novos), 200):
                     lote = novos[inicio:inicio+200]
