@@ -213,7 +213,7 @@ def exibir_cabecalho_sai(*, login=False):
             </div>
           </div>
           <div class="sai-hero-bottom">
-            <span><i class="sai-hero-dot"></i> COI — Controle Operacional Integrado</span>
+            <span><i class="sai-hero-dot"></i> COI — Centro de Operações Integradas</span>
             <span>Dados &nbsp;·&nbsp; Análise &nbsp;·&nbsp; Decisão</span>
           </div>
         </div>
