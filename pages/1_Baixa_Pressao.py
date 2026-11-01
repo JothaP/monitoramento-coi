@@ -1745,18 +1745,6 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
          2*bp_rel_cm,2*bp_rel_cm,3*bp_rel_cm,2.8*bp_rel_cm]))
     historia.extend([BP_REL_Spacer(1,9),paragrafo(
         "As médias refletem somente os registros filtrados, não a pressão de toda a rede ou de todas as residências do bairro.",pequeno)])
-    historia.append(BP_REL_PageBreak())
-    historia.extend([paragrafo("REGISTROS INDIVIDUAIS DE PRESSÃO",titulo),
-       paragrafo(f"{len(base)} medições que passaram por TODOS os filtros da tela.",pequeno),
-       BP_REL_Spacer(1,8)])
-    detalhe=[]
-    for _,r in base.sort_values(["_municipio","_bairro","_data","Matricula"],na_position="last").iterrows():
-        obs=bp_observacao_visivel(r.get("Observacao", ""))
-        if len(obs)>320:obs=obs[:317]+"…"
-        detalhe.append([str(r.get("Data","")),f"{r.get('Bairro','')} / {r.get('Municipio','')}",
-            str(r.get("Matricula","") or ""),f"{float(r['_pressao']):g}",obs])
-    historia.append(tabela(["Data","Bairro / Município","Matrícula","mca","Observação"],
-        detalhe,[2.65*bp_rel_cm,8.5*bp_rel_cm,3.1*bp_rel_cm,1.8*bp_rel_cm,10.15*bp_rel_cm]))
     # O anexo SANEAR é independente do checkbox de visualização do mapa.
     # Usa exatamente os pontos que passaram pelos filtros do PDF.
     historia.append(BP_REL_PageBreak())
