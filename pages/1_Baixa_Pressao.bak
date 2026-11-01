@@ -14,11 +14,14 @@ import uuid
 from typing import Optional
 import time
 import plotly.express as px
+import plotly.graph_objects as go
 from branca.element import Element, MacroElement
 from jinja2 import Template
 from html import escape
 import unicodedata
 import re
+import math
+from pathlib import Path
 
 
 # ============================================================
@@ -2929,6 +2932,169 @@ st.divider()
 
 
 # ============================================================
+# TOPOGRAFIA LOCAL E PERFIL ALTIMERICO (GeoTIFF versionado no GitHub)
+# ============================================================
+# O raster NÃO e obtido por consulta online: o perfil so usa cotas
+# medidas pelo arquivo dados/topografia/teresina_dem.tif da instalacao.
+# A camada mostra a superficie do terreno, NAO a cota da tubulacao nem
+# a linha piezometrica: nao confundir desnível com perda de carga.
+
+BP_DEM_CAMINHO = Path(__file__).resolve().parent.parent / "dados" / "topografia" / "teresina_dem.tif"
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def bp_preparar_relevo(caminho, assinatura):
+    """Gera relevo sombreado e limites WGS84 a partir do DEM local.
+
+    Limitamos a resolucao da imagem (o raster original permanece intacto)
+    para evitar aumentar demasiadamente o HTML do mapa Streamlit.
+    """
+    del assinatura
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.warp import transform_bounds
+
+    with rasterio.open(caminho) as src:
+        if src.crs is None or src.count < 1:
+            raise ValueError("O arquivo topográfico precisa ser um GeoTIFF georreferenciado.")
+        escala = min(1.0, 1150 / max(src.width, src.height))
+        largura = max(1, int(src.width * escala))
+        altura = max(1, int(src.height * escala))
+        raster = src.read(
+            1, out_shape=(altura, largura),
+            resampling=Resampling.bilinear, masked=True,
+        )
+        bounds = transform_bounds(src.crs, "EPSG:4326", *src.bounds, densify_pts=21)
+        regiao = [[bounds[1], bounds[0]], [bounds[3], bounds[2]]]
+
+    valores = np.asarray(raster.filled(np.nan), dtype=np.float32)
+    validos = np.isfinite(valores)
+    if not validos.any():
+        raise ValueError("O modelo digital de elevação não contém cotas válidas.")
+    meio = float(np.nanmedian(valores))
+    p2, p98 = np.nanpercentile(valores[validos], [2, 98])
+    largura_intervalo = max(float(p98 - p2), 1.0)
+    escalado = np.clip((np.where(validos, valores, meio) - p2) / largura_intervalo, 0, 1)
+    # Sombreamento simplificado: relevo suave e sem falsa precisão.
+    grad_y, grad_x = np.gradient(np.where(validos, valores, meio))
+    sombra = np.clip(0.85 + 0.14 * np.tanh(-0.4 * grad_x - 0.5 * grad_y), 0.55, 1.0)
+    red = np.clip((193 + 42 * escalado) * sombra, 0, 255).astype(np.uint8)
+    green = np.clip((202 + 31 * escalado) * sombra, 0, 255).astype(np.uint8)
+    blue = np.clip((184 + 33 * escalado) * sombra, 0, 255).astype(np.uint8)
+    alpha = np.where(validos, 195, 0).astype(np.uint8)
+    rgba = np.stack([red, green, blue, alpha], axis=-1)
+    return rgba, regiao
+
+
+def bp_amostrar_perfil(caminho, vertices):
+    """Perfil de altitude por uma linha/rota desenhada (GeoJSON lat/lon)."""
+    import numpy as np
+    import rasterio
+    from rasterio.warp import transform
+    from pyproj import Geod
+
+    if len(vertices) < 2 or len(vertices) > 100:
+        raise ValueError("Desenhe uma linha com 2 a 100 vértices.")
+    geod = Geod(ellps="WGS84")
+    segmentos = []
+    comprimento = 0.0
+    for i in range(len(vertices) - 1):
+        lon_a, lat_a = map(float, vertices[i])
+        lon_b, lat_b = map(float, vertices[i + 1])
+        if not (-90 <= lat_a <= 90 and -180 <= lon_a <= 180 and
+                -90 <= lat_b <= 90 and -180 <= lon_b <= 180):
+            raise ValueError("A linha contém coordenadas inválidas.")
+        azimute, _, distancia = geod.inv(lon_a, lat_a, lon_b, lat_b)
+        if distancia < 0.01:
+            continue
+        segmentos.append((lon_a, lat_a, azimute, distancia))
+        comprimento += distancia
+    if comprimento < 1:
+        raise ValueError("A linha deve ligar dois pontos distintos.")
+    if comprimento > 60000:
+        raise ValueError("A linha ultrapassou 60 km. Desenhe trechos menores.")
+
+    passo = max(25.0, comprimento / 700)
+    distancias = []
+    pontos = []
+    acumulado = 0.0
+    for lon_a, lat_a, azimute, distancia in segmentos:
+        divisoes = max(1, int(math.ceil(distancia / passo)))
+        for indice in range(divisoes + 1):
+            if indice == 0 and pontos:
+                continue
+            trecho = distancia * indice / divisoes
+            lon, lat, _ = geod.fwd(lon_a, lat_a, azimute, trecho)
+            pontos.append((lon, lat))
+            distancias.append(acumulado + trecho)
+        acumulado += distancia
+
+    with rasterio.open(caminho) as src:
+        if src.crs is None:
+            raise ValueError("GeoTIFF sem sistema de referência de coordenadas.")
+        lons, lats = zip(*pontos)
+        xs, ys = transform("EPSG:4326", src.crs, list(lons), list(lats))
+        cotas = []
+        for leitura in src.sample(zip(xs, ys), indexes=1, masked=True):
+            valor = leitura[0]
+            if np.ma.is_masked(valor) or not np.isfinite(float(valor)):
+                cotas.append(float("nan"))
+            elif src.nodata is not None and np.isclose(float(valor), src.nodata):
+                cotas.append(float("nan"))
+            else:
+                cotas.append(float(valor))
+    return distancias, cotas
+
+
+def bp_medicao_proxima_extremo(vertice, base_medioes, limite_metros=35.0):
+    """Identifica uma leitura próxima sem confundir proximidade com coincidência exata.
+
+    O traçado é livre, não fica automaticamente ancorado nos pinos. Por isso,
+    só associamos uma medição de pressão ao extremo quando está no raio
+    indicado e exibimos a distância até o registro original.
+    """
+    from pyproj import Geod
+
+    if base_medioes is None or base_medioes.empty:
+        return None
+
+    longitude, latitude = map(float, vertice)
+    geod = Geod(ellps="WGS84")
+    mais_proxima = None
+
+    for _, registro in base_medioes.iterrows():
+        try:
+            lat_reg = float(registro["Latitude"])
+            lon_reg = float(registro["Longitude"])
+            pressao = float(registro["Pressao_MCA"])
+            if not all(math.isfinite(v) for v in (lat_reg, lon_reg, pressao)):
+                continue
+            _, _, distancia = geod.inv(longitude, latitude, lon_reg, lat_reg)
+            if distancia <= limite_metros and (
+                mais_proxima is None or distancia < mais_proxima["distancia_m"]
+            ):
+                mais_proxima = {
+                    "pressao_mca": pressao,
+                    "distancia_m": distancia,
+                    "bairro": str(registro.get("Bairro", "")).strip(),
+                }
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+
+    return mais_proxima
+
+
+def bp_texto_pressao_proxima(medicao):
+    """Texto explícito, com indicação de distância, sem criar vínculo hidráulico."""
+    if not medicao:
+        return "Nenhuma medição de pressão localizada a até 35 m desse extremo"
+    valor = f"{medicao['pressao_mca']:.2f}".replace(".", ",")
+    distancia = f"{medicao['distancia_m']:.0f}".replace(".", ",")
+    return f"Medição de pressão próxima: {valor} MCA (a {distancia} m)"
+
+
+# ============================================================
 # MAPA
 # ============================================================
 st.subheader(
@@ -3004,6 +3170,75 @@ with c_map4:
         )
 
 
+# Ativacao opcional: nenhum outro modulo depende da topografia.
+if "bp_modo_perfil" not in st.session_state:
+    st.session_state.bp_modo_perfil = False
+if "bp_trajeto_altimetrico" not in st.session_state:
+    st.session_state.bp_trajeto_altimetrico = None
+if "bp_versao_mapa_altimetrico" not in st.session_state:
+    st.session_state.bp_versao_mapa_altimetrico = 0
+if "bp_relevo_visivel" not in st.session_state:
+    st.session_state.bp_relevo_visivel = False
+
+bp_dem_existe = BP_DEM_CAMINHO.is_file()
+bp_dem_erro = None
+bp_dem_pronto = False
+if bp_dem_existe:
+    try:
+        import rasterio  # dependencia requerida apenas ao usar topografia
+        with rasterio.open(BP_DEM_CAMINHO) as bp_dem_teste:
+            bp_dem_pronto = bp_dem_teste.crs is not None and bp_dem_teste.count >= 1
+        if not bp_dem_pronto:
+            bp_dem_erro = "Raster sem georreferenciamento válido."
+    except Exception as bp_erro:
+        bp_dem_erro = str(bp_erro)
+
+st.markdown("#### 🏔️ Análise topográfica")
+bp_topo_a, bp_topo_b, bp_topo_c = st.columns([2.1, 2.1, 1.3])
+with bp_topo_a:
+    st.checkbox(
+        "Exibir relevo topográfico",
+        key="bp_relevo_visivel",
+        disabled=not bp_dem_pronto,
+        help="Camada gerada do GeoTIFF de elevação salvo no repositório.",
+    )
+with bp_topo_b:
+    texto_botao_perfil = (
+        "✅ Encerrar traçado" if st.session_state.bp_modo_perfil
+        else "📏 Traçar perfil de elevação"
+    )
+    if st.button(
+        texto_botao_perfil, use_container_width=True,
+        key="bp_botao_tracar_perfil", disabled=not bp_dem_pronto,
+    ):
+        st.session_state.bp_modo_perfil = not st.session_state.bp_modo_perfil
+        st.session_state.bp_versao_mapa_altimetrico += 1
+        st.rerun()
+with bp_topo_c:
+    if st.button(
+        "Limpar perfil", use_container_width=True,
+        key="bp_limpar_perfil", disabled=st.session_state.bp_trajeto_altimetrico is None,
+    ):
+        st.session_state.bp_trajeto_altimetrico = None
+        st.session_state.bp_versao_mapa_altimetrico += 1
+        st.rerun()
+
+if not bp_dem_pronto:
+    if bp_dem_erro:
+        st.warning(f"Camada topográfica indisponível: {bp_dem_erro}")
+    else:
+        st.caption(
+            "Para habilitar o relevo e o perfil de elevação, adicione "
+            "`dados/topografia/teresina_dem.tif` ao repositório GitHub. "
+            "É necessário um GeoTIFF de altitude (MDE/MDT), não apenas um mapa em imagem."
+        )
+if bp_dem_pronto and st.session_state.bp_modo_perfil:
+    st.info(
+        "Clique na ferramenta de linha (ícone de polilinha) no canto superior "
+        "esquerdo do mapa. Clique nos pontos inicial e final e dê duplo clique "
+        "para concluir. É possível inserir vértices intermediários."
+    )
+
 if (
     not df_filtrado.empty
     and df_filtrado["Latitude"].notna().any()
@@ -3067,6 +3302,87 @@ else:
         name="Mapa Padrão (OpenStreetMap)"
     ).add_to(m)
 
+
+# Camada de relevo local: usa somente o GeoTIFF versionado no GitHub.
+if bp_dem_pronto and st.session_state.bp_relevo_visivel:
+    try:
+        rgba_topo, limites_topo = bp_preparar_relevo(
+            str(BP_DEM_CAMINHO), BP_DEM_CAMINHO.stat().st_mtime_ns,
+        )
+        folium.raster_layers.ImageOverlay(
+            image=rgba_topo,
+            bounds=limites_topo,
+            opacity=0.7,
+            name="Relevo local (MDE)",
+            show=True,
+            interactive=False,
+            zindex=1,
+        ).add_to(m)
+    except Exception as bp_exc:
+        st.warning(f"Não foi possível exibir o relevo: {bp_exc}")
+
+# Exibe o último perfil no mapa, com direção inequívoca A → B.
+if st.session_state.bp_trajeto_altimetrico:
+    folium.PolyLine(
+        locations=[[vertice[1], vertice[0]] for vertice in st.session_state.bp_trajeto_altimetrico],
+        color="#0B75BC", weight=4, opacity=0.95,
+        tooltip="Perfil topográfico: A (início) → B (fim)",
+    ).add_to(m)
+
+    # Cada extremo recebe a própria cota, visível no mapa, independente
+    # da pressão que já aparece nos marcadores de medição.
+    if bp_dem_pronto:
+        try:
+            bp_d_mapa, bp_cotas_mapa = bp_amostrar_perfil(
+                str(BP_DEM_CAMINHO), st.session_state.bp_trajeto_altimetrico
+            )
+            for bp_letra, bp_vertice, bp_cota, bp_cor in (
+                ("A", st.session_state.bp_trajeto_altimetrico[0], bp_cotas_mapa[0], "#0B75BC"),
+                ("B", st.session_state.bp_trajeto_altimetrico[-1], bp_cotas_mapa[-1], "#D97706"),
+            ):
+                bp_cota_texto = (
+                    f"{float(bp_cota):.1f}".replace(".", ",") + " m"
+                    if math.isfinite(float(bp_cota)) else "sem cota"
+                )
+                bp_chip_html = (
+                    '<div style="display:inline-flex;align-items:center;gap:4px;'
+                    'white-space:nowrap;background:#ffffff;color:#142A3C;'
+                    'border:1px solid #CAD5E0;border-left:4px solid ' + bp_cor + ';'
+                    'border-radius:6px;padding:4px 7px;font:700 11px Arial,sans-serif;'
+                    'box-shadow:0 2px 5px #0003;pointer-events:none;">'
+                    + bp_letra + ' · ' + bp_cota_texto + '</div>'
+                )
+                folium.Marker(
+                    location=[float(bp_vertice[1]), float(bp_vertice[0])],
+                    icon=folium.DivIcon(
+                        html=bp_chip_html,
+                        icon_size=(110, 25),
+                        icon_anchor=(10, -7),  # abaixo do extremo, bem perto do pino
+                        class_name="bp-cota-extremo",
+                    ),
+                    tooltip=f"Ponto {bp_letra}: cota do terreno {bp_cota_texto}",
+                    z_index_offset=2000,
+                ).add_to(m)
+        except Exception:
+            # A advertência detalhada sobre DEM/perfil aparece abaixo do mapa.
+            pass
+
+if bp_dem_pronto and st.session_state.bp_relevo_visivel:
+    folium.LayerControl(collapsed=True).add_to(m)
+
+if bp_dem_pronto and st.session_state.bp_modo_perfil:
+    from folium.plugins import Draw
+    Draw(
+        export=False,
+        position="topleft",
+        show_geometry_on_click=False,
+        draw_options={
+            "polyline": {"shapeOptions": {"color": "#0B75BC", "weight": 4}},
+            "polygon": False, "rectangle": False, "circle": False,
+            "circlemarker": False, "marker": False,
+        },
+        edit_options={"edit": False, "remove": True},
+    ).add_to(m)
 
 # ============================================================
 # FUNÇÕES VISUAIS DOS PINS
@@ -4315,11 +4631,156 @@ map_data = st_folium(
     m,
     width="100%",
     height=520,
-    returned_objects=[
-        "last_clicked"
-    ],
-    key="mapa_principal"
+    returned_objects=(
+        ["last_clicked", "last_active_drawing"]
+        if bp_dem_pronto and st.session_state.bp_modo_perfil
+        else ["last_clicked"]
+    ),
+    key=f"mapa_principal_topografia_{st.session_state.bp_versao_mapa_altimetrico}"
 )
+
+
+# Captura a linha desenhada no Leaflet e gera o perfil exclusivamente
+# a partir das cotas do raster local (sem estimativas artificiais).
+if bp_dem_pronto and st.session_state.bp_modo_perfil and map_data:
+    desenho_topo = map_data.get("last_active_drawing")
+    geometria_topo = desenho_topo.get("geometry", {}) if isinstance(desenho_topo, dict) else {}
+    if geometria_topo.get("type") == "LineString":
+        coords = geometria_topo.get("coordinates", [])
+        if isinstance(coords, list) and len(coords) >= 2:
+            # Só atualiza se a linha mudou. O rerun redesenha imediatamente
+            # os chips A/B com cotas, sem exigir outra interação do usuário.
+            if coords != st.session_state.bp_trajeto_altimetrico:
+                st.session_state.bp_trajeto_altimetrico = coords
+                st.rerun()
+
+if bp_dem_pronto and st.session_state.bp_trajeto_altimetrico:
+    try:
+        bp_vertices = st.session_state.bp_trajeto_altimetrico
+        bp_distancias, bp_altitudes = bp_amostrar_perfil(
+            str(BP_DEM_CAMINHO), bp_vertices
+        )
+        bp_serie = pd.DataFrame({
+            "Distância (m)": bp_distancias,
+            "Cota do terreno (m)": bp_altitudes,
+        })
+        bp_validos = bp_serie.dropna(subset=["Cota do terreno (m)"])
+
+        if bp_validos.empty:
+            st.warning("O perfil desenhado está fora da cobertura altimétrica do GeoTIFF.")
+        else:
+            st.markdown("#### 📈 Perfil de elevação do terreno — A → B")
+
+            bp_cota_a = float(bp_altitudes[0])
+            bp_cota_b = float(bp_altitudes[-1])
+            bp_a_valido = math.isfinite(bp_cota_a)
+            bp_b_valido = math.isfinite(bp_cota_b)
+            bp_variacao = bp_cota_b - bp_cota_a if bp_a_valido and bp_b_valido else None
+
+            # Próximo significa localização geográfica a <=35 m,
+            # não significa que a rota acompanhe a tubulação entre esses pontos.
+            bp_pressao_a = bp_medicao_proxima_extremo(bp_vertices[0], df_filtrado)
+            bp_pressao_b = bp_medicao_proxima_extremo(bp_vertices[-1], df_filtrado)
+
+            # O gráfico é deliberadamente apresentado ANTES dos indicadores:
+            # na V5 ficava abaixo deles e podia parecer ausente sem rolar a página.
+            figura_altimetria = go.Figure()
+            figura_altimetria.add_trace(go.Scatter(
+                x=bp_distancias,
+                y=bp_altitudes,
+                mode="lines",
+                name="Cota do terreno",
+                line=dict(color="#0B75BC", width=3),
+                fill="tozeroy",
+                fillcolor="rgba(11,117,188,0.10)",
+                hovertemplate="Distância: %{x:.0f} m<br>Cota: %{y:.1f} m<extra></extra>",
+                connectgaps=False,
+            ))
+            for bp_letra, bp_dist, bp_cota, bp_cor in (
+                ("A", bp_distancias[0], bp_cota_a, "#0B75BC"),
+                ("B", bp_distancias[-1], bp_cota_b, "#D97706"),
+            ):
+                if math.isfinite(bp_cota):
+                    figura_altimetria.add_trace(go.Scatter(
+                        x=[bp_dist], y=[bp_cota], mode="markers+text",
+                        marker=dict(size=11, color=bp_cor, line=dict(color="white", width=2)),
+                        text=[f"{bp_letra} · {bp_cota:.1f} m"],
+                        textposition="top center",
+                        textfont=dict(color=bp_cor, size=12),
+                        hovertemplate=f"Ponto {bp_letra}<br>Cota: %{{y:.1f}} m<extra></extra>",
+                        showlegend=False,
+                    ))
+            bp_cota_minima = float(bp_validos["Cota do terreno (m)"].min())
+            bp_cota_maxima = float(bp_validos["Cota do terreno (m)"].max())
+            bp_margem_y = max(2.0, (bp_cota_maxima - bp_cota_minima) * 0.20)
+            figura_altimetria.update_layout(
+                title=dict(text="Variação altimétrica ao longo do traçado", x=0.02),
+                height=300,
+                margin=dict(l=20, r=25, t=55, b=20),
+                xaxis_title="Distância desde o ponto A (m)",
+                yaxis_title="Cota do terreno (m)",
+                yaxis=dict(range=[bp_cota_minima - bp_margem_y, bp_cota_maxima + bp_margem_y]),
+                showlegend=False,
+                hovermode="x unified",
+                # Fundo e tipografia explícitos para manter boa leitura mesmo
+                # quando a aplicação Streamlit estiver em modo escuro.
+                paper_bgcolor="#F7FAFC",
+                plot_bgcolor="#FFFFFF",
+                font=dict(color="#17324A", size=12),
+            )
+            figura_altimetria.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.20)")
+            figura_altimetria.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.20)")
+            try:
+                st.plotly_chart(
+                    figura_altimetria, use_container_width=True,
+                    config={"displaylogo": False},
+                )
+            except Exception as bp_erro_grafico:
+                # Alternativa nativa caso a versão de Plotly/Streamlit não
+                # consiga renderizar o objeto interativo.
+                st.line_chart(
+                    bp_serie.set_index("Distância (m)")["Cota do terreno (m)"],
+                    use_container_width=True,
+                )
+                st.caption(f"Gráfico apresentado no modo simplificado: {bp_erro_grafico}")
+
+            st.markdown("**Identificação dos extremos do traçado**")
+            bp_res_a, bp_res_b, bp_res_desnivel, bp_res_extensao = st.columns(4)
+            bp_res_a.metric(
+                "A · Início", f"{bp_cota_a:.1f} m" if bp_a_valido else "Sem cota"
+            )
+            bp_res_b.metric(
+                "B · Fim", f"{bp_cota_b:.1f} m" if bp_b_valido else "Sem cota"
+            )
+            bp_res_desnivel.metric(
+                "Desnível B − A", f"{bp_variacao:+.1f} m" if bp_variacao is not None else "Sem cobertura"
+            )
+            bp_res_extensao.metric(
+                "Comprimento", f"{bp_distancias[-1]:,.0f} m".replace(",", ".")
+            )
+
+            bp_pcol_a, bp_pcol_b = st.columns(2)
+            with bp_pcol_a:
+                st.caption("**Ponto A:** " + bp_texto_pressao_proxima(bp_pressao_a))
+            with bp_pcol_b:
+                st.caption("**Ponto B:** " + bp_texto_pressao_proxima(bp_pressao_b))
+
+            bp_idx_min = bp_serie["Cota do terreno (m)"].idxmin()
+            bp_idx_max = bp_serie["Cota do terreno (m)"].idxmax()
+            bp_pos_min = float(bp_serie.loc[bp_idx_min, "Distância (m)"])
+            bp_pos_max = float(bp_serie.loc[bp_idx_max, "Distância (m)"])
+            st.caption(
+                f"**Mínima no percurso:** {bp_cota_minima:.1f} m (a {bp_pos_min:.0f} m do A).  "
+                f"**Máxima no percurso:** {bp_cota_maxima:.1f} m (a {bp_pos_max:.0f} m do A). "
+                "Essas cotas podem ocorrer entre os extremos, não necessariamente em A ou B."
+            )
+            st.caption(
+                "As cotas representam a superfície amostrada pelo Copernicus DSM, "
+                "não a cota da tubulação. O perfil não acompanha automaticamente a rede, "
+                "e o desnível sozinho não comprova perda de carga ou gargalo hidráulico."
+            )
+    except Exception as bp_exc:
+        st.warning(f"Não foi possível calcular o perfil de elevação: {bp_exc}")
 
 
 # ============================================================
@@ -4327,6 +4788,7 @@ map_data = st_folium(
 # ============================================================
 if (
     pode_alterar_dados
+    and not st.session_state.bp_modo_perfil
     and st.session_state.modo_adicionar_mapa
     and map_data
     and map_data.get(
