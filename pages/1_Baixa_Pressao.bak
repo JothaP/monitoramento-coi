@@ -115,6 +115,39 @@ COLUNAS_PADRAO = [
 ]
 
 
+# Marcador técnico da atividade: indispensável à deduplicação, mas não é
+# uma observação operacional. Nunca altere o valor bruto no Google Sheets.
+_BP_MARCADOR_ATIVIDADE = re.compile(
+    r"\bSAI_ATIVIDADE\s*=\s*[A-Z0-9_-]+", re.IGNORECASE
+)
+
+
+def bp_observacao_visivel(valor) -> str:
+    """Oculta apenas o marcador técnico nas telas e exportações para leitura."""
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    if texto.lower() in ("nan", "none", "nat", ""):
+        return ""
+    if not _BP_MARCADOR_ATIVIDADE.search(texto):
+        return texto
+    texto = _BP_MARCADOR_ATIVIDADE.sub("", texto)
+    texto = re.sub(r"(?:\s*[|;]\s*){2,}", " | ", texto)
+    return texto.strip(" \t\r\n|;,/-")
+
+
+def bp_observacao_preservando_id(texto_editado, observacao_original) -> str:
+    """Preserva o ID técnico ao salvar uma observação editada no formulário."""
+    observacao = bp_observacao_visivel(texto_editado)
+    marcadores = list(dict.fromkeys(
+        _BP_MARCADOR_ATIVIDADE.findall(str(observacao_original or ""))
+    ))
+    if not marcadores:
+        return observacao
+    retorno = " | ".join([valor for valor in [observacao, *marcadores] if valor])
+    return retorno
+
+
 # ============================================================
 # SANEAR — ÁREAS DE INTERVENÇÃO DE ESGOTAMENTO SANITÁRIO
 # ============================================================
@@ -1016,16 +1049,11 @@ def gerar_kml(df):
 
             try:
 
+                obs_visivel = bp_observacao_visivel(
+                    row.get("Observacao", "")
+                )
                 obs_text = (
-                    f"\nObservação: "
-                    f"{row.get('Observacao', '')}"
-                    if str(
-                        row.get(
-                            "Observacao",
-                            ""
-                        )
-                    ).strip()
-                    else ""
+                    f"\nObservação: {obs_visivel}" if obs_visivel else ""
                 )
 
                 matricula_text = (
@@ -1499,7 +1527,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
        BP_REL_Spacer(1,8)])
     detalhe=[]
     for _,r in base.sort_values(["_municipio","_bairro","_data","Matricula"],na_position="last").iterrows():
-        obs=str(r.get("Observacao","") or "").strip()
+        obs=bp_observacao_visivel(r.get("Observacao", ""))
         if len(obs)>320:obs=obs[:317]+"…"
         detalhe.append([str(r.get("Data","")),f"{r.get('Bairro','')} / {r.get('Municipio','')}",
             str(r.get("Matricula","") or ""),f"{float(r['_pressao']):g}",obs])
@@ -1778,7 +1806,7 @@ def modal_editar_ponto(
 
             observacao_e = st.text_input(
                 "Observação",
-                value=str(
+                value=bp_observacao_visivel(
                     reg_edit["Observacao"]
                 )
             )
@@ -1846,7 +1874,9 @@ def modal_editar_ponto(
                         data_para_str(
                             data_e
                         ),
-                        observacao_e.strip()
+                        bp_observacao_preservando_id(
+                            observacao_e.strip(), reg_edit["Observacao"]
+                        )
                     ):
 
                         st.success(
@@ -1896,8 +1926,12 @@ def modal_previa_upload():
         ]
     )
 
+    df_preview_visivel = df_preview.copy()
+    df_preview_visivel["Observacao"] = (
+        df_preview_visivel["Observacao"].map(bp_observacao_visivel)
+    )
     st.dataframe(
-        df_preview[
+        df_preview_visivel[
             [
                 "Data",
                 "Municipio",
@@ -2340,7 +2374,11 @@ with st.sidebar:
                 engine="openpyxl"
             ) as writer:
 
-                df_all.to_excel(
+                df_exportacao = df_all.copy()
+                df_exportacao["Observacao"] = (
+                    df_exportacao["Observacao"].map(bp_observacao_visivel)
+                )
+                df_exportacao.to_excel(
                     writer,
                     index=False,
                     sheet_name="Baixa_Pressao"
@@ -3404,11 +3442,8 @@ if not df_filtrado.empty:
                     registro["Data"]
                 )
 
-                observacao = str(
-                    registro.get(
-                        "Observacao",
-                        ""
-                    )
+                observacao = bp_observacao_visivel(
+                    registro.get("Observacao", "")
                 )
 
                 observacao_html = ""
@@ -4685,6 +4720,9 @@ if not df_filtrado.empty:
         ]
     ].reset_index(
         drop=True
+    ).copy()
+    df_show["Observacao"] = df_show["Observacao"].map(
+        bp_observacao_visivel
     )
 
     # ========================================================
