@@ -32,6 +32,175 @@ from sai_pressao_importacao import (
     ler_arquivo, chave_medicao, normalizar_cabecalho,
 )
 
+# O conversor compartilhado e a deduplicação continuam usando as 9 colunas A:I.
+# A coluna J é adicionada apenas DEPOIS de selecionar os registros novos.
+FUSO = ZoneInfo("America/Sao_Paulo")
+COLUNA_PROTOCOLO = "Cod_Protocolo"
+COLUNAS_PLANILHA = list(COLUNAS_SAI) + [COLUNA_PROTOCOLO]
+
+
+def _nome_campo(valor):
+    """Reconhece variações de acentos e pontuação no cabeçalho original."""
+    texto = unicodedata.normalize("NFKD", str(valor or "").lower())
+    return re.sub(r"[^a-z0-9]", "", "".join(
+        c for c in texto if not unicodedata.combining(c)
+    ))
+
+
+def _campo(df, *nomes):
+    colunas = {_nome_campo(nome): nome for nome in df.columns}
+    return next((colunas[_nome_campo(nome)] for nome in nomes
+                 if _nome_campo(nome) in colunas), None)
+
+
+def _texto(valor):
+    if valor is None or pd.isna(valor):
+        return ""
+    saida = str(valor).strip()
+    if saida.lower() in ("none", "nan", "nat"):
+        return ""
+    if re.fullmatch(r"\d+\.0", saida):
+        return saida[:-2]
+    return saida
+
+
+def _numero(valor):
+    try:
+        txt = _texto(valor).replace(",", ".")
+        match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*(?:mca)?\s*", txt, re.I)
+        numero = float(match.group(1)) if match else None
+        return round(numero, 6) if numero is not None and pd.notna(numero) else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _data(valor):
+    if isinstance(valor, (datetime, date, pd.Timestamp)):
+        return valor.strftime("%Y-%m-%d")
+    txt = _texto(valor)
+    if not txt:
+        return ""
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S",
+                "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(txt, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return ""
+
+
+def _matricula(valor):
+    return _texto(valor).replace(" ", "").upper()
+
+
+def _atividade_observacao(observacao):
+    match = re.search(r"\bSAI_ATIVIDADE\s*=\s*([A-Z0-9_-]+)", _texto(observacao), re.I)
+    return match.group(1).upper() if match else ""
+
+
+def _chaves_registro(lat, lon, matricula, data, pressao):
+    """Chaves auxiliares somente para localizar o protocolo, NUNCA para deduplicar."""
+    lat, lon = _numero(lat), _numero(lon)
+    if lat is None or lon is None:
+        return []
+    mat = _matricula(matricula)
+    data = _data(data)
+    pressao = _numero(pressao)
+    chaves = []
+    if data and pressao is not None:
+        chaves.append(("completa", lat, lon, mat, data, pressao))
+    if data:
+        chaves.append(("com_data", lat, lon, mat, data))
+    if pressao is not None:
+        chaves.append(("com_pressao", lat, lon, mat, pressao))
+    chaves.append(("local", lat, lon, mat))
+    return chaves
+
+
+def _indice_protocolos(df):
+    """Extrai o protocolo da exportação original antes do descarte no conversor.
+
+    São indexadas também as linhas com protocolo vazio, para impedir que o
+    protocolo de outra atividade no mesmo endereço seja copiado por engano.
+    """
+    col_proto = _campo(df, "Cód. Protocolo Origem", "Cod. Protocolo Origem",
+                       "Protocolo Origem", "Cod_Protocolo", "Protocolo")
+    if col_proto is None:
+        return False, {}, {}
+    col_id = _campo(df, "ID Atividade", "ID da Atividade", "ID Ativ",
+                    "Código Atividade", "Código da Atividade", "Cod Atividade",
+                    "Número da Atividade", "Numero da Atividade", "Nº Atividade",
+                    "Activity ID", "ID")
+    col_lat = _campo(df, "Latitude", "Lat")
+    col_lon = _campo(df, "Longitude", "Lon", "Long")
+    col_mat = _campo(df, "Matrícula", "Matricula", "Matricula do Imovel",
+                     "Matrícula do Imóvel", "Nr Matricula", "Número da Matrícula",
+                     "Matrícula do Cliente")
+    col_data = _campo(df, "Data", "Data da atividade", "Data da Atividade")
+    col_press = _campo(df, "Qual A Pressão Da Rede (Mca)", "Pressao_MCA",
+                       "Pressão (MCA)", "Pressao")
+    por_atividade, por_local = {}, {}
+    for _, row in df.iterrows():
+        proto = _texto(row.get(col_proto))
+        if col_id:
+            atv = _texto(row.get(col_id)).upper()
+            if atv:
+                por_atividade.setdefault(atv, set()).add(proto)
+        for chave in _chaves_registro(
+            row.get(col_lat) if col_lat else None,
+            row.get(col_lon) if col_lon else None,
+            row.get(col_mat) if col_mat else "",
+            row.get(col_data) if col_data else "",
+            row.get(col_press) if col_press else None,
+        ):
+            por_local.setdefault(chave, set()).add(proto)
+    return True, por_atividade, por_local
+
+
+def anexar_protocolos(novos, df_bruto):
+    """Acrescenta J aos registros JÁ deduplicados; não altera A:I.
+
+    Somente aceita associação unívoca pelo ID da atividade ou pelos campos
+    geográficos originais. Em caso de dúvida, bloqueia o lote antes de gravar:
+    a deduplicação impediria recuperar o protocolo em reexecuções futuras.
+    """
+    tem_coluna, por_atividade, por_local = _indice_protocolos(df_bruto)
+    linhas, preenchidos, ambiguos = [], 0, 0
+    for row in novos:
+        linha = list(row)
+        if len(linha) == 10:
+            protocolo = _texto(linha[9])
+            linhas.append(linha[:9] + [protocolo])
+            preenchidos += bool(protocolo)
+            continue
+        if len(linha) != 9:
+            raise ValueError("Conversor retornou linha com quantidade inesperada de colunas")
+        if not tem_coluna:
+            # Arquivo legado: não modifica o processamento nem inventa protocolo.
+            linhas.append(linha + [""])
+            continue
+        atividade = _atividade_observacao(linha[7])
+        candidatos = por_atividade.get(atividade) if atividade else None
+        if candidatos is None:
+            for chave in _chaves_registro(linha[4], linha[5], linha[8], linha[1], linha[6]):
+                valores = por_local.get(chave)
+                if valores:
+                    candidatos = valores
+                    break
+        if candidatos is None or len(candidatos) != 1:
+            ambiguos += 1
+            linhas.append(linha + [""])
+            continue
+        protocolo = next(iter(candidatos))
+        preenchidos += bool(protocolo)
+        linhas.append(linha + [protocolo])
+    if ambiguos:
+        raise ValueError(
+            f"Protocolo: {ambiguos} medição(ões) sem vínculo único com a origem. "
+            "Nenhum registro deste lote foi gravado."
+        )
+    return linhas, preenchidos
+
 
 def conectar_google():
     """Usa a mesma conta de serviço do SAI; não escreve arquivos no Drive."""
@@ -62,10 +231,13 @@ def abrir_abas(spreadsheet, dry_run=False):
     from gspread.exceptions import WorksheetNotFound
     ws = spreadsheet.worksheet('baixa_pressao')
     cab = ws.row_values(1)
+    # As primeiras 9 colunas continuam com o contrato original, sem mudança.
     if [normalizar_cabecalho(x) for x in cab[:len(COLUNAS_SAI)]] != [
         normalizar_cabecalho(x) for x in COLUNAS_SAI
     ]:
-        raise ValueError('Cabeçalho de baixa_pressao divergente; nenhuma importação realizada')
+        raise ValueError('Cabeçalho A:I de baixa_pressao divergente; nenhuma importação realizada')
+    if len(cab) < 10 or _nome_campo(cab[9]) != _nome_campo(COLUNA_PROTOCOLO):
+        raise ValueError('Adicione Cod_Protocolo em J1 da aba baixa_pressao antes de sincronizar')
     try:
         diario = spreadsheet.worksheet('sai_sync_pressao')
     except WorksheetNotFound:
@@ -173,6 +345,9 @@ def executar_sincronizacao():
                 print('SAI: conteúdo já processado, ignorado')
                 continue
             df = ler_arquivo(meta['name'], content)
+            if _campo(df, "Cód. Protocolo Origem", "Cod. Protocolo Origem",
+                      "Protocolo Origem", "Cod_Protocolo", "Protocolo") is None:
+                print('SAI: AVISO: origem sem coluna de protocolo; novos registros terão J vazio')
             resultado = converter_bruta(df, meta['name'])
             if not resultado.linhas:
                 status, novos_qtd, repetidos = 'SEM_ELEGIVEIS', 0, 0
@@ -184,6 +359,8 @@ def executar_sincronizacao():
                 repetidos_planilha = repetidos
                 repetidos_arquivo = 0  # Incluídos no total de repetidos nesta versão.
                 if dry_run:
+                    _, protocolos_vinculados = anexar_protocolos(novos, df)
+                    print(f'SAI: simulação: {protocolos_vinculados} protocolo(s) vinculados aos novos registros')
                     print(
                         f'SAI: SIMULAÇÃO (SEM GRAVAÇÃO) | arquivo={meta["name"]} '
                         f'| atividades={resultado.origem} '
@@ -197,12 +374,16 @@ def executar_sincronizacao():
                         f'| descartados={resultado.origem-len(resultado.linhas)}'
                     )
                     continue
-                for inicio in range(0, len(novos), 200):
-                    lote = novos[inicio:inicio+200]
+                # Protocolo é acrescentado após a deduplicação; a seleção continua
+                # usando exclusivamente o conversor compartilhado (A:I).
+                novos_com_protocolo, protocolos_vinculados = anexar_protocolos(novos, df)
+                for inicio in range(0, len(novos_com_protocolo), 200):
+                    lote = novos_com_protocolo[inicio:inicio+200]
                     ws.append_rows(lote, value_input_option='RAW')
                     # O índice já foi atualizado ao selecionar o lote.
                 novos_qtd = len(novos)
                 status = 'IMPORTADO' if novos_qtd else 'SEM_NOVOS'
+                print(f'SAI: protocolos vinculados nesta importação: {protocolos_vinculados}')
             if dry_run:
                 print(f'SAI: SIMULAÇÃO: arquivo={meta["name"]}; elegíveis={len(resultado.linhas)}; sem escrita')
                 continue
@@ -231,10 +412,13 @@ def executar_sincronizacao():
 
 def validar_local(path):
     arquivo = Path(path)
-    r = converter_bruta(ler_arquivo(arquivo.name,arquivo.read_bytes()),arquivo.name)
+    df = ler_arquivo(arquivo.name, arquivo.read_bytes())
+    r = converter_bruta(df, arquivo.name)
+    _, protocolos = anexar_protocolos(r.linhas, df)
     print(f'SAI validação local: atividades={r.origem}; elegíveis={len(r.linhas)}; '
           f'0 MCA={sum(row[6] == 0 for row in r.linhas)}; '
-          f'sem cota numérica={r.sem_pressao_numerica}; sem data={r.sem_data}')
+          f'sem cota numérica={r.sem_pressao_numerica}; sem data={r.sem_data}; '
+          f'protocolos encontrados={protocolos}')
     return r
 
 
