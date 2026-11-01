@@ -3,7 +3,7 @@ name: SAI - Importação Automática de Pressões - Módulo 1
 on:
   workflow_dispatch:
   schedule:
-    - cron: '7,37 * * * *'
+    - cron: '15,45 * * * *'
 
 permissions:
   contents: read
