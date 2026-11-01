@@ -22,6 +22,19 @@ import unicodedata
 import re
 import math
 from pathlib import Path
+import sys
+
+# Mesmo conversor da sincronização automática por GitHub Actions.
+# Aceita execução em pages/ e no Ambiente de Teste.
+BP_RAIZ_SAI = Path(__file__).resolve().parent
+if BP_RAIZ_SAI.name.lower() == "pages":
+    BP_RAIZ_SAI = BP_RAIZ_SAI.parent
+if str(BP_RAIZ_SAI) not in sys.path:
+    sys.path.insert(0, str(BP_RAIZ_SAI))
+from sai_pressao_importacao import (
+    IndiceDuplicidades, converter_bruta, ler_arquivo,
+)
+import xml.etree.ElementTree as ET
 
 
 # ============================================================
@@ -100,6 +113,101 @@ COLUNAS_PADRAO = [
     "Observacao",
     "Matricula"
 ]
+
+
+# ============================================================
+# SANEAR — ÁREAS DE INTERVENÇÃO DE ESGOTAMENTO SANITÁRIO
+# ============================================================
+def bp_encontrar_kml_sanear():
+    """Localiza o KML no repositório (módulo na raiz ou em pages/)."""
+    relativo = Path("geodados") / "areas_influencia" / "sanear.kml"
+    base = Path(__file__).resolve().parent
+    candidatos = (base / relativo, base.parent / relativo, Path.cwd() / relativo)
+    for caminho in candidatos:
+        if caminho.is_file():
+            return caminho
+    return candidatos[0]
+
+
+@st.cache_data(show_spinner=False)
+def bp_carregar_poligonos_sanear(caminho: str, versao: int):
+    """Lê polígonos KML locais em GeoJSON, sem dependências geoespaciais extras.
+
+    O KML guarda os vértices em longitude/latitude. GeoJSON utiliza a mesma
+    ordem, enquanto o Leaflet se encarrega da projeção no mapa.
+    `versao` recebe o mtime_ns para invalidar o cache ao atualizar o arquivo.
+    """
+    _ = versao
+    raiz = ET.parse(caminho).getroot()
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    placas = raiz.findall(".//k:Placemark", ns)
+    if not placas:
+        placas = raiz.findall(".//Placemark")
+
+    def ler_anel(elemento):
+        if elemento is None:
+            return None
+        txt = elemento.findtext(".//k:coordinates", default="", namespaces=ns)
+        if not txt:
+            txt = elemento.findtext(".//coordinates", default="")
+        pontos = []
+        for item in txt.split():
+            valores = item.split(",")
+            if len(valores) < 2:
+                continue
+            try:
+                longitude = float(valores[0])
+                latitude = float(valores[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(longitude) and math.isfinite(latitude):
+                pontos.append([longitude, latitude])
+        if len(pontos) < 3:
+            return None
+        if pontos[0] != pontos[-1]:
+            pontos.append(pontos[0])
+        return pontos if len(pontos) >= 4 else None
+
+    feicoes = []
+    for placa in placas:
+        dados = {}
+        for item in placa.findall(".//k:SimpleData", ns):
+            dados[item.get("name", "")] = (item.text or "").strip()
+        if not dados:
+            for item in placa.findall(".//SimpleData"):
+                dados[item.get("name", "")] = (item.text or "").strip()
+        nome_placa = placa.findtext("k:name", default="", namespaces=ns) or ""
+        atributos = {
+            "Área": dados.get("NOME") or nome_placa or "Não identificada",
+            "Bacia": dados.get("BACIA") or "Não informada",
+            "Município": dados.get("MUNICIPIO") or "Não informado",
+            "Empresa": dados.get("EMPRESA") or "Não informada",
+        }
+        poligonos = placa.findall(".//k:Polygon", ns)
+        if not poligonos:
+            poligonos = placa.findall(".//Polygon")
+        for poligono in poligonos:
+            exterior = poligono.find("k:outerBoundaryIs", ns)
+            if exterior is None:
+                exterior = poligono.find("outerBoundaryIs")
+            anel_externo = ler_anel(exterior)
+            if not anel_externo:
+                continue
+            aneis = [anel_externo]
+            interiores = poligono.findall("k:innerBoundaryIs", ns)
+            if not interiores:
+                interiores = poligono.findall("innerBoundaryIs")
+            for interior in interiores:
+                anel = ler_anel(interior)
+                if anel:
+                    aneis.append(anel)
+            feicoes.append({
+                "type": "Feature",
+                "properties": atributos.copy(),
+                "geometry": {"type": "Polygon", "coordinates": aneis},
+            })
+
+    return {"type": "FeatureCollection", "features": feicoes}
 
 
 # ============================================================
@@ -749,154 +857,37 @@ def adicionar_ponto(
     return novo_id
 
 
-def adicionar_lote_seguro(
-    linhas_dados: list
-):
-
+def adicionar_lote_seguro(linhas_dados: list) -> int:
+    """Grava pontos novos seguindo exatamente a regra da automação."""
     if not pode_alterar_dados:
-        st.error(
-            "Seu perfil não possui permissão para importar dados."
-        )
+        st.error("Seu perfil não possui permissão para importar dados.")
         return 0
-
     if not linhas_dados:
         return 0
 
-    df_atual = carregar_dados()
+    # O identificador da atividade diferencia medições feitas no mesmo local.
+    # Sem ID da atividade, compara data, local, pressão e matrícula.
+    registros_sheet = worksheet.get_all_values()
+    indice = IndiceDuplicidades(registros_sheet[1:])
+    linhas_novas, repetidas, _ = indice.selecionar(linhas_dados)
+    if not linhas_novas:
+        return 0
 
-    chaves_existentes = set()
-
-    if not df_atual.empty:
-
-        for _, r in df_atual.iterrows():
-
-            lat_f = (
-                f"{float(r['Latitude']):.6f}"
-                if pd.notnull(
-                    r["Latitude"]
-                )
-                else ""
-            )
-
-            lon_f = (
-                f"{float(r['Longitude']):.6f}"
-                if pd.notnull(
-                    r["Longitude"]
-                )
-                else ""
-            )
-
-            chave = (
-                str(r["Data"]).strip(),
-                str(
-                    r["Municipio"]
-                ).strip().lower(),
-                str(
-                    r["Bairro"]
-                ).strip().lower(),
-                lat_f,
-                lon_f
-            )
-
-            chaves_existentes.add(
-                chave
-            )
-
-    linhas_novas = []
-
-    for linha in linhas_dados:
-
-        (
-            id_v,
-            d_val,
-            mun_val,
-            bair_val,
-            lat_val,
-            lon_val,
-            pres_val,
-            obs_val,
-            mat_val
-        ) = linha
-
-        lat_f = (
-            f"{float(lat_val):.6f}"
-        )
-
-        lon_f = (
-            f"{float(lon_val):.6f}"
-        )
-
-        chave_nova = (
-            str(d_val).strip(),
-            str(
-                mun_val
-            ).strip().lower(),
-            str(
-                bair_val
-            ).strip().lower(),
-            lat_f,
-            lon_f
-        )
-
-        if chave_nova not in chaves_existentes:
-
-            linhas_novas.append(
-                linha
-            )
-
-            chaves_existentes.add(
-                chave_nova
-            )
-
-    if linhas_novas:
-
-        dados_formatados = [
-
-            [
-                str(i),
-                str(d),
-                normalizar_texto_local(
-                    mun,
-                    padrao="TERESINA"
-                ),
-                normalizar_texto_local(
-                    b,
-                    padrao=""
-                ),
-                float(lat),
-                float(lon),
-                float(p),
-                str(o),
-                str(mat).strip()
-            ]
-
-            for (
-                i,
-                d,
-                mun,
-                b,
-                lat,
-                lon,
-                p,
-                o,
-                mat
-            ) in linhas_novas
-        ]
-
-        worksheet.append_rows(
-            dados_formatados,
-            value_input_option="USER_ENTERED"
-        )
-
-        time.sleep(0.3)
-
-        limpar_cache()
-
-        return len(
-            linhas_novas
-        )
-
-    return 0
+    registros_formatados = []
+    for linha in linhas_novas:
+        (id_v, data, municipio, bairro, lat, lon, pressao, obs, matricula) = linha
+        registros_formatados.append([
+            str(id_v), str(data),
+            normalizar_texto_local(municipio, padrao="TERESINA"),
+            normalizar_texto_local(bairro),
+            float(lat), float(lon), float(pressao),
+            str(obs), str(matricula).strip(),
+        ])
+    # Sem reformatar datas automaticamente no Google Sheets.
+    worksheet.append_rows(registros_formatados, value_input_option="RAW")
+    time.sleep(0.3)
+    limpar_cache()
+    return len(registros_formatados)
 
 
 def atualizar_ponto(
@@ -1277,9 +1268,8 @@ def bp_rel_resumo_bairros(base):
 
 
 def bp_rel_mapa(base):
-    """Mapa de pontos, mantendo a regra visual M1: 10 < pressão <= 15 fica oculta."""
+    """Mapa de pontos, incluindo também as medições entre 10 e 15 MCA."""
     validos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
-    validos=validos[~((validos["_pressao"]>10)&(validos["_pressao"]<=15))]
     if validos.empty:return None
     mapa=folium.Map(location=[float(validos["Latitude"].mean()),float(validos["Longitude"].mean())],
         zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
@@ -1288,7 +1278,7 @@ def bp_rel_mapa(base):
         lat=float(r["Latitude"]);lon=float(r["Longitude"])
         if not (-90<=lat<=90 and -180<=lon<=180):continue
         press=float(r["_pressao"])
-        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
         pop=(f"<b>{escape(str(r['Bairro']))} / {escape(str(r['Municipio']))}</b><br>"
              f"Pressão: <b>{press:g} mca</b><br>"
              f"Data: {escape(str(r['Data']))}<br>"
@@ -1307,6 +1297,7 @@ def bp_rel_mapa(base):
         '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
         '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
         '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#cf71a9">●</span> &gt;10–15 &nbsp; '
         '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
     return mapa
 
@@ -1344,7 +1335,6 @@ def bp_rel_mapa_fallback(base, largura=1280, altura=650):
     """
     from PIL import Image as PILImage, ImageDraw, ImageFont
     pontos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
-    pontos=pontos[~((pontos["_pressao"]>10)&(pontos["_pressao"]<=15))]
     imagem=PILImage.new("RGB",(largura,altura),"#f1f5fa")
     desenho=ImageDraw.Draw(imagem)
     try:
@@ -1371,11 +1361,11 @@ def bp_rel_mapa_fallback(base, largura=1280, altura=650):
             px=(x0+x1)/2+((float(r["Longitude"])*corrigir-meio_x)/span)
             py=(y0+y1)/2-((float(r["Latitude"])-meio_y)/span)
             press=float(r["_pressao"])
-            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
             raio=9
             desenho.ellipse((px-raio,py-raio,px+raio,py+raio),fill=cor,outline="#ffffff",width=2)
     legenda=[("#e64e62","0 mca"),("#f3a53a",">0–5 mca"),
-             ("#e6bc34",">5–10 mca"),("#8554b8",">15 mca")]
+             ("#e6bc34",">5–10 mca"),("#cf71a9",">10–15 mca"),("#8554b8",">15 mca")]
     for j,(cor,rotulo) in enumerate(legenda):
         ex=60+j*230
         desenho.ellipse((ex,altura-63,ex+14,altura-49),fill=cor)
@@ -1424,7 +1414,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
         return tab
     historia=[paragrafo("MONITORAMENTO DE BAIXA PRESSÃO — COI",titulo),
              paragrafo(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}  |  Relatório gerado em {datetime.now():%d/%m/%Y %H:%M}",corpo)]
-    faixas_texto=", ".join(faixas) if faixas else "Todas as faixas (inclusive 10–15 mca na análise)"
+    faixas_texto=", ".join(faixas) if faixas else "Todas as faixas"
     filtros=f"Município: {municipio}  |  Bairro: {bairro}  |  Matrícula: {matricula}  |  Faixas: {faixas_texto}"
     historia.extend([paragrafo("Filtros aplicados: "+filtros,pequeno),BP_REL_Spacer(1,10)])
 
@@ -1464,8 +1454,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
     else:
         historia.append(paragrafo("Não há pontos com coordenadas válidas e visíveis no mapa para os filtros selecionados.",corpo))
     historia.append(BP_REL_Spacer(1,5))
-    historia.append(paragrafo("Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca) e roxo (>15 mca). "
-       "A faixa >10–15 mca é computada nos indicadores, mas permanece oculta no mapa conforme o Módulo 1.",pequeno))
+    historia.append(paragrafo("Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca), rosa (>10–15 mca) e roxo (>15 mca).",pequeno))
     historia.append(BP_REL_PageBreak())
     historia.extend([paragrafo("DASHBOARD DE PRESSÃO — REGISTROS FILTRADOS",titulo),
                     paragrafo("Distribuição das medições e média das aferições por bairro (somente registros selecionados).",pequeno),
@@ -1532,14 +1521,8 @@ if "data_inicial_selecionada" not in st.session_state:
 if "data_final_selecionada" not in st.session_state:
     st.session_state.data_final_selecionada = hoje
 
-if "clicked_lat" not in st.session_state:
-    st.session_state.clicked_lat = None
-
-if "clicked_lon" not in st.session_state:
-    st.session_state.clicked_lon = None
-
-if "modo_adicionar_mapa" not in st.session_state:
-    st.session_state.modo_adicionar_mapa = False
+if "resumo_upload_pendentes_bp" not in st.session_state:
+    st.session_state.resumo_upload_pendentes_bp = None
 
 if "dados_upload_pendentes_bp" not in st.session_state:
     st.session_state.dados_upload_pendentes_bp = None
@@ -1556,13 +1539,8 @@ if "file_uploader_key_bp" not in st.session_state:
 # ============================================================
 if eh_operador:
 
-    st.session_state.modo_adicionar_mapa = False
-
-    st.session_state.clicked_lat = None
-
-    st.session_state.clicked_lon = None
-
     st.session_state.dados_upload_pendentes_bp = None
+    st.session_state.resumo_upload_pendentes_bp = None
 
     st.session_state.nome_arquivo_pendente_bp = None
 
@@ -1581,17 +1559,8 @@ def modal_novo_ponto():
 
         return
 
-    lat_default = (
-        st.session_state.clicked_lat
-        if st.session_state.clicked_lat is not None
-        else LAT_BASE
-    )
-
-    lon_default = (
-        st.session_state.clicked_lon
-        if st.session_state.clicked_lon is not None
-        else LON_BASE
-    )
+    lat_default = LAT_BASE
+    lon_default = LON_BASE
 
     with st.form(
         "form_novo_ponto_modal",
@@ -1705,9 +1674,6 @@ def modal_novo_ponto():
                     st.success(
                         f"Ponto cadastrado com sucesso! ID: {novo_id}"
                     )
-
-                    st.session_state.clicked_lat = None
-                    st.session_state.clicked_lon = None
 
                     st.rerun()
 
@@ -1951,6 +1917,17 @@ def modal_previa_upload():
         f"**{len(df_preview)}**"
     )
 
+    resumo = st.session_state.get("resumo_upload_pendentes_bp")
+    if resumo is not None:
+        st.caption(
+            f"Atividades recebidas: {resumo.origem} | "
+            f"Com medição numérica: {len(resumo.linhas)} | "
+            f"Sem medição: {resumo.sem_pressao_numerica} | "
+            f"Sem coordenadas: {resumo.sem_coordenadas} | "
+            f"Sem data: {resumo.sem_data} | "
+            f"Sem bairro: {resumo.excluidas_ou_fora_da_faixa}"
+        )
+
     col_btn1, col_btn2 = st.columns(2)
 
     with col_btn1:
@@ -1970,6 +1947,7 @@ def modal_previa_upload():
                 )
 
             st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.resumo_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
 
@@ -1998,6 +1976,7 @@ def modal_previa_upload():
         ):
 
             st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.resumo_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
 
@@ -2228,7 +2207,7 @@ with st.sidebar:
         options=[
             "Sem Pressão (0 MCA)",
             "Baixa Pressão (> 0 e ≤ 5 MCA)",
-            "Em Atenção (> 5 e ≤ 10 MCA)",
+            "Em Atenção (> 5 e ≤ 15 MCA)",
             "Alta Pressão (> 15 MCA)",
         ],
         default=[],
@@ -2319,175 +2298,31 @@ with st.sidebar:
         )
 
         # ====================================================
-        # UPLOAD
+        # UPLOAD — BRUTO DO SISTEMA OU MODELO SAI
         # ====================================================
         if arquivo_upload is not None:
-
-            if (
-                st.session_state.nome_arquivo_pendente_bp
-                != arquivo_upload.name
-            ):
-
+            # A prévia é recalculada quando muda o arquivo selecionado.
+            if st.session_state.nome_arquivo_pendente_bp != arquivo_upload.name:
                 try:
-
-                    if arquivo_upload.name.endswith(
-                        ".csv"
-                    ):
-
-                        df_up = pd.read_csv(
-                            arquivo_upload
-                        )
-
+                    conteudo = arquivo_upload.getvalue()
+                    df_up = ler_arquivo(arquivo_upload.name, conteudo)
+                    resultado = converter_bruta(df_up, arquivo_upload.name)
+                    st.session_state.resumo_upload_pendentes_bp = resultado
+                    if resultado.linhas:
+                        st.session_state.dados_upload_pendentes_bp = resultado.linhas
+                        st.session_state.nome_arquivo_pendente_bp = arquivo_upload.name
                     else:
-
-                        df_up = pd.read_excel(
-                            arquivo_upload
-                        )
-
-                    df_up.columns = [
-                        normalizar_coluna(c)
-                        for c in df_up.columns
-                    ]
-
-                    lote_para_enviar = []
-
-                    for _, row in df_up.iterrows():
-
-                        raw_data = row.get(
-                            "Data",
-                            row.get(
-                                "date",
-                                ""
-                            )
-                        )
-
-                        data_val = normalizar_data(
-                            raw_data
-                        )
-
-                        if not data_val:
-
-                            data_val = data_para_str(
-                                st.session_state
-                                .data_final_selecionada
-                            )
-
-                        muni = normalizar_texto_local(
-                            row.get(
-                                "Municipio",
-                                "TERESINA"
-                            ),
-                            padrao="TERESINA"
-                        )
-
-                        bair = normalizar_texto_local(
-                            row.get(
-                                "Bairro",
-                                ""
-                            ),
-                            padrao=""
-                        )
-
-                        matricula_val = str(
-                            row.get(
-                                "Matricula",
-                                ""
-                            )
-                        ).strip()
-
-                        if matricula_val.lower() in (
-                            "nan",
-                            "none"
-                        ):
-
-                            matricula_val = ""
-
-                        lat_val = normalizar_coordenada(
-                            row.get(
-                                "Latitude",
-                                row.get("Lat")
-                            ),
-                            "lat"
-                        )
-
-                        lon_val = normalizar_coordenada(
-                            row.get(
-                                "Longitude",
-                                row.get("Lon")
-                            ),
-                            "lon"
-                        )
-
-                        pres_val = parse_float(
-                            row.get(
-                                "Pressao_MCA",
-                                0.0
-                            ),
-                            0.0
-                        )
-
-                        obs_val = str(
-                            row.get(
-                                "Observacao",
-                                ""
-                            )
-                        ).strip()
-
-                        if obs_val.lower() in (
-                            "nan",
-                            "none"
-                        ):
-
-                            obs_val = ""
-
-                        if (
-                            bair
-                            and lat_val is not None
-                            and lon_val is not None
-                        ):
-
-                            lote_para_enviar.append([
-                                gerar_id(),
-                                data_val,
-                                muni,
-                                bair,
-                                float(lat_val),
-                                float(lon_val),
-                                float(pres_val),
-                                obs_val,
-                                matricula_val
-                            ])
-
-                    if lote_para_enviar:
-
-                        st.session_state.dados_upload_pendentes_bp = (
-                            lote_para_enviar
-                        )
-
-                        st.session_state.nome_arquivo_pendente_bp = (
-                            arquivo_upload.name
-                        )
-
-                    else:
-
+                        st.session_state.dados_upload_pendentes_bp = None
                         st.warning(
-                            "⚠️ Nenhum registro válido encontrado. "
-                            "Verifique se os nomes das colunas são: "
-                            "Data, Municipio, Matricula, Bairro, Latitude, "
-                            "Longitude, Pressao_MCA, Observacao."
+                            "Nenhuma medição numérica válida encontrada. "
+                            "Parecer sem leitura numérica não é importado."
                         )
-
                 except Exception as e:
+                    st.session_state.dados_upload_pendentes_bp = None
+                    st.session_state.resumo_upload_pendentes_bp = None
+                    st.error(f"❌ Erro ao processar a planilha: {e}")
 
-                    st.error(
-                        f"❌ Erro ao processar arquivo: {e}"
-                    )
-
-        if (
-            st.session_state.dados_upload_pendentes_bp
-            is not None
-        ):
-
+        if st.session_state.dados_upload_pendentes_bp is not None:
             modal_previa_upload()
 
         st.divider()
@@ -2789,8 +2624,8 @@ if faixas_selecionadas and not df_filtrado.empty:
     if "Baixa Pressão (> 0 e ≤ 5 MCA)" in faixas_selecionadas:
         mascara_faixas |= pressao_filtro.gt(0) & pressao_filtro.le(5)
 
-    if "Em Atenção (> 5 e ≤ 10 MCA)" in faixas_selecionadas:
-        mascara_faixas |= pressao_filtro.gt(5) & pressao_filtro.le(10)
+    if "Em Atenção (> 5 e ≤ 15 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.gt(5) & pressao_filtro.le(15)
 
     if "Alta Pressão (> 15 MCA)" in faixas_selecionadas:
         mascara_faixas |= pressao_filtro.gt(15)
@@ -2909,7 +2744,7 @@ if not df_filtrado.empty:
     )
 
     k4.metric(
-        "Em Atenção (> 5 e ≤ 10 MCA)",
+        "Em Atenção (> 5 e ≤ 15 MCA)",
         em_atencao
     )
 
@@ -3152,22 +2987,15 @@ with c_map3:
 
 
 with c_map4:
-
-    if pode_alterar_dados:
-
-        st.session_state.modo_adicionar_mapa = st.checkbox(
-            "📍 Modo adicionar ponto",
-            value=st.session_state.modo_adicionar_mapa,
-            key="modo_adicionar_ponto_bp"
-        )
-
-    else:
-
-        st.session_state.modo_adicionar_mapa = False
-
-        st.caption(
-            "👁️ Somente visualização"
-        )
+    st.checkbox(
+        "🛠️ Sanear",
+        value=False,
+        key="bp_exibir_sanear",
+        help=(
+            "Exibe os polígonos de áreas com intervenções do projeto SANEAR "
+            "para análise espacial das medições de baixa pressão."
+        ),
+    )
 
 
 # Ativacao opcional: nenhum outro modulo depende da topografia.
@@ -3320,6 +3148,53 @@ if bp_dem_pronto and st.session_state.bp_relevo_visivel:
         ).add_to(m)
     except Exception as bp_exc:
         st.warning(f"Não foi possível exibir o relevo: {bp_exc}")
+
+# SANEAR: camada somente de leitura, desenhada sob os marcadores de pressão.
+# Não modifica a base de medições nem a análise topográfica.
+if st.session_state.bp_exibir_sanear:
+    try:
+        bp_kml_sanear = bp_encontrar_kml_sanear()
+        if not bp_kml_sanear.is_file():
+            st.warning(
+                "Camada Sanear indisponível: arquivo "
+                "`geodados/areas_influencia/sanear.kml` não encontrado."
+            )
+        else:
+            bp_geojson_sanear = bp_carregar_poligonos_sanear(
+                str(bp_kml_sanear), bp_kml_sanear.stat().st_mtime_ns
+            )
+            if not bp_geojson_sanear["features"]:
+                st.warning("A camada Sanear não contém polígonos válidos.")
+            else:
+                folium.GeoJson(
+                    bp_geojson_sanear,
+                    name="Sanear — áreas de obras de esgoto",
+                    style_function=lambda feature: {
+                        "color": "#0F766E",
+                        "weight": 2.2,
+                        "opacity": 0.95,
+                        "fillColor": "#2DD4BF",
+                        "fillOpacity": 0.16,
+                    },
+                    highlight_function=lambda feature: {
+                        "color": "#115E59",
+                        "weight": 3.2,
+                        "fillOpacity": 0.28,
+                    },
+                    tooltip=folium.GeoJsonTooltip(
+                        fields=["Área", "Bacia", "Município", "Empresa"],
+                        aliases=["Área SANEAR:", "Bacia:", "Município:", "Empresa:"],
+                        labels=True,
+                        sticky=True,
+                        style=(
+                            "background-color: #ffffff; color: #12303A; "
+                            "font: 12px Arial, sans-serif; padding: 7px;"
+                        ),
+                    ),
+                ).add_to(m)
+    except (ET.ParseError, OSError, ValueError, TypeError, KeyError) as bp_exc:
+        st.warning(f"Não foi possível carregar os polígonos Sanear: {bp_exc}")
+
 
 # Exibe o último perfil no mapa, com direção inequívoca A → B.
 if st.session_state.bp_trajeto_altimetrico:
@@ -4597,7 +4472,7 @@ legend_html = f"""
             vertical-align:middle;
         "></span>
 
-        Em Atenção (&gt; 5 e ≤ 10 MCA)
+        Em Atenção (&gt; 5 e ≤ 15 MCA)
     </div>
 
     <div style="
@@ -4632,9 +4507,9 @@ map_data = st_folium(
     width="100%",
     height=520,
     returned_objects=(
-        ["last_clicked", "last_active_drawing"]
+        ["last_active_drawing"]
         if bp_dem_pronto and st.session_state.bp_modo_perfil
-        else ["last_clicked"]
+        else []
     ),
     key=f"mapa_principal_topografia_{st.session_state.bp_versao_mapa_altimetrico}"
 )
@@ -4782,37 +4657,6 @@ if bp_dem_pronto and st.session_state.bp_trajeto_altimetrico:
     except Exception as bp_exc:
         st.warning(f"Não foi possível calcular o perfil de elevação: {bp_exc}")
 
-
-# ============================================================
-# CLIQUE NO MAPA — SOMENTE ADMIN/USUÁRIO
-# ============================================================
-if (
-    pode_alterar_dados
-    and not st.session_state.bp_modo_perfil
-    and st.session_state.modo_adicionar_mapa
-    and map_data
-    and map_data.get(
-        "last_clicked"
-    )
-):
-
-    clicked = map_data[
-        "last_clicked"
-    ]
-
-    if clicked:
-
-        st.session_state.clicked_lat = round(
-            clicked["lat"],
-            6
-        )
-
-        st.session_state.clicked_lon = round(
-            clicked["lng"],
-            6
-        )
-
-        modal_novo_ponto()
 
 
 st.divider()
