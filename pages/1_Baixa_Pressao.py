@@ -22,6 +22,18 @@ import unicodedata
 import re
 import math
 from pathlib import Path
+import sys
+
+# Mesmo conversor da sincronização automática por GitHub Actions.
+# Aceita execução em pages/ e no Ambiente de Teste.
+BP_RAIZ_SAI = Path(__file__).resolve().parent
+if BP_RAIZ_SAI.name.lower() == "pages":
+    BP_RAIZ_SAI = BP_RAIZ_SAI.parent
+if str(BP_RAIZ_SAI) not in sys.path:
+    sys.path.insert(0, str(BP_RAIZ_SAI))
+from sai_pressao_importacao import (
+    IndiceDuplicidades, converter_bruta, ler_arquivo,
+)
 import xml.etree.ElementTree as ET
 
 
@@ -101,6 +113,39 @@ COLUNAS_PADRAO = [
     "Observacao",
     "Matricula"
 ]
+
+
+# Marcador técnico da atividade: indispensável à deduplicação, mas não é
+# uma observação operacional. Nunca altere o valor bruto no Google Sheets.
+_BP_MARCADOR_ATIVIDADE = re.compile(
+    r"\bSAI_ATIVIDADE\s*=\s*[A-Z0-9_-]+", re.IGNORECASE
+)
+
+
+def bp_observacao_visivel(valor) -> str:
+    """Oculta apenas o marcador técnico nas telas e exportações para leitura."""
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    if texto.lower() in ("nan", "none", "nat", ""):
+        return ""
+    if not _BP_MARCADOR_ATIVIDADE.search(texto):
+        return texto
+    texto = _BP_MARCADOR_ATIVIDADE.sub("", texto)
+    texto = re.sub(r"(?:\s*[|;]\s*){2,}", " | ", texto)
+    return texto.strip(" \t\r\n|;,/-")
+
+
+def bp_observacao_preservando_id(texto_editado, observacao_original) -> str:
+    """Preserva o ID técnico ao salvar uma observação editada no formulário."""
+    observacao = bp_observacao_visivel(texto_editado)
+    marcadores = list(dict.fromkeys(
+        _BP_MARCADOR_ATIVIDADE.findall(str(observacao_original or ""))
+    ))
+    if not marcadores:
+        return observacao
+    retorno = " | ".join([valor for valor in [observacao, *marcadores] if valor])
+    return retorno
 
 
 # ============================================================
@@ -845,154 +890,37 @@ def adicionar_ponto(
     return novo_id
 
 
-def adicionar_lote_seguro(
-    linhas_dados: list
-):
-
+def adicionar_lote_seguro(linhas_dados: list) -> int:
+    """Grava pontos novos seguindo exatamente a regra da automação."""
     if not pode_alterar_dados:
-        st.error(
-            "Seu perfil não possui permissão para importar dados."
-        )
+        st.error("Seu perfil não possui permissão para importar dados.")
         return 0
-
     if not linhas_dados:
         return 0
 
-    df_atual = carregar_dados()
+    # O identificador da atividade diferencia medições feitas no mesmo local.
+    # Sem ID da atividade, compara data, local, pressão e matrícula.
+    registros_sheet = worksheet.get_all_values()
+    indice = IndiceDuplicidades(registros_sheet[1:])
+    linhas_novas, repetidas, _ = indice.selecionar(linhas_dados)
+    if not linhas_novas:
+        return 0
 
-    chaves_existentes = set()
-
-    if not df_atual.empty:
-
-        for _, r in df_atual.iterrows():
-
-            lat_f = (
-                f"{float(r['Latitude']):.6f}"
-                if pd.notnull(
-                    r["Latitude"]
-                )
-                else ""
-            )
-
-            lon_f = (
-                f"{float(r['Longitude']):.6f}"
-                if pd.notnull(
-                    r["Longitude"]
-                )
-                else ""
-            )
-
-            chave = (
-                str(r["Data"]).strip(),
-                str(
-                    r["Municipio"]
-                ).strip().lower(),
-                str(
-                    r["Bairro"]
-                ).strip().lower(),
-                lat_f,
-                lon_f
-            )
-
-            chaves_existentes.add(
-                chave
-            )
-
-    linhas_novas = []
-
-    for linha in linhas_dados:
-
-        (
-            id_v,
-            d_val,
-            mun_val,
-            bair_val,
-            lat_val,
-            lon_val,
-            pres_val,
-            obs_val,
-            mat_val
-        ) = linha
-
-        lat_f = (
-            f"{float(lat_val):.6f}"
-        )
-
-        lon_f = (
-            f"{float(lon_val):.6f}"
-        )
-
-        chave_nova = (
-            str(d_val).strip(),
-            str(
-                mun_val
-            ).strip().lower(),
-            str(
-                bair_val
-            ).strip().lower(),
-            lat_f,
-            lon_f
-        )
-
-        if chave_nova not in chaves_existentes:
-
-            linhas_novas.append(
-                linha
-            )
-
-            chaves_existentes.add(
-                chave_nova
-            )
-
-    if linhas_novas:
-
-        dados_formatados = [
-
-            [
-                str(i),
-                str(d),
-                normalizar_texto_local(
-                    mun,
-                    padrao="TERESINA"
-                ),
-                normalizar_texto_local(
-                    b,
-                    padrao=""
-                ),
-                float(lat),
-                float(lon),
-                float(p),
-                str(o),
-                str(mat).strip()
-            ]
-
-            for (
-                i,
-                d,
-                mun,
-                b,
-                lat,
-                lon,
-                p,
-                o,
-                mat
-            ) in linhas_novas
-        ]
-
-        worksheet.append_rows(
-            dados_formatados,
-            value_input_option="USER_ENTERED"
-        )
-
-        time.sleep(0.3)
-
-        limpar_cache()
-
-        return len(
-            linhas_novas
-        )
-
-    return 0
+    registros_formatados = []
+    for linha in linhas_novas:
+        (id_v, data, municipio, bairro, lat, lon, pressao, obs, matricula) = linha
+        registros_formatados.append([
+            str(id_v), str(data),
+            normalizar_texto_local(municipio, padrao="TERESINA"),
+            normalizar_texto_local(bairro),
+            float(lat), float(lon), float(pressao),
+            str(obs), str(matricula).strip(),
+        ])
+    # Sem reformatar datas automaticamente no Google Sheets.
+    worksheet.append_rows(registros_formatados, value_input_option="RAW")
+    time.sleep(0.3)
+    limpar_cache()
+    return len(registros_formatados)
 
 
 def atualizar_ponto(
@@ -1121,16 +1049,11 @@ def gerar_kml(df):
 
             try:
 
+                obs_visivel = bp_observacao_visivel(
+                    row.get("Observacao", "")
+                )
                 obs_text = (
-                    f"\nObservação: "
-                    f"{row.get('Observacao', '')}"
-                    if str(
-                        row.get(
-                            "Observacao",
-                            ""
-                        )
-                    ).strip()
-                    else ""
+                    f"\nObservação: {obs_visivel}" if obs_visivel else ""
                 )
 
                 matricula_text = (
@@ -1373,9 +1296,8 @@ def bp_rel_resumo_bairros(base):
 
 
 def bp_rel_mapa(base):
-    """Mapa de pontos, mantendo a regra visual M1: 10 < pressão <= 15 fica oculta."""
+    """Mapa de pontos, incluindo também as medições entre 10 e 15 MCA."""
     validos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
-    validos=validos[~((validos["_pressao"]>10)&(validos["_pressao"]<=15))]
     if validos.empty:return None
     mapa=folium.Map(location=[float(validos["Latitude"].mean()),float(validos["Longitude"].mean())],
         zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
@@ -1384,7 +1306,7 @@ def bp_rel_mapa(base):
         lat=float(r["Latitude"]);lon=float(r["Longitude"])
         if not (-90<=lat<=90 and -180<=lon<=180):continue
         press=float(r["_pressao"])
-        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
         pop=(f"<b>{escape(str(r['Bairro']))} / {escape(str(r['Municipio']))}</b><br>"
              f"Pressão: <b>{press:g} mca</b><br>"
              f"Data: {escape(str(r['Data']))}<br>"
@@ -1403,6 +1325,7 @@ def bp_rel_mapa(base):
         '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
         '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
         '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#cf71a9">●</span> &gt;10–15 &nbsp; '
         '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
     return mapa
 
@@ -1440,7 +1363,6 @@ def bp_rel_mapa_fallback(base, largura=1280, altura=650):
     """
     from PIL import Image as PILImage, ImageDraw, ImageFont
     pontos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
-    pontos=pontos[~((pontos["_pressao"]>10)&(pontos["_pressao"]<=15))]
     imagem=PILImage.new("RGB",(largura,altura),"#f1f5fa")
     desenho=ImageDraw.Draw(imagem)
     try:
@@ -1467,11 +1389,11 @@ def bp_rel_mapa_fallback(base, largura=1280, altura=650):
             px=(x0+x1)/2+((float(r["Longitude"])*corrigir-meio_x)/span)
             py=(y0+y1)/2-((float(r["Latitude"])-meio_y)/span)
             press=float(r["_pressao"])
-            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#8554b8"
+            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
             raio=9
             desenho.ellipse((px-raio,py-raio,px+raio,py+raio),fill=cor,outline="#ffffff",width=2)
     legenda=[("#e64e62","0 mca"),("#f3a53a",">0–5 mca"),
-             ("#e6bc34",">5–10 mca"),("#8554b8",">15 mca")]
+             ("#e6bc34",">5–10 mca"),("#cf71a9",">10–15 mca"),("#8554b8",">15 mca")]
     for j,(cor,rotulo) in enumerate(legenda):
         ex=60+j*230
         desenho.ellipse((ex,altura-63,ex+14,altura-49),fill=cor)
@@ -1520,7 +1442,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
         return tab
     historia=[paragrafo("MONITORAMENTO DE BAIXA PRESSÃO — COI",titulo),
              paragrafo(f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}  |  Relatório gerado em {datetime.now():%d/%m/%Y %H:%M}",corpo)]
-    faixas_texto=", ".join(faixas) if faixas else "Todas as faixas (inclusive 10–15 mca na análise)"
+    faixas_texto=", ".join(faixas) if faixas else "Todas as faixas"
     filtros=f"Município: {municipio}  |  Bairro: {bairro}  |  Matrícula: {matricula}  |  Faixas: {faixas_texto}"
     historia.extend([paragrafo("Filtros aplicados: "+filtros,pequeno),BP_REL_Spacer(1,10)])
 
@@ -1560,8 +1482,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
     else:
         historia.append(paragrafo("Não há pontos com coordenadas válidas e visíveis no mapa para os filtros selecionados.",corpo))
     historia.append(BP_REL_Spacer(1,5))
-    historia.append(paragrafo("Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca) e roxo (>15 mca). "
-       "A faixa >10–15 mca é computada nos indicadores, mas permanece oculta no mapa conforme o Módulo 1.",pequeno))
+    historia.append(paragrafo("Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca), rosa (>10–15 mca) e roxo (>15 mca).",pequeno))
     historia.append(BP_REL_PageBreak())
     historia.extend([paragrafo("DASHBOARD DE PRESSÃO — REGISTROS FILTRADOS",titulo),
                     paragrafo("Distribuição das medições e média das aferições por bairro (somente registros selecionados).",pequeno),
@@ -1606,7 +1527,7 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
        BP_REL_Spacer(1,8)])
     detalhe=[]
     for _,r in base.sort_values(["_municipio","_bairro","_data","Matricula"],na_position="last").iterrows():
-        obs=str(r.get("Observacao","") or "").strip()
+        obs=bp_observacao_visivel(r.get("Observacao", ""))
         if len(obs)>320:obs=obs[:317]+"…"
         detalhe.append([str(r.get("Data","")),f"{r.get('Bairro','')} / {r.get('Municipio','')}",
             str(r.get("Matricula","") or ""),f"{float(r['_pressao']):g}",obs])
@@ -1628,6 +1549,9 @@ if "data_inicial_selecionada" not in st.session_state:
 if "data_final_selecionada" not in st.session_state:
     st.session_state.data_final_selecionada = hoje
 
+if "resumo_upload_pendentes_bp" not in st.session_state:
+    st.session_state.resumo_upload_pendentes_bp = None
+
 if "dados_upload_pendentes_bp" not in st.session_state:
     st.session_state.dados_upload_pendentes_bp = None
 
@@ -1644,6 +1568,7 @@ if "file_uploader_key_bp" not in st.session_state:
 if eh_operador:
 
     st.session_state.dados_upload_pendentes_bp = None
+    st.session_state.resumo_upload_pendentes_bp = None
 
     st.session_state.nome_arquivo_pendente_bp = None
 
@@ -1881,7 +1806,7 @@ def modal_editar_ponto(
 
             observacao_e = st.text_input(
                 "Observação",
-                value=str(
+                value=bp_observacao_visivel(
                     reg_edit["Observacao"]
                 )
             )
@@ -1949,7 +1874,9 @@ def modal_editar_ponto(
                         data_para_str(
                             data_e
                         ),
-                        observacao_e.strip()
+                        bp_observacao_preservando_id(
+                            observacao_e.strip(), reg_edit["Observacao"]
+                        )
                     ):
 
                         st.success(
@@ -1999,8 +1926,12 @@ def modal_previa_upload():
         ]
     )
 
+    df_preview_visivel = df_preview.copy()
+    df_preview_visivel["Observacao"] = (
+        df_preview_visivel["Observacao"].map(bp_observacao_visivel)
+    )
     st.dataframe(
-        df_preview[
+        df_preview_visivel[
             [
                 "Data",
                 "Municipio",
@@ -2019,6 +1950,17 @@ def modal_previa_upload():
         f"Total de registros válidos prontos para envio: "
         f"**{len(df_preview)}**"
     )
+
+    resumo = st.session_state.get("resumo_upload_pendentes_bp")
+    if resumo is not None:
+        st.caption(
+            f"Atividades recebidas: {resumo.origem} | "
+            f"Com medição numérica: {len(resumo.linhas)} | "
+            f"Sem medição: {resumo.sem_pressao_numerica} | "
+            f"Sem coordenadas: {resumo.sem_coordenadas} | "
+            f"Sem data: {resumo.sem_data} | "
+            f"Sem bairro: {resumo.excluidas_ou_fora_da_faixa}"
+        )
 
     col_btn1, col_btn2 = st.columns(2)
 
@@ -2039,6 +1981,7 @@ def modal_previa_upload():
                 )
 
             st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.resumo_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
 
@@ -2067,6 +2010,7 @@ def modal_previa_upload():
         ):
 
             st.session_state.dados_upload_pendentes_bp = None
+            st.session_state.resumo_upload_pendentes_bp = None
             st.session_state.nome_arquivo_pendente_bp = None
             st.session_state.file_uploader_key_bp += 1
 
@@ -2297,7 +2241,7 @@ with st.sidebar:
         options=[
             "Sem Pressão (0 MCA)",
             "Baixa Pressão (> 0 e ≤ 5 MCA)",
-            "Em Atenção (> 5 e ≤ 10 MCA)",
+            "Em Atenção (> 5 e ≤ 15 MCA)",
             "Alta Pressão (> 15 MCA)",
         ],
         default=[],
@@ -2388,175 +2332,31 @@ with st.sidebar:
         )
 
         # ====================================================
-        # UPLOAD
+        # UPLOAD — BRUTO DO SISTEMA OU MODELO SAI
         # ====================================================
         if arquivo_upload is not None:
-
-            if (
-                st.session_state.nome_arquivo_pendente_bp
-                != arquivo_upload.name
-            ):
-
+            # A prévia é recalculada quando muda o arquivo selecionado.
+            if st.session_state.nome_arquivo_pendente_bp != arquivo_upload.name:
                 try:
-
-                    if arquivo_upload.name.endswith(
-                        ".csv"
-                    ):
-
-                        df_up = pd.read_csv(
-                            arquivo_upload
-                        )
-
+                    conteudo = arquivo_upload.getvalue()
+                    df_up = ler_arquivo(arquivo_upload.name, conteudo)
+                    resultado = converter_bruta(df_up, arquivo_upload.name)
+                    st.session_state.resumo_upload_pendentes_bp = resultado
+                    if resultado.linhas:
+                        st.session_state.dados_upload_pendentes_bp = resultado.linhas
+                        st.session_state.nome_arquivo_pendente_bp = arquivo_upload.name
                     else:
-
-                        df_up = pd.read_excel(
-                            arquivo_upload
-                        )
-
-                    df_up.columns = [
-                        normalizar_coluna(c)
-                        for c in df_up.columns
-                    ]
-
-                    lote_para_enviar = []
-
-                    for _, row in df_up.iterrows():
-
-                        raw_data = row.get(
-                            "Data",
-                            row.get(
-                                "date",
-                                ""
-                            )
-                        )
-
-                        data_val = normalizar_data(
-                            raw_data
-                        )
-
-                        if not data_val:
-
-                            data_val = data_para_str(
-                                st.session_state
-                                .data_final_selecionada
-                            )
-
-                        muni = normalizar_texto_local(
-                            row.get(
-                                "Municipio",
-                                "TERESINA"
-                            ),
-                            padrao="TERESINA"
-                        )
-
-                        bair = normalizar_texto_local(
-                            row.get(
-                                "Bairro",
-                                ""
-                            ),
-                            padrao=""
-                        )
-
-                        matricula_val = str(
-                            row.get(
-                                "Matricula",
-                                ""
-                            )
-                        ).strip()
-
-                        if matricula_val.lower() in (
-                            "nan",
-                            "none"
-                        ):
-
-                            matricula_val = ""
-
-                        lat_val = normalizar_coordenada(
-                            row.get(
-                                "Latitude",
-                                row.get("Lat")
-                            ),
-                            "lat"
-                        )
-
-                        lon_val = normalizar_coordenada(
-                            row.get(
-                                "Longitude",
-                                row.get("Lon")
-                            ),
-                            "lon"
-                        )
-
-                        pres_val = parse_float(
-                            row.get(
-                                "Pressao_MCA",
-                                0.0
-                            ),
-                            0.0
-                        )
-
-                        obs_val = str(
-                            row.get(
-                                "Observacao",
-                                ""
-                            )
-                        ).strip()
-
-                        if obs_val.lower() in (
-                            "nan",
-                            "none"
-                        ):
-
-                            obs_val = ""
-
-                        if (
-                            bair
-                            and lat_val is not None
-                            and lon_val is not None
-                        ):
-
-                            lote_para_enviar.append([
-                                gerar_id(),
-                                data_val,
-                                muni,
-                                bair,
-                                float(lat_val),
-                                float(lon_val),
-                                float(pres_val),
-                                obs_val,
-                                matricula_val
-                            ])
-
-                    if lote_para_enviar:
-
-                        st.session_state.dados_upload_pendentes_bp = (
-                            lote_para_enviar
-                        )
-
-                        st.session_state.nome_arquivo_pendente_bp = (
-                            arquivo_upload.name
-                        )
-
-                    else:
-
+                        st.session_state.dados_upload_pendentes_bp = None
                         st.warning(
-                            "⚠️ Nenhum registro válido encontrado. "
-                            "Verifique se os nomes das colunas são: "
-                            "Data, Municipio, Matricula, Bairro, Latitude, "
-                            "Longitude, Pressao_MCA, Observacao."
+                            "Nenhuma medição numérica válida encontrada. "
+                            "Parecer sem leitura numérica não é importado."
                         )
-
                 except Exception as e:
+                    st.session_state.dados_upload_pendentes_bp = None
+                    st.session_state.resumo_upload_pendentes_bp = None
+                    st.error(f"❌ Erro ao processar a planilha: {e}")
 
-                    st.error(
-                        f"❌ Erro ao processar arquivo: {e}"
-                    )
-
-        if (
-            st.session_state.dados_upload_pendentes_bp
-            is not None
-        ):
-
+        if st.session_state.dados_upload_pendentes_bp is not None:
             modal_previa_upload()
 
         st.divider()
@@ -2574,7 +2374,11 @@ with st.sidebar:
                 engine="openpyxl"
             ) as writer:
 
-                df_all.to_excel(
+                df_exportacao = df_all.copy()
+                df_exportacao["Observacao"] = (
+                    df_exportacao["Observacao"].map(bp_observacao_visivel)
+                )
+                df_exportacao.to_excel(
                     writer,
                     index=False,
                     sheet_name="Baixa_Pressao"
@@ -2858,8 +2662,8 @@ if faixas_selecionadas and not df_filtrado.empty:
     if "Baixa Pressão (> 0 e ≤ 5 MCA)" in faixas_selecionadas:
         mascara_faixas |= pressao_filtro.gt(0) & pressao_filtro.le(5)
 
-    if "Em Atenção (> 5 e ≤ 10 MCA)" in faixas_selecionadas:
-        mascara_faixas |= pressao_filtro.gt(5) & pressao_filtro.le(10)
+    if "Em Atenção (> 5 e ≤ 15 MCA)" in faixas_selecionadas:
+        mascara_faixas |= pressao_filtro.gt(5) & pressao_filtro.le(15)
 
     if "Alta Pressão (> 15 MCA)" in faixas_selecionadas:
         mascara_faixas |= pressao_filtro.gt(15)
@@ -2978,7 +2782,7 @@ if not df_filtrado.empty:
     )
 
     k4.metric(
-        "Em Atenção (> 5 e ≤ 10 MCA)",
+        "Em Atenção (> 5 e ≤ 15 MCA)",
         em_atencao
     )
 
@@ -3638,11 +3442,8 @@ if not df_filtrado.empty:
                     registro["Data"]
                 )
 
-                observacao = str(
-                    registro.get(
-                        "Observacao",
-                        ""
-                    )
+                observacao = bp_observacao_visivel(
+                    registro.get("Observacao", "")
                 )
 
                 observacao_html = ""
@@ -4706,7 +4507,7 @@ legend_html = f"""
             vertical-align:middle;
         "></span>
 
-        Em Atenção (&gt; 5 e ≤ 10 MCA)
+        Em Atenção (&gt; 5 e ≤ 15 MCA)
     </div>
 
     <div style="
@@ -4919,6 +4720,9 @@ if not df_filtrado.empty:
         ]
     ].reset_index(
         drop=True
+    ).copy()
+    df_show["Observacao"] = df_show["Observacao"].map(
+        bp_observacao_visivel
     )
 
     # ========================================================
