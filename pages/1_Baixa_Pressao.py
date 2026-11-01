@@ -22,6 +22,7 @@ import unicodedata
 import re
 import math
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 
 # ============================================================
@@ -100,6 +101,101 @@ COLUNAS_PADRAO = [
     "Observacao",
     "Matricula"
 ]
+
+
+# ============================================================
+# SANEAR — ÁREAS DE INTERVENÇÃO DE ESGOTAMENTO SANITÁRIO
+# ============================================================
+def bp_encontrar_kml_sanear():
+    """Localiza o KML no repositório (módulo na raiz ou em pages/)."""
+    relativo = Path("geodados") / "areas_influencia" / "sanear.kml"
+    base = Path(__file__).resolve().parent
+    candidatos = (base / relativo, base.parent / relativo, Path.cwd() / relativo)
+    for caminho in candidatos:
+        if caminho.is_file():
+            return caminho
+    return candidatos[0]
+
+
+@st.cache_data(show_spinner=False)
+def bp_carregar_poligonos_sanear(caminho: str, versao: int):
+    """Lê polígonos KML locais em GeoJSON, sem dependências geoespaciais extras.
+
+    O KML guarda os vértices em longitude/latitude. GeoJSON utiliza a mesma
+    ordem, enquanto o Leaflet se encarrega da projeção no mapa.
+    `versao` recebe o mtime_ns para invalidar o cache ao atualizar o arquivo.
+    """
+    _ = versao
+    raiz = ET.parse(caminho).getroot()
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    placas = raiz.findall(".//k:Placemark", ns)
+    if not placas:
+        placas = raiz.findall(".//Placemark")
+
+    def ler_anel(elemento):
+        if elemento is None:
+            return None
+        txt = elemento.findtext(".//k:coordinates", default="", namespaces=ns)
+        if not txt:
+            txt = elemento.findtext(".//coordinates", default="")
+        pontos = []
+        for item in txt.split():
+            valores = item.split(",")
+            if len(valores) < 2:
+                continue
+            try:
+                longitude = float(valores[0])
+                latitude = float(valores[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(longitude) and math.isfinite(latitude):
+                pontos.append([longitude, latitude])
+        if len(pontos) < 3:
+            return None
+        if pontos[0] != pontos[-1]:
+            pontos.append(pontos[0])
+        return pontos if len(pontos) >= 4 else None
+
+    feicoes = []
+    for placa in placas:
+        dados = {}
+        for item in placa.findall(".//k:SimpleData", ns):
+            dados[item.get("name", "")] = (item.text or "").strip()
+        if not dados:
+            for item in placa.findall(".//SimpleData"):
+                dados[item.get("name", "")] = (item.text or "").strip()
+        nome_placa = placa.findtext("k:name", default="", namespaces=ns) or ""
+        atributos = {
+            "Área": dados.get("NOME") or nome_placa or "Não identificada",
+            "Bacia": dados.get("BACIA") or "Não informada",
+            "Município": dados.get("MUNICIPIO") or "Não informado",
+            "Empresa": dados.get("EMPRESA") or "Não informada",
+        }
+        poligonos = placa.findall(".//k:Polygon", ns)
+        if not poligonos:
+            poligonos = placa.findall(".//Polygon")
+        for poligono in poligonos:
+            exterior = poligono.find("k:outerBoundaryIs", ns)
+            if exterior is None:
+                exterior = poligono.find("outerBoundaryIs")
+            anel_externo = ler_anel(exterior)
+            if not anel_externo:
+                continue
+            aneis = [anel_externo]
+            interiores = poligono.findall("k:innerBoundaryIs", ns)
+            if not interiores:
+                interiores = poligono.findall("innerBoundaryIs")
+            for interior in interiores:
+                anel = ler_anel(interior)
+                if anel:
+                    aneis.append(anel)
+            feicoes.append({
+                "type": "Feature",
+                "properties": atributos.copy(),
+                "geometry": {"type": "Polygon", "coordinates": aneis},
+            })
+
+    return {"type": "FeatureCollection", "features": feicoes}
 
 
 # ============================================================
@@ -1532,15 +1628,6 @@ if "data_inicial_selecionada" not in st.session_state:
 if "data_final_selecionada" not in st.session_state:
     st.session_state.data_final_selecionada = hoje
 
-if "clicked_lat" not in st.session_state:
-    st.session_state.clicked_lat = None
-
-if "clicked_lon" not in st.session_state:
-    st.session_state.clicked_lon = None
-
-if "modo_adicionar_mapa" not in st.session_state:
-    st.session_state.modo_adicionar_mapa = False
-
 if "dados_upload_pendentes_bp" not in st.session_state:
     st.session_state.dados_upload_pendentes_bp = None
 
@@ -1555,12 +1642,6 @@ if "file_uploader_key_bp" not in st.session_state:
 # GARANTIA DE ESTADO SEGURO PARA OPERADOR
 # ============================================================
 if eh_operador:
-
-    st.session_state.modo_adicionar_mapa = False
-
-    st.session_state.clicked_lat = None
-
-    st.session_state.clicked_lon = None
 
     st.session_state.dados_upload_pendentes_bp = None
 
@@ -1581,17 +1662,8 @@ def modal_novo_ponto():
 
         return
 
-    lat_default = (
-        st.session_state.clicked_lat
-        if st.session_state.clicked_lat is not None
-        else LAT_BASE
-    )
-
-    lon_default = (
-        st.session_state.clicked_lon
-        if st.session_state.clicked_lon is not None
-        else LON_BASE
-    )
+    lat_default = LAT_BASE
+    lon_default = LON_BASE
 
     with st.form(
         "form_novo_ponto_modal",
@@ -1705,9 +1777,6 @@ def modal_novo_ponto():
                     st.success(
                         f"Ponto cadastrado com sucesso! ID: {novo_id}"
                     )
-
-                    st.session_state.clicked_lat = None
-                    st.session_state.clicked_lon = None
 
                     st.rerun()
 
@@ -3152,22 +3221,15 @@ with c_map3:
 
 
 with c_map4:
-
-    if pode_alterar_dados:
-
-        st.session_state.modo_adicionar_mapa = st.checkbox(
-            "📍 Modo adicionar ponto",
-            value=st.session_state.modo_adicionar_mapa,
-            key="modo_adicionar_ponto_bp"
-        )
-
-    else:
-
-        st.session_state.modo_adicionar_mapa = False
-
-        st.caption(
-            "👁️ Somente visualização"
-        )
+    st.checkbox(
+        "🛠️ Sanear",
+        value=False,
+        key="bp_exibir_sanear",
+        help=(
+            "Exibe os polígonos de áreas com intervenções do projeto SANEAR "
+            "para análise espacial das medições de baixa pressão."
+        ),
+    )
 
 
 # Ativacao opcional: nenhum outro modulo depende da topografia.
@@ -3320,6 +3382,53 @@ if bp_dem_pronto and st.session_state.bp_relevo_visivel:
         ).add_to(m)
     except Exception as bp_exc:
         st.warning(f"Não foi possível exibir o relevo: {bp_exc}")
+
+# SANEAR: camada somente de leitura, desenhada sob os marcadores de pressão.
+# Não modifica a base de medições nem a análise topográfica.
+if st.session_state.bp_exibir_sanear:
+    try:
+        bp_kml_sanear = bp_encontrar_kml_sanear()
+        if not bp_kml_sanear.is_file():
+            st.warning(
+                "Camada Sanear indisponível: arquivo "
+                "`geodados/areas_influencia/sanear.kml` não encontrado."
+            )
+        else:
+            bp_geojson_sanear = bp_carregar_poligonos_sanear(
+                str(bp_kml_sanear), bp_kml_sanear.stat().st_mtime_ns
+            )
+            if not bp_geojson_sanear["features"]:
+                st.warning("A camada Sanear não contém polígonos válidos.")
+            else:
+                folium.GeoJson(
+                    bp_geojson_sanear,
+                    name="Sanear — áreas de obras de esgoto",
+                    style_function=lambda feature: {
+                        "color": "#0F766E",
+                        "weight": 2.2,
+                        "opacity": 0.95,
+                        "fillColor": "#2DD4BF",
+                        "fillOpacity": 0.16,
+                    },
+                    highlight_function=lambda feature: {
+                        "color": "#115E59",
+                        "weight": 3.2,
+                        "fillOpacity": 0.28,
+                    },
+                    tooltip=folium.GeoJsonTooltip(
+                        fields=["Área", "Bacia", "Município", "Empresa"],
+                        aliases=["Área SANEAR:", "Bacia:", "Município:", "Empresa:"],
+                        labels=True,
+                        sticky=True,
+                        style=(
+                            "background-color: #ffffff; color: #12303A; "
+                            "font: 12px Arial, sans-serif; padding: 7px;"
+                        ),
+                    ),
+                ).add_to(m)
+    except (ET.ParseError, OSError, ValueError, TypeError, KeyError) as bp_exc:
+        st.warning(f"Não foi possível carregar os polígonos Sanear: {bp_exc}")
+
 
 # Exibe o último perfil no mapa, com direção inequívoca A → B.
 if st.session_state.bp_trajeto_altimetrico:
@@ -4632,9 +4741,9 @@ map_data = st_folium(
     width="100%",
     height=520,
     returned_objects=(
-        ["last_clicked", "last_active_drawing"]
+        ["last_active_drawing"]
         if bp_dem_pronto and st.session_state.bp_modo_perfil
-        else ["last_clicked"]
+        else []
     ),
     key=f"mapa_principal_topografia_{st.session_state.bp_versao_mapa_altimetrico}"
 )
@@ -4782,37 +4891,6 @@ if bp_dem_pronto and st.session_state.bp_trajeto_altimetrico:
     except Exception as bp_exc:
         st.warning(f"Não foi possível calcular o perfil de elevação: {bp_exc}")
 
-
-# ============================================================
-# CLIQUE NO MAPA — SOMENTE ADMIN/USUÁRIO
-# ============================================================
-if (
-    pode_alterar_dados
-    and not st.session_state.bp_modo_perfil
-    and st.session_state.modo_adicionar_mapa
-    and map_data
-    and map_data.get(
-        "last_clicked"
-    )
-):
-
-    clicked = map_data[
-        "last_clicked"
-    ]
-
-    if clicked:
-
-        st.session_state.clicked_lat = round(
-            clicked["lat"],
-            6
-        )
-
-        st.session_state.clicked_lon = round(
-            clicked["lng"],
-            6
-        )
-
-        modal_novo_ponto()
 
 
 st.divider()
