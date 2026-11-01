@@ -1612,7 +1612,9 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
     def tab_bp(cabecalhos, linhas, larguras):
         dados = [[P(x, cabecalho_bp) for x in cabecalhos]] + [
             [P(x, pequeno_bp) for x in linha] for linha in linhas]
-        t = Table(dados, colWidths=larguras, repeatRows=1, splitByRow=0, hAlign="LEFT")
+        # Tabela contínua: o ReportLab repete a linha de cabeçalho somente
+        # quando existe quebra REAL de página, nunca no meio da mesma página.
+        t = Table(dados, colWidths=larguras, repeatRows=1, splitByRow=1, hAlign="LEFT")
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e1eaf4")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1),
@@ -1712,14 +1714,13 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
             int(r["Matrículas"]), f"{r['Mín. (mca)']:g}",
             f"{r['Média (mca)']:g}", f"{r['Máx. (mca)']:g}",
             f"{r['Até 5 mca']}/{r['Medições']}", f"{r['% até 5 mca']:g}%"])
-    # Tabelas em blocos não divisíveis evitam repetição de linhas durante
-    # quebras de página do ReportLab, especialmente com muitos bairros.
-    for inicio_lote in range(0, len(linhas), 12):
-        historia.append(tab_bp(
-            ["Bairro / Município", "n", "Matrículas", "Mín.",
-             "Média", "Máx.", "≤5 mca", "% ≤5"],
-            linhas[inicio_lote:inicio_lote + 12],
-            [9.6*cm, 1.4*cm, 2.2*cm, 2*cm, 2*cm, 2*cm, 3*cm, 2.8*cm]))
+    # Uma única tabela por diagnóstico: cabeçalho no começo e nas páginas
+    # seguintes, apenas se a tabela ultrapassar o espaço disponível.
+    historia.append(tab_bp(
+        ["Bairro / Município", "n", "Matrículas", "Mín.",
+         "Média", "Máx.", "≤5 mca", "% ≤5"],
+        linhas,
+        [9.6*cm, 1.4*cm, 2.2*cm, 2*cm, 2*cm, 2*cm, 3*cm, 2.8*cm]))
 
     # Última seção, idêntica ao Módulo 1. Não depende da checkbox Sanear.
     historia.append(PageBreak())
@@ -1762,8 +1763,10 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                             "Mapa-base indisponível: a imagem mantém as "
                             "geometrias Sanear e as coordenadas reais, sem ruas.",
                             pequeno_bp))
+                    # Reserva espaço para identificar a relação de medições
+                    # logo abaixo do mapa, sem perder a tabela na página.
                     historia.append(Image(io.BytesIO(imagem_sanear),
-                                         width=26.1*cm, height=10.7*cm))
+                                         width=26.1*cm, height=10.1*cm))
                     linhas_sanear = []
                     for _, r in dentro.sort_values(
                             ["_bairro", "_data", "Matricula"],
@@ -1776,13 +1779,19 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                             protocolo or "Não informado",
                             str(r.get("Bairro", "") or "") or "—",
                             f"{float(r['_pressao']):g} mca"])
-                    # Paginação controlada. Uma tabela única muito longa
-                    # pode fazer o ReportLab duplicar linhas nas divisões.
-                    for inicio_lote in range(0, len(linhas_sanear), 12):
-                        historia.append(tab_bp(
-                            ["MATRÍCULA", "CÓD. PROTOCOLO", "BAIRRO", "MEDIÇÃO"],
-                            linhas_sanear[inicio_lote:inicio_lote + 12],
-                            [5.5*cm, 6.1*cm, 10.2*cm, 4.4*cm]))
+                    # Separação clara entre o mapa e a listagem operacional.
+                    # Título fica unido ao início da tabela mesmo em quebras.
+                    subtitulo_sanear = ParagraphStyle(
+                        "ri_bp_subtitulo_lista_sanear", parent=secao,
+                        spaceBefore=0, spaceAfter=6, keepWithNext=1)
+                    historia.append(Spacer(1, 12))
+                    historia.append(P(
+                        "RELAÇÃO DE MEDIÇÕES NAS ÁREAS SANEAR",
+                        subtitulo_sanear))
+                    historia.append(tab_bp(
+                        ["MATRÍCULA", "CÓD. PROTOCOLO", "BAIRRO", "MEDIÇÃO"],
+                        linhas_sanear,
+                        [5.5*cm, 6.1*cm, 10.2*cm, 4.4*cm]))
     except (ET.ParseError, OSError, ValueError, TypeError,
             KeyError, IndexError) as erro:
         historia.append(P(
