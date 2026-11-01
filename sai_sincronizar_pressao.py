@@ -319,7 +319,7 @@ def carregar_chaves_sheet(ws):
 def executar_sincronizacao():
     import hashlib
     sheet, drive = conectar_google()
-    dry_run = os.getenv('SAI_DRY_RUN', 'true').lower() in ('true','1','yes')
+    dry_run = os.getenv('SAI_DRY_RUN', 'false').lower() in ('true','1','yes')
     ws, diario = abrir_abas(sheet, dry_run=dry_run)
     finalizados, hashes_finalizados = ler_diario(diario)
     metas = listar_arquivos_drive(drive, os.environ['SAI_DRIVE_FOLDER_ID'])
