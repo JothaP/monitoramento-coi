@@ -14,6 +14,8 @@ import unicodedata
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from html import escape
+import xml.etree.ElementTree as ET
+from branca.element import Element
 from xml.sax.saxutils import escape as xml_escape
 
 import folium
@@ -37,6 +39,7 @@ from farol_graficos_temporarios import chave_logger, filtrar_loggers, rotulo_log
 # Mesma abrangência operacional padrão do Módulo 3 (independente do raio
 # usado para formar as concentrações ou associar medições do Módulo 1).
 RAIO_OPERACIONAL_EVIDENCIAS = 750
+RI_BP_COLUNA_PROTOCOLO = "Cod_Protocolo"
 FUSO_LOGGERS = ZoneInfo("America/Fortaleza")
 ABA_GRAFICOS_DIA = "FAROL_GRAFICOS_DIA"
 
@@ -172,6 +175,19 @@ def preparar_pressao(df):
     if faltantes:
         raise ValueError("Aba baixa_pressao — colunas ausentes: " + ", ".join(faltantes))
     df = df.copy()
+    # A coluna J é opcional em registros antigos; jamais confundir com SAI_ATIVIDADE.
+    if RI_BP_COLUNA_PROTOCOLO not in df.columns:
+        for alternativa in ("Cód. Protocolo Origem", "Cod. Protocolo Origem",
+                            "Codigo_Protocolo", "Código do Protocolo"):
+            if alternativa in df.columns:
+                df[RI_BP_COLUNA_PROTOCOLO] = df[alternativa]
+                break
+        else:
+            df[RI_BP_COLUNA_PROTOCOLO] = ""
+    df[RI_BP_COLUNA_PROTOCOLO] = (
+        df[RI_BP_COLUNA_PROTOCOLO].fillna("").astype(str).str.strip()
+        .replace({"nan": "", "None": "", "nat": ""})
+    )
     df["_municipio"] = df["Municipio"].map(normalizar)
     df["_bairro"] = df["Bairro"].map(normalizar)
     df["_lat"] = df["Latitude"].map(lambda v: coordenada(v, "lat"))
@@ -711,6 +727,377 @@ def mapa_ficha(c, grupo, proximas, raio):
 
 
 # ============================================================
+# CARTOGRAFIA SANEAR E MAPAS DO MÓDULO 1 — USADOS APENAS PELO PDF
+# ============================================================
+def ri_bp_encontrar_kml_sanear():
+    """Localiza o KML no repositório (módulo na raiz ou em pages/)."""
+    relativo = Path("geodados") / "areas_influencia" / "sanear.kml"
+    base = Path(__file__).resolve().parent
+    candidatos = (base / relativo, base.parent / relativo, Path.cwd() / relativo)
+    for caminho in candidatos:
+        if caminho.is_file():
+            return caminho
+    return candidatos[0]
+
+
+@st.cache_data(show_spinner=False)
+def ri_bp_carregar_poligonos_sanear(caminho: str, versao: int):
+    """Lê polígonos KML locais em GeoJSON, sem dependências geoespaciais extras.
+
+    O KML guarda os vértices em longitude/latitude. GeoJSON utiliza a mesma
+    ordem, enquanto o Leaflet se encarrega da projeção no mapa.
+    `versao` recebe o mtime_ns para invalidar o cache ao atualizar o arquivo.
+    """
+    _ = versao
+    raiz = ET.parse(caminho).getroot()
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    placas = raiz.findall(".//k:Placemark", ns)
+    if not placas:
+        placas = raiz.findall(".//Placemark")
+
+    def ler_anel(elemento):
+        if elemento is None:
+            return None
+        txt = elemento.findtext(".//k:coordinates", default="", namespaces=ns)
+        if not txt:
+            txt = elemento.findtext(".//coordinates", default="")
+        pontos = []
+        for item in txt.split():
+            valores = item.split(",")
+            if len(valores) < 2:
+                continue
+            try:
+                longitude = float(valores[0])
+                latitude = float(valores[1])
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(longitude) and math.isfinite(latitude):
+                pontos.append([longitude, latitude])
+        if len(pontos) < 3:
+            return None
+        if pontos[0] != pontos[-1]:
+            pontos.append(pontos[0])
+        return pontos if len(pontos) >= 4 else None
+
+    feicoes = []
+    for placa in placas:
+        dados = {}
+        for item in placa.findall(".//k:SimpleData", ns):
+            dados[item.get("name", "")] = (item.text or "").strip()
+        if not dados:
+            for item in placa.findall(".//SimpleData"):
+                dados[item.get("name", "")] = (item.text or "").strip()
+        nome_placa = placa.findtext("k:name", default="", namespaces=ns) or ""
+        atributos = {
+            "Área": dados.get("NOME") or nome_placa or "Não identificada",
+            "Bacia": dados.get("BACIA") or "Não informada",
+            "Município": dados.get("MUNICIPIO") or "Não informado",
+            "Empresa": dados.get("EMPRESA") or "Não informada",
+        }
+        poligonos = placa.findall(".//k:Polygon", ns)
+        if not poligonos:
+            poligonos = placa.findall(".//Polygon")
+        for poligono in poligonos:
+            exterior = poligono.find("k:outerBoundaryIs", ns)
+            if exterior is None:
+                exterior = poligono.find("outerBoundaryIs")
+            anel_externo = ler_anel(exterior)
+            if not anel_externo:
+                continue
+            aneis = [anel_externo]
+            interiores = poligono.findall("k:innerBoundaryIs", ns)
+            if not interiores:
+                interiores = poligono.findall("innerBoundaryIs")
+            for interior in interiores:
+                anel = ler_anel(interior)
+                if anel:
+                    aneis.append(anel)
+            feicoes.append({
+                "type": "Feature",
+                "properties": atributos.copy(),
+                "geometry": {"type": "Polygon", "coordinates": aneis},
+            })
+
+    return {"type": "FeatureCollection", "features": feicoes}
+
+
+def ri_bp_mapa(base):
+    """Mapa de pontos, incluindo também as medições entre 10 e 15 MCA."""
+    validos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
+    if validos.empty:return None
+    mapa=folium.Map(location=[float(validos["Latitude"].mean()),float(validos["Longitude"].mean())],
+        zoom_start=12,tiles="OpenStreetMap",control_scale=True,zoom_control=False)
+    posicoes=[]
+    for _,r in validos.iterrows():
+        lat=float(r["Latitude"]);lon=float(r["Longitude"])
+        if not (-90<=lat<=90 and -180<=lon<=180):continue
+        press=float(r["_pressao"])
+        cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
+        pop=(f"<b>{escape(str(r['Bairro']))} / {escape(str(r['Municipio']))}</b><br>"
+             f"Pressão: <b>{press:g} mca</b><br>"
+             f"Data: {escape(str(r['Data']))}<br>"
+             f"Matrícula: {escape(str(r.get('Matricula','')))}")
+        folium.CircleMarker([lat,lon],radius=7,color="#ffffff",weight=1.3,
+            fill=True,fill_color=cor,fill_opacity=.97,
+            tooltip=f"{r['Bairro']}: {press:g} mca",popup=folium.Popup(pop,max_width=360)).add_to(mapa)
+        posicoes.append((lat,lon))
+    if not posicoes:return None
+    if len(posicoes)>1:mapa.fit_bounds(posicoes,padding=(45,45),max_zoom=14)
+    from branca.element import Element
+    mapa.get_root().html.add_child(Element(
+        '<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+        'background:white;padding:8px 11px;border:1px solid #ccd5e0;border-radius:5px;'
+        'font:12px Arial;color:#24364b"><b>Medições de pressão</b><br>'
+        '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
+        '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
+        '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#cf71a9">●</span> &gt;10–15 &nbsp; '
+        '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
+    return mapa
+
+
+def ri_bp_mapa_fallback(base, largura=1280, altura=650):
+    """Plano geográfico esquemático com coordenadas reais caso Chromium/tiles falhem.
+
+    Usa somente coordenadas dos pontos selecionados; jamais simula ruas/mapa-base.
+    """
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    pontos=base.dropna(subset=["Latitude","Longitude","_pressao"]).copy()
+    imagem=PILImage.new("RGB",(largura,altura),"#f1f5fa")
+    desenho=ImageDraw.Draw(imagem)
+    try:
+        font=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",16)
+        forte=ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",19)
+    except OSError:
+        font=ImageFont.load_default(); forte=font
+    desenho.text((30,19),"LOCALIZAÇÃO DAS MEDIÇÕES — MAPA-BASE INDISPONÍVEL",font=forte,fill="#193c65")
+    desenho.text((30,50),"Representação por coordenadas geográficas; sem ruas ou limites cartográficos",font=font,fill="#60748b")
+    x0,y0,x1,y1=55,105,largura-55,altura-100
+    desenho.rectangle((x0,y0,x1,y1),outline="#a1b3c5",width=2,fill="#ffffff")
+    if not pontos.empty:
+        lats=pontos["Latitude"].astype(float).tolist()
+        lons=pontos["Longitude"].astype(float).tolist()
+        lat_c=(min(lats)+max(lats))/2
+        # Pondera o eixo horizontal para aproximar escalas lineares em metros.
+        corrigir=max(.2,math.cos(math.radians(lat_c)))
+        xs=[v*corrigir for v in lons]
+        minx,maxx=min(xs),max(xs);miny,maxy=min(lats),max(lats)
+        meio_x=(minx+maxx)/2; meio_y=(miny+maxy)/2
+        spanx=max(maxx-minx,.02);spany=max(maxy-miny,.02)
+        span=max(spanx/(x1-x0),spany/(y1-y0))*1.18
+        for idx,(_,r) in enumerate(pontos.iterrows()):
+            px=(x0+x1)/2+((float(r["Longitude"])*corrigir-meio_x)/span)
+            py=(y0+y1)/2-((float(r["Latitude"])-meio_y)/span)
+            press=float(r["_pressao"])
+            cor="#e64e62" if press==0 else "#f3a53a" if press<=5 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8"
+            raio=9
+            desenho.ellipse((px-raio,py-raio,px+raio,py+raio),fill=cor,outline="#ffffff",width=2)
+    legenda=[("#e64e62","0 mca"),("#f3a53a",">0–5 mca"),
+             ("#e6bc34",">5–10 mca"),("#cf71a9",">10–15 mca"),("#8554b8",">15 mca")]
+    for j,(cor,rotulo) in enumerate(legenda):
+        ex=60+j*230
+        desenho.ellipse((ex,altura-63,ex+14,altura-49),fill=cor)
+        desenho.text((ex+22,altura-65),rotulo,font=font,fill="#193c65")
+    buffer_img=io.BytesIO(); imagem.save(buffer_img,format="PNG")
+    return buffer_img.getvalue()
+
+
+
+def ri_bp_ponto_no_anel(lon, lat, anel):
+    """Ray casting lon/lat; bordas do anel são consideradas incluídas."""
+    dentro = False
+    for i in range(len(anel) - 1):
+        ax, ay = anel[i][0], anel[i][1]
+        bx, by = anel[i+1][0], anel[i+1][1]
+        dx, dy = bx - ax, by - ay
+        cruz = (lon - ax) * dy - (lat - ay) * dx
+        if (abs(cruz) <= 1e-11 and
+                min(ax,bx)-1e-11 <= lon <= max(ax,bx)+1e-11 and
+                min(ay,by)-1e-11 <= lat <= max(ay,by)+1e-11):
+            return True
+        if (ay > lat) != (by > lat):
+            intercepto = ax + (lat-ay) * dx / dy
+            if lon < intercepto:
+                dentro = not dentro
+    return dentro
+
+
+def ri_bp_ponto_na_geometria(lon, lat, geometria):
+    """Polígonos com furos e multipolígonos; sem buffers ou inferências por bairro."""
+    tipo = geometria.get("type", "")
+    conjuntos = geometria.get("coordinates", [])
+    if tipo == "Polygon":
+        conjuntos = [conjuntos]
+    elif tipo != "MultiPolygon":
+        return False
+    for aneis in conjuntos:
+        if not aneis or not ri_bp_ponto_no_anel(lon, lat, aneis[0]):
+            continue
+        if not any(ri_bp_ponto_no_anel(lon, lat, furo) for furo in aneis[1:]):
+            return True
+    return False
+
+
+def ri_bp_selecionar_sanear(base, geojson):
+    """Retorna pontos no Sanear e índices das feições correspondentes.
+
+    Um registro será listado uma única vez mesmo ao interceptar polígonos
+    sobrepostos; todas as áreas correspondentes são desenhadas no mapa.
+    """
+    feicoes = geojson.get("features", [])
+    limites = []
+    for feat in feicoes:
+        geom = feat.get("geometry", {})
+        coords = geom.get("coordinates", [])
+        if geom.get("type") == "Polygon":
+            exteriores = [coords[0]] if coords else []
+        elif geom.get("type") == "MultiPolygon":
+            exteriores = [pol[0] for pol in coords if pol]
+        else:
+            exteriores = []
+        pontos = [p for anel in exteriores for p in anel]
+        if not pontos:
+            limites.append(None)
+            continue
+        limites.append((min(p[0] for p in pontos), min(p[1] for p in pontos),
+                        max(p[0] for p in pontos), max(p[1] for p in pontos)))
+    selecionados = []
+    feicoes_usadas = set()
+    for pos_linha, (_, registro) in enumerate(base.iterrows()):
+        try:
+            lat = float(registro["Latitude"])
+            lon = float(registro["Longitude"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if not math.isfinite(lat) or not math.isfinite(lon):
+            continue
+        acertos = []
+        for pos, (feat, lim) in enumerate(zip(feicoes, limites)):
+            if lim is None or not (lim[0] <= lon <= lim[2] and lim[1] <= lat <= lim[3]):
+                continue
+            if ri_bp_ponto_na_geometria(lon, lat, feat.get("geometry", {})):
+                acertos.append(pos)
+        if acertos:
+            selecionados.append(pos_linha)
+            feicoes_usadas.update(acertos)
+    # Seleção POSICIONAL evita multiplicar registros se o DataFrame tem
+    # índices de origem repetidos após concatenações/transformações.
+    return base.iloc[selecionados].copy(), sorted(feicoes_usadas)
+
+
+def ri_bp_mapa_sanear(pontos, geojson, indices):
+    """Mapa do anexo Sanear: feições reais + posições das medições associadas."""
+    feicoes = [geojson["features"][i] for i in indices]
+    coords = []
+    for feat in feicoes:
+        geom = feat["geometry"]
+        rings = ([geom["coordinates"]] if geom["type"] == "Polygon"
+                 else geom["coordinates"] if geom["type"] == "MultiPolygon" else [])
+        for pol in rings:
+            for lon, lat, *resto in pol[0]:
+                coords.append((lat, lon))
+    for _, r in pontos.iterrows():
+        coords.append((float(r["Latitude"]), float(r["Longitude"])))
+    if not coords:
+        return None
+    mapa = folium.Map(location=[sum(p[0] for p in coords)/len(coords),
+                                 sum(p[1] for p in coords)/len(coords)],
+                       tiles="OpenStreetMap", zoom_start=13,
+                       control_scale=True, zoom_control=False)
+    folium.GeoJson({"type": "FeatureCollection", "features": feicoes},
+        name="Polígonos Sanear com medições",
+        style_function=lambda _: {"color": "#087e73", "weight": 3,
+                                  "fillColor": "#2DD4BF", "fillOpacity": 0.22},
+        tooltip=folium.GeoJsonTooltip(fields=["Área", "Bacia"],
+                    aliases=["Área Sanear:", "Bacia:"])).add_to(mapa)
+    for _, r in pontos.iterrows():
+        press = float(r["_pressao"])
+        cor = ("#e64e62" if press == 0 else "#f3a53a" if press <= 5
+               else "#e6bc34" if press <= 10 else "#cf71a9"
+               if press <= 15 else "#8554b8")
+        protocolo = str(r.get(RI_BP_COLUNA_PROTOCOLO, "") or "").strip() or "Não informado"
+        msg = (f"<b>{escape(str(r.get('Bairro','')))}</b><br>"
+               f"Matrícula: {escape(str(r.get('Matricula','')))}<br>"
+               f"Cód. protocolo: {escape(protocolo)}<br>"
+               f"Medição: {press:g} mca")
+        folium.CircleMarker([float(r["Latitude"]), float(r["Longitude"])],
+             radius=7, color="white", weight=1.6, fill=True,
+             fill_color=cor, fill_opacity=1,
+             popup=folium.Popup(msg, max_width=320),
+             tooltip=f"{press:g} mca").add_to(mapa)
+    if len(coords) > 1:
+        mapa.fit_bounds([[min(p[0] for p in coords), min(p[1] for p in coords)],
+                         [max(p[0] for p in coords), max(p[1] for p in coords)]],
+                         padding=(38, 38), max_zoom=15)
+    mapa.get_root().html.add_child(Element(
+        '<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+        'background:#fff;padding:8px 11px;border:1px solid #ccd5e0;'
+        'border-radius:5px;font:12px Arial;color:#24364b">'
+        '<b>Sanear — medições nas áreas</b><br>'
+        '<span style="color:#087e73">▰</span> Polígono Sanear &nbsp; '
+        '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
+        '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
+        '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#cf71a9">●</span> &gt;10–15 &nbsp; '
+        '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
+    return mapa
+
+
+def ri_bp_fallback_sanear(pontos, geojson, indices, largura=1280, altura=650):
+    """Alternativa sem mapa-base, com poligonais e pontos em coordenadas reais."""
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    imagem = PILImage.new("RGB", (largura, altura), "#eef3f8")
+    pincel = ImageDraw.Draw(imagem)
+    try:
+        fonte = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        negrito = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 19)
+    except OSError:
+        fonte = ImageFont.load_default()
+        negrito = fonte
+    pincel.text((35, 18), "SANEAR — LOCALIZAÇÃO DAS MEDIÇÕES", font=negrito, fill="#193c65")
+    pincel.text((35, 49), "Mapa geográfico esquemático, sem ruas; posições e limites reais", font=fonte, fill="#60748b")
+    shapes = []
+    poligonos = [geojson["features"][i]["geometry"] for i in indices]
+    for geom in poligonos:
+        coords = geom.get("coordinates", [])
+        shapes.extend([coords] if geom.get("type") == "Polygon" else coords if geom.get("type") == "MultiPolygon" else [])
+    vertices = [(lon, lat) for pol in shapes for anel in pol for lon, lat, *rest in anel]
+    vertices.extend((float(r["Longitude"]),float(r["Latitude"])) for _, r in pontos.iterrows())
+    if vertices:
+        lat_c = sum(lat for _, lat in vertices)/len(vertices)
+        escala_x = max(0.2, math.cos(math.radians(lat_c)))
+        valores_x = [x*escala_x for x,y in vertices]
+        valores_y = [y for x,y in vertices]
+        minx,maxx,miny,maxy = min(valores_x),max(valores_x),min(valores_y),max(valores_y)
+        mx,my = (minx+maxx)/2, (miny+maxy)/2
+        x0,y0,x1,y1 = 60, 95, largura-60, altura-92
+        extensao = max((maxx-minx)/(x1-x0), (maxy-miny)/(y1-y0), 1e-8)*1.15
+        def pixel(lon,lat):
+            return (round((x0+x1)/2+(lon*escala_x-mx)/extensao),
+                    round((y0+y1)/2-(lat-my)/extensao))
+        pincel.rectangle((x0,y0,x1,y1),outline="#c2d1df",fill="white",width=2)
+        for pol in shapes:
+            if not pol:
+                continue
+            pincel.polygon([pixel(*pt[:2]) for pt in pol[0]],
+                          fill="#bceae5", outline="#087e73", width=3)
+            for furo in pol[1:]:
+                pincel.polygon([pixel(*pt[:2]) for pt in furo],
+                              fill="#ffffff", outline="#087e73", width=2)
+        for _, r in pontos.iterrows():
+            x,y=pixel(float(r["Longitude"]),float(r["Latitude"]))
+            press=float(r["_pressao"])
+            cor=("#e64e62" if press==0 else "#f3a53a" if press<=5
+                 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8")
+            pincel.ellipse((x-8,y-8,x+8,y+8),fill=cor,outline="white",width=3)
+    pincel.text((42, altura-58), "Polígonos Sanear: verde-água  |  Marcadores: medições (cores por faixa de pressão)",
+                 font=fonte,fill="#193c65")
+    buf=io.BytesIO()
+    imagem.save(buf,format="PNG")
+    return buf.getvalue()
+
+
+# ============================================================
 # RELATÓRIO NO PADRÃO FAROL — CONTEÚDO ORIGINAL + PRESSÃO
 # ============================================================
 @st.cache_data(ttl=120, show_spinner=False)
@@ -753,6 +1140,15 @@ def pressao_visivel(m):
     return pd.notna(v) and not (10 < float(v) <= 15)
 
 
+def ri_bp_observacao_visivel(valor):
+    """Apresentação: remove o marcador técnico, sem modificar o Sheets."""
+    texto = str(valor if valor is not None else "").strip()
+    if texto.lower() in ("", "nan", "nat", "none"):
+        return ""
+    texto = re.sub(r"\bSAI_ATIVIDADE\s*=\s*[A-Z0-9_-]+", "", texto, flags=re.I)
+    return texto.strip(" \t\r\n|;,/-")
+
+
 def adicionar_pontos_pressao(mapa, pressao, pontos_limiter=None):
     """Pontos medidos sobrepostos às concentrações, mesmo sem relação direta com O.S.
 
@@ -769,11 +1165,13 @@ def adicionar_pontos_pressao(mapa, pressao, pontos_limiter=None):
         lat, lon = float(lat), float(lon)
         valor = float(med["_pressao"])
         cor = "#f04452" if valor <= 5 else "#f2c600" if valor <= 10 else "#8b27ef"
+        obs_visivel = ri_bp_observacao_visivel(med.get("Observacao", ""))
         popup = (f"<b>{escape(str(med.get('Bairro', '')))}</b><br>"
                  f"Pressão aferida: <b>{valor:g} mca</b><br>"
                  f"Data: {escape(str(med.get('Data','')))}<br>"
-                 f"Matrícula: {escape(str(med.get('Matricula','')))}<br>"
-                 f"Observação: {escape(str(med.get('Observacao','')))}")
+                 f"Matrícula: {escape(str(med.get('Matricula','')))}")
+        if obs_visivel:
+            popup += f"<br>Observação: {escape(obs_visivel)}"
         folium.CircleMarker([lat,lon],radius=7,color="#ffffff",weight=1.6,
             fill=True,fill_color=cor,fill_opacity=.98,
             tooltip=f"Pressão {valor:g} mca — {med.get('Bairro','')}",
@@ -1179,106 +1577,239 @@ def secao_pdf_movimentacoes(movimentacoes, erro_movimentacoes, largura, normal, 
 
 def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                                 titulo, secao, fonte, P, tabela, os_base=None):
-    """Segunda parte do PDF: medições M1, sem alterar a primeira parte do Farol.
+    """Seção PDF idêntica em estrutura e critérios ao relatório atual do Módulo 1.
 
-    O anexo existe apenas quando há medições válidas. Em todos os cálculos,
-    a unidade amostral é a aferição, não a O.S. e não a rede hidráulica inteira.
+    Mantém Farol independente. A análise Sanear usa apenas medições válidas
+    e filtradas por período/unidade/município, sem vincular O.S. por proximidade.
     """
     if pressao is None or pressao.empty:
         return
-    base=pressao.loc[pressao["_pressao"].notna()].copy()
-    if base.empty:return
-    bairros=resumo_pressao_por_bairro(base)
-    if bairros.empty:return
-    valor=pd.to_numeric(base["_pressao"],errors="coerce").dropna()
-    n=len(valor);criticos=int(valor.le(5).sum());zeros=int(valor.eq(0).sum())
-    mun=list(sorted(set(base["_municipio"].dropna()) - {""}))
-    geos=int(base[["_lat","_lon"]].notna().all(axis=1).sum())
-    sem_gerar_longo=f"{inicio:%d/%m/%Y} a {fim:%d/%m/%Y} · {', '.join(mun) if mun else 'Municípios não informados'}"
+    base = pressao.loc[pressao["_pressao"].notna() & (pressao["_pressao"] >= 0)].copy()
+    if base.empty:
+        return
+    # A conversão numérica é exclusiva do PDF e não modifica a base carregada.
+    base["Latitude"] = pd.to_numeric(base["_lat"], errors="coerce")
+    base["Longitude"] = pd.to_numeric(base["_lon"], errors="coerce")
+    if RI_BP_COLUNA_PROTOCOLO not in base:
+        base[RI_BP_COLUNA_PROTOCOLO] = ""
+    bairros = resumo_pressao_por_bairro(base)
+    if bairros.empty:
+        return
+    medidas = pd.to_numeric(base["_pressao"], errors="coerce").dropna()
+    mun = sorted(set(base["_municipio"].dropna()) - {""})
+    nota_periodo = (f"Período: {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}  |  "
+                    f"Município(s): {', '.join(mun) if mun else 'Não informados'}")
 
-    historia.append(P("Baixa Pressão — Relatório de medições",titulo))
-    historia.append(P(sem_gerar_longo,normal))
-    historia.append(Spacer(1,9))
-
-    def cartao(rotulo,valor_texto,detalhe):
-        grade=Table([
-            [P(rotulo,pequeno)],
-            [P(valor_texto,ParagraphStyle(f"kpi_bp_{len(historia)}_{len(rotulo)}",parent=normal,
-                   fontSize=18,leading=22,textColor=colors.HexColor("#193c65")))],
-            [P(detalhe,pequeno)]
-        ],colWidths=[6.0*cm],hAlign="LEFT")
-        grade.setStyle(TableStyle([
-           ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#f1f5fa")),
-           ("BOX",(0,0),(-1,-1),.6,colors.HexColor("#dce5ef")),
-           ("LEFTPADDING",(0,0),(-1,-1),10),
-           ("RIGHTPADDING",(0,0),(-1,-1),7),
-           ("TOPPADDING",(0,0),(-1,-1),2),
-           ("BOTTOMPADDING",(0,0),(-1,-1),2),
+    # Mesmo estilo da tabela de Baixa Pressão do Módulo 1, sem alterar o Farol.
+    pequeno_bp = ParagraphStyle(
+        "ri_bp_pequeno_pdf", parent=pequeno, fontSize=7.5, leading=10)
+    cabecalho_bp = ParagraphStyle(
+        "ri_bp_cabecalho_pdf", parent=pequeno_bp,
+        fontSize=7.5, leading=10, textColor=colors.HexColor("#193c65"))
+    def tab_bp(cabecalhos, linhas, larguras):
+        dados = [[P(x, cabecalho_bp) for x in cabecalhos]] + [
+            [P(x, pequeno_bp) for x in linha] for linha in linhas]
+        t = Table(dados, colWidths=larguras, repeatRows=1, splitByRow=0, hAlign="LEFT")
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e1eaf4")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#f4f7fb")]),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
-        return grade
-    painel=Table([[
-        cartao("MEDIÇÕES",str(n),f"{geos} com coordenadas"),
-        cartao("BAIRROS",str(len(bairros)),"com aferições"),
-        cartao("MÉDIA",f"{valor.mean():.1f} mca","das medições"),
-        cartao("ATÉ 5 MCA",f"{criticos} ({100*criticos/n:.0f}%)",f"inclui {zeros} de 0 mca"),
-    ]],colWidths=[6.55*cm]*4,hAlign="LEFT")
-    painel.setStyle(TableStyle([
-        ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("LEFTPADDING",(0,0),(-1,-1),1),
-        ("RIGHTPADDING",(0,0),(-1,-1),2),
-        ("TOPPADDING",(0,0),(-1,-1),0),
-        ("BOTTOMPADDING",(0,0),(-1,-1),0),
+        return t
+
+    historia.extend([
+        P("MONITORAMENTO DE BAIXA PRESSÃO — COI", titulo),
+        P(nota_periodo, normal), Spacer(1, 10)])
+
+    def cartao(rotulo, valor, nota):
+        estilo = ParagraphStyle(
+            "ri_bp_kpi_" + re.sub(r"\W+", "_", rotulo), parent=normal,
+            fontSize=16, leading=19, textColor=colors.HexColor("#193c65"))
+        c = Table([[P(rotulo, pequeno_bp)], [P(valor, estilo)],
+                   [P(nota, pequeno_bp)]], colWidths=[6.25*cm])
+        c.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5fa")),
+            ("BOX", (0, 0), (-1, -1), .6, colors.HexColor("#dce5ef")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        return c
+
+    criticos = int(medidas.le(5).sum())
+    cards = Table([[
+        cartao("MEDIÇÕES", str(len(base)), "aferições filtradas"),
+        cartao("BAIRROS", str(len(bairros)), "monitorados no filtro"),
+        cartao("MÉDIA", f"{medidas.mean():.2f} mca", "média amostral"),
+        cartao("ATÉ 5 MCA", f"{criticos} ({100*criticos/len(base):.0f}%)",
+               "inclui leituras de 0 mca"),
+    ]], colWidths=[6.55*cm]*4, hAlign="LEFT")
+    cards.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
     ]))
-    historia.extend([painel,Spacer(1,8)])
-    mapa=mapa_exclusivo_pressao(base)
+    historia.extend([cards, Spacer(1, 9)])
+
+    mapa = ri_bp_mapa(base)
     if mapa is not None:
-        historia.append(P("Mapa das aferições de pressão",secao))
-        imagem=imagem_folium(mapa,1280,660)
-        historia.append(Image(io.BytesIO(imagem),width=26*cm,height=11.5*cm))
+        historia.append(P("MAPA DAS AFERIÇÕES", secao))
+        try:
+            imagem = imagem_folium(mapa, 1280, 650)
+        except Exception:
+            imagem = ri_bp_mapa_fallback(base)
+            historia.append(P(
+                "Mapa-base indisponível: pontos exibidos em plano geográfico "
+                "esquemático, sem ruas.", pequeno_bp))
+        historia.append(Image(io.BytesIO(imagem), width=26.1*cm, height=11.25*cm))
     else:
-        historia.append(P("Nenhum marcador exibido pelas faixas visuais da baixa pressão, "
-                          "mas todas as medições válidas continuam contabilizadas nos indicadores.",normal))
-    historia.append(Spacer(1,7))
-    historia.append(P("Mapa: vermelho (0 a 5 mca), amarelo (>5 a 10 mca) e roxo (>15 mca). "
-                      "Entre 10 e 15 mca: oculto apenas no mapa. "
-                      "Pressões nulas (0 mca) são medições válidas.",pequeno))
+        historia.append(P(
+            "Não há pontos com coordenadas válidas para os filtros selecionados.",
+            normal))
+    historia.append(Spacer(1, 5))
+    historia.append(P(
+        "Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca), "
+        "rosa (>10–15 mca) e roxo (>15 mca).", pequeno_bp))
     historia.append(PageBreak())
 
-    historia.append(P("DASHBOARD DE PRESSÃO — PERFIL DO PERÍODO",titulo))
-    historia.append(P("Indicadores calculados sobre os registros efetivamente aferidos.",pequeno))
-    historia.append(Spacer(1,9))
-    # Exatamente os dois dashboards da referência, lado a lado, com tema escuro.
-    graficos=Table([[
-        _chart_faixas_vetorial(base,fonte),
-        _chart_bairros_vetorial(bairros,fonte),
-    ]],colWidths=[13.1*cm,13.1*cm],hAlign="LEFT")
-    graficos.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("LEFTPADDING",(0,0),(-1,-1),1),
-        ("RIGHTPADDING",(0,0),(-1,-1),1),
-        ("TOPPADDING",(0,0),(-1,-1),0),
-        ("BOTTOMPADDING",(0,0),(-1,-1),0)]))
+    historia.extend([
+        P("DASHBOARD DE PRESSÃO — REGISTROS FILTRADOS", titulo),
+        P("Distribuição das medições e média das aferições por bairro "
+          "(somente registros selecionados).", pequeno_bp), Spacer(1, 10)])
+    graficos = Table([[
+        _chart_faixas_vetorial(base, fonte),
+        _chart_bairros_vetorial(bairros, fonte),
+    ]], colWidths=[13.1*cm,13.1*cm], hAlign="LEFT")
+    graficos.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 1),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 1),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
     historia.append(graficos)
     historia.append(PageBreak())
 
-    historia.append(P("DIAGNÓSTICO E COMPARAÇÃO POR BAIRRO",titulo))
-    for item in achados_baixa_pressao(base,bairros,base):
-        historia.append(P("• "+item,normal))
-        historia.append(Spacer(1,4))
-    historia.append(Spacer(1,5))
-    # Mantém toda a lista de bairros, inclusive os sem pressão crítica.
-    linhas=[]
-    for _,r in bairros.iterrows():
-        linhas.append([f"{r['Bairro']} ({r['Município']})",r["Medições"],
-            f"{r['Mín. (mca)']:g}",f"{r['Média (mca)']:g}",
-            f"{r['Mediana (mca)']:g}",f"{r['Máx. (mca)']:g}",
-            f"{r['Até 5 mca']} / {r['Medições']}",f"{r['% até 5 mca']:g}%"])
-    historia.append(tabela(["Bairro / Município","n","Mín.","Média","Mediana",
-                            "Máx.","≤5 mca","% ≤5"],linhas,
-                           [10.0*cm,1.4*cm,2.2*cm,2.2*cm,2.6*cm,2.2*cm,3.0*cm,2.4*cm]))
-    historia.append(Spacer(1,9))
-    historia.append(P("Atenção: a média é amostral, calculada sobre os pontos de aferição "
-                      "cadastrados no intervalo. Não representa automaticamente toda a pressão "
-                      "da rede de distribuição ou do bairro.",pequeno))
+    historia.append(P("DIAGNÓSTICO POR BAIRRO", titulo))
+    crit = bairros[bairros["Até 5 mca"] > 0]
+    if not crit.empty:
+        lideres = crit.sort_values(["Até 5 mca", "Medições"],
+                                     ascending=False).head(4)
+        resumo = "Pontos de atenção: " + "; ".join(
+            f"{r['Bairro']} / {r['Município']} "
+            f"({int(r['Até 5 mca'])} de {int(r['Medições'])} medições até 5 mca)"
+            for _, r in lideres.iterrows()) + "."
+        historia.extend([P(resumo, normal), Spacer(1, 7)])
+    if (bairros["Medições"] == 1).any():
+        historia.extend([P(
+            "Bairros com uma única aferição: a média representa somente "
+            "aquele ponto de medição.", pequeno_bp), Spacer(1, 5)])
+
+    linhas = []
+    for _, r in bairros.iterrows():
+        linhas.append([
+            f"{r['Bairro']} / {r['Município']}", int(r["Medições"]),
+            int(r["Matrículas"]), f"{r['Mín. (mca)']:g}",
+            f"{r['Média (mca)']:g}", f"{r['Máx. (mca)']:g}",
+            f"{r['Até 5 mca']}/{r['Medições']}", f"{r['% até 5 mca']:g}%"])
+    # Tabelas em blocos não divisíveis evitam repetição de linhas durante
+    # quebras de página do ReportLab, especialmente com muitos bairros.
+    for inicio_lote in range(0, len(linhas), 12):
+        historia.append(tab_bp(
+            ["Bairro / Município", "n", "Matrículas", "Mín.",
+             "Média", "Máx.", "≤5 mca", "% ≤5"],
+            linhas[inicio_lote:inicio_lote + 12],
+            [9.6*cm, 1.4*cm, 2.2*cm, 2*cm, 2*cm, 2*cm, 3*cm, 2.8*cm]))
+    historia.extend([Spacer(1, 9), P(
+        "As médias refletem somente os registros filtrados, não a pressão "
+        "de toda a rede ou de todas as residências do bairro.", pequeno_bp)])
+
+    # Última seção, idêntica ao Módulo 1. Não depende da checkbox Sanear.
+    historia.append(PageBreak())
+    historia.extend([
+        P("MEDIÇÕES EM ÁREAS DE INTERVENÇÃO SANEAR", titulo),
+        P("Cruzamento geográfico entre as coordenadas das medições e "
+          "os polígonos oficiais carregados de sanear.kml.", pequeno_bp),
+        Spacer(1, 6)])
+    try:
+        arquivo = ri_bp_encontrar_kml_sanear()
+        if not arquivo.is_file():
+            historia.append(P(
+                "Camada Sanear indisponível no repositório: "
+                "geodados/areas_influencia/sanear.kml. "
+                "Nenhum cruzamento foi executado.", normal))
+        else:
+            geometrias = ri_bp_carregar_poligonos_sanear(
+                str(arquivo), arquivo.stat().st_mtime_ns)
+            if not geometrias.get("features"):
+                historia.append(P(
+                    "A camada Sanear não contém polígonos válidos. "
+                    "Nenhum cruzamento foi executado.", normal))
+            else:
+                dentro, indices_sanear = ri_bp_selecionar_sanear(base, geometrias)
+                historia.append(P(
+                    f"Medições dentro ou sobre o limite dos polígonos: "
+                    f"{len(dentro)} de {len(base)} registros filtrados. "
+                    f"Áreas intersectadas: {len(indices_sanear)}.", normal))
+                if dentro.empty:
+                    historia.extend([Spacer(1, 9), P(
+                        "Não foram encontradas medições nas áreas Sanear "
+                        "para o período e os filtros selecionados.", pequeno_bp)])
+                else:
+                    historia.append(Spacer(1, 6))
+                    mapa_sanear = ri_bp_mapa_sanear(dentro, geometrias, indices_sanear)
+                    try:
+                        imagem_sanear = imagem_folium(mapa_sanear, 1280, 650)
+                    except Exception:
+                        imagem_sanear = ri_bp_fallback_sanear(
+                            dentro, geometrias, indices_sanear)
+                        historia.append(P(
+                            "Mapa-base indisponível: a imagem mantém as "
+                            "geometrias Sanear e as coordenadas reais, sem ruas.",
+                            pequeno_bp))
+                    historia.append(Image(io.BytesIO(imagem_sanear),
+                                         width=26.1*cm, height=10.7*cm))
+                    historia.extend([Spacer(1, 5), P(
+                        "Relação das medições geograficamente contidas "
+                        "nas áreas Sanear.", pequeno_bp)])
+                    linhas_sanear = []
+                    for _, r in dentro.sort_values(
+                            ["_bairro", "_data", "Matricula"],
+                            na_position="last").iterrows():
+                        protocolo = str(r.get(RI_BP_COLUNA_PROTOCOLO, "") or "").strip()
+                        if protocolo.lower() in ("nan", "none", "nat"):
+                            protocolo = ""
+                        linhas_sanear.append([
+                            str(r.get("Matricula", "") or "") or "—",
+                            protocolo or "Não informado",
+                            str(r.get("Bairro", "") or "") or "—",
+                            f"{float(r['_pressao']):g} mca"])
+                    # Paginação controlada. Uma tabela única muito longa
+                    # pode fazer o ReportLab duplicar linhas nas divisões.
+                    for inicio_lote in range(0, len(linhas_sanear), 12):
+                        historia.append(tab_bp(
+                            ["MATRÍCULA", "CÓD. PROTOCOLO", "BAIRRO", "MEDIÇÃO"],
+                            linhas_sanear[inicio_lote:inicio_lote + 12],
+                            [5.5*cm, 6.1*cm, 10.2*cm, 4.4*cm]))
+                    if any(linha[1] == "Não informado" for linha in linhas_sanear):
+                        historia.extend([Spacer(1, 5), P(
+                            "Nota: o código de protocolo não está presente em "
+                            "todos os registros recebidos pelo Módulo 1. "
+                            "O identificador SAI_ATIVIDADE não é utilizado como "
+                            "substituto do protocolo.", pequeno_bp)])
+    except (ET.ParseError, OSError, ValueError, TypeError,
+            KeyError, IndexError) as erro:
+        historia.append(P(
+            "Não foi possível realizar o cruzamento com a camada Sanear: "
+            + str(erro), pequeno_bp))
 
 
 def _dia_evidencias():
@@ -1709,7 +2240,7 @@ if executar:
                 resumo,associados,territoriais=pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
                 achados=["Nenhuma concentração atende aos critérios selecionados."]
                 pressao_sem_conc=bp.iloc[:0].copy()
-            st.session_state["relatorio_coi_integrado"]={"versao_esquema":10,"resumo":resumo,"associados":associados,"territoriais":territoriais,
+            st.session_state["relatorio_coi_integrado"]={"versao_esquema":11,"resumo":resumo,"associados":associados,"territoriais":territoriais,
              "concentracoes":concs,"achados":achados,"pressao_sem_conc":pressao_sem_conc,
              "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp,"unidade":unidade,"os_base":os_df,"resumo_bp":resumo_bp,"contagem_origem":contagem_origem}
     except gspread.exceptions.APIError as ex:
@@ -1730,7 +2261,7 @@ _chaves_necessarias = {
 }
 if r is not None and (
     not isinstance(r, dict)
-    or r.get("versao_esquema") != 10
+    or r.get("versao_esquema") != 11
     or not _chaves_necessarias.issubset(r)
 ):
     st.session_state.pop("relatorio_coi_integrado", None)
@@ -1812,7 +2343,9 @@ if r:
                 st.dataframe(r["territoriais"].reindex(columns=campos),hide_index=True,use_container_width=True)
         if not r["pressao_sem_conc"].empty:
             with st.expander("Medições até 5 mca em bairros sem concentração"):
-                st.dataframe(r["pressao_sem_conc"][["Data","Municipio","Bairro","Pressao_MCA","Observacao"]],hide_index=True,use_container_width=True)
+                st.dataframe(r["pressao_sem_conc"][["Data","Municipio","Bairro","Pressao_MCA","Observacao"]]
+                    .assign(Observacao=lambda d: d["Observacao"].map(ri_bp_observacao_visivel)),
+                    hide_index=True,use_container_width=True)
     if tem_pressao:
         st.divider()
         st.subheader("Parte 2 — Monitoramento de Baixa Pressão")
