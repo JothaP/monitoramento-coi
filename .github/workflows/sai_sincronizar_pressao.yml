@@ -1,4 +1,4 @@
-name: SAI - Homologacao de Importacao (sem gravacao)
+name: SAI - Importação Automática de Pressões - Módulo 1
 
 on:
   workflow_dispatch:
