@@ -1,9 +1,11 @@
 name: SAI - Importação Automática de Pressões - Módulo 1
 
+
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '15,45 * * * *'
+  repository_dispatch:
+    types: [sai_arquivo_recebido]
+
 
 permissions:
   contents: read
