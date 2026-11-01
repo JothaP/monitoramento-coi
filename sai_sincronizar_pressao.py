@@ -26,210 +26,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-COLUNAS_SAI = [
-    "ID", "Data", "Municipio", "Bairro", "Latitude", "Longitude",
-    "Pressao_MCA", "Observacao", "Matricula",
-]
-FUSO = ZoneInfo("America/Sao_Paulo")
-TERMOS_EXCLUSAO = ("vazamento", "obstrucao", "obstrução", "entupido", "quebrado")
-TERMOS_BAIXA = ("baixa pressão", "baixa pressao", "pouca água", "sem pressão", "fraca")
-
-
-def normalizar_cabecalho(valor: object) -> str:
-    return str(valor or "").strip().lower()
-
-
-def encontrar_coluna(df: pd.DataFrame, opcoes: list[str]) -> str | None:
-    """Mesma busca por cabecalhos usada no Colab, sem depender do Colab."""
-    mapa = {normalizar_cabecalho(c): c for c in df.columns}
-    return next((mapa[c] for opcao in opcoes if (c := normalizar_cabecalho(opcao)) in mapa), None)
-
-
-def texto_limpo(valor: object) -> str:
-    if valor is None or pd.isna(valor):
-        return ""
-    s = str(valor).strip()
-    return "" if s.lower() in ("nan", "none", "nat") else s
-
-
-def numero(valor: object, permitir_negativo: bool = False) -> float | None:
-    """Replica o conversor do Colab: numero simples, sem sufixo MCA."""
-    txt = texto_limpo(valor).replace(",", ".")
-    if not txt:
-        return None
-    try:
-        n = float(txt)
-        if (n >= 0 or permitir_negativo) and n != float("inf") and n != float("-inf"):
-            return n
-    except (TypeError, ValueError, OverflowError):
-        pass
-    return None
-
-
-def normalizar_localidade(valor: str, padrao: str = "") -> str:
-    raw = texto_limpo(valor) or padrao
-    s = unicodedata.normalize("NFKD", raw)
-    return "".join(c for c in s if not unicodedata.combining(c)).upper().strip()
-
-
-def parse_data(valor: object) -> str | None:
-    if isinstance(valor, (datetime, date)):
-        return valor.strftime("%d/%m/%Y")
-    txt = texto_limpo(valor)
-    for formato in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(txt, formato).strftime("%d/%m/%Y")
-        except ValueError:
-            continue
-    return None
-
-
-def data_pelo_nome(nome: str) -> str | None:
-    # Exemplo validado: Atividades-AGUAS DE TERESINA_29_10_26.xlsx
-    for padrao in (r"(?<!\d)(\d{2})[_-](\d{2})[_-](\d{4})(?!\d)",
-                   r"(?<!\d)(\d{2})[_-](\d{2})[_-](\d{2})(?!\d)"):
-        achou = re.search(padrao, nome)
-        if achou:
-            return parse_data("/".join(achou.groups()))
-    return None
-
-
-def analisar_parecer(row: pd.Series, col_pressao: str | None, col_parecer: str | None):
-    """Mesma precedencia de regras do conversor fornecido pelo usuario."""
-    p = numero(row.get(col_pressao)) if col_pressao else None
-    parecer = texto_limpo(row.get(col_parecer)).lower() if col_parecer else ""
-    if parecer:
-        if any(termo in parecer for termo in TERMOS_EXCLUSAO):
-            return None, False, True
-        if p is None:
-            achou = re.search(r"([\d]+[.,]?\d*)\s*(?:mca)", parecer, flags=re.I)
-            if achou:
-                p = numero(achou.group(1))
-    mencao_baixa = any(termo in parecer for termo in TERMOS_BAIXA)
-    return p, mencao_baixa, False
-
-
-@dataclass
-class Resultado:
-    origem: int
-    linhas: list[list]
-    sem_pressao_numerica: int = 0
-    sem_coordenadas: int = 0
-    sem_data: int = 0
-    excluidas_ou_fora_da_faixa: int = 0
-
-
-def converter_bruta(df: pd.DataFrame, nome_arquivo: str) -> Resultado:
-    """Converte a exportacao original; sem exportacao intermediaria do Colab.
-
-    Dados sem MCA numerico NAO viram 0 MCA automaticamente: ficam de fora para
-    evitar transformar uma mencao verbal em medicao que nao ocorreu.
-    """
-    col_mun = encontrar_coluna(df, ["Cidade", "Município", "Municipio"])
-    col_bairro = encontrar_coluna(df, ["Bairro"])
-    col_lat = encontrar_coluna(df, ["Latitude", "Lat"])
-    col_lon = encontrar_coluna(df, ["Longitude", "Lon", "Long"])
-    col_pressao = encontrar_coluna(df, ["Qual A Pressão Da Rede (Mca)", "Pressao_MCA", "Pressão (MCA)"])
-    col_parecer = encontrar_coluna(df, ["Parecer De Campo", "Parecer de Campo"])
-    col_matricula = encontrar_coluna(df, [
-        "Matrícula", "Matricula", "Matrícula do Imóvel", "Matricula do Imovel",
-        "Nr Matricula", "Número da Matrícula", "Numero da Matricula", "Matrícula do Cliente",
-    ])
-    col_data = encontrar_coluna(df, ["Data", "Data da atividade", "Data da Atividade"])
-    col_protocolo = encontrar_coluna(df, [
-        "Cód. Protocolo Origem", "Cod. Protocolo Origem", "Protocolo Origem", "Protocolo",
-    ])
-    if not col_bairro or not col_lat or not col_lon or not (col_pressao or col_parecer):
-        raise ValueError("A planilha não possui as colunas essenciais: Bairro, Latitude, Longitude e Pressão/Parecer.")
-    data_fallback = data_pelo_nome(nome_arquivo)
-    resultado = Resultado(origem=len(df), linhas=[])
-    for _, row in df.iterrows():
-        bairro = texto_limpo(row.get(col_bairro))
-        if not bairro:
-            resultado.excluidas_ou_fora_da_faixa += 1
-            continue
-        pressao, mencao_baixa, excluir = analisar_parecer(row, col_pressao, col_parecer)
-        if excluir:
-            resultado.excluidas_ou_fora_da_faixa += 1
-            continue
-        if pressao is None and mencao_baixa:
-            resultado.sem_pressao_numerica += 1
-            continue
-        if pressao is None or not (pressao < 10 or pressao > 15):
-            resultado.excluidas_ou_fora_da_faixa += 1
-            continue
-        lat = numero(row.get(col_lat), permitir_negativo=True)
-        lon = numero(row.get(col_lon), permitir_negativo=True)
-        if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180) or lat == 0 or lon == 0:
-            resultado.sem_coordenadas += 1
-            continue
-        data = parse_data(row.get(col_data)) if col_data else None
-        data = data or data_fallback
-        if data is None:
-            resultado.sem_data += 1
-            continue
-        mun = normalizar_localidade(row.get(col_mun), "TERESINA") if col_mun else "TERESINA"
-        bairro = normalizar_localidade(bairro)
-        matricula = texto_limpo(row.get(col_matricula)) if col_matricula else ""
-        # O Colab deixa a observacao vazia quando existe valor de MCA.
-        # O protocolo de origem nao e incluido na planilha operacional.
-        _ = col_protocolo  # preservado para futuras ampliacoes auditadas
-        resultado.linhas.append([
-            uuid.uuid4().hex[:8].upper(), data, mun, bairro,
-            round(lat, 6), round(lon, 6), round(pressao, 2), "", matricula,
-        ])
-    if not resultado.linhas and resultado.sem_data:
-        raise ValueError("Nenhuma data válida na planilha ou nome. Arquivo não importado para evitar data incorreta.")
-    return resultado
-
-
-def ler_arquivo(nome: str, conteudo: bytes) -> pd.DataFrame:
-    extensao = Path(nome).suffix.lower()
-    buffer = io.BytesIO(conteudo)
-    if extensao == ".xlsx":
-        return pd.read_excel(buffer, dtype=str, engine="openpyxl")
-    if extensao == ".csv":
-        # Alguns sistemas exportam CSV com separador ';' e codificacao Windows.
-        for codificacao in ("utf-8-sig", "cp1252", "latin1"):
-            try:
-                return pd.read_csv(io.BytesIO(conteudo), sep=None, engine="python", dtype=str, encoding=codificacao)
-            except UnicodeDecodeError:
-                continue
-    raise ValueError("Tipo de arquivo não aceito. Utilize XLSX ou CSV.")
-
-
-def chave_medicao(linha: list) -> tuple[str, ...]:
-    """Equivalente a chave de duplicidade do adicionar_lote_seguro() do Modulo 1."""
-    return (
-        parse_data(linha[1]) or texto_limpo(linha[1]),
-        normalizar_localidade(linha[2]).lower(),
-        normalizar_localidade(linha[3]).lower(),
-        f"{float(str(linha[4]).replace(',', '.')):.6f}",
-        f"{float(str(linha[5]).replace(',', '.')):.6f}",
-    )
-
-
-def filtrar_ja_existentes(linhas: list[list], linhas_sheet: list[list]) -> tuple[list[list], int]:
-    existentes: set[tuple[str, ...]] = set()
-    for r in linhas_sheet:
-        if len(r) < 6:
-            continue
-        try:
-            existentes.add(chave_medicao(r))
-        except (ValueError, TypeError):
-            continue
-    novos: list[list] = []
-    repetidos = 0
-    for r in linhas:
-        k = chave_medicao(r)
-        if k not in existentes:
-            novos.append(r)
-            existentes.add(k)
-        else:
-            repetidos += 1
-    return novos, repetidos
-
-
+# Mesmo conversor e mesmas regras de duplicidade do upload no Modulo 1.
+from sai_pressao_importacao import (
+    COLUNAS_SAI, Resultado, IndiceDuplicidades, converter_bruta,
+    ler_arquivo, chave_medicao, normalizar_cabecalho,
+)
 
 
 def conectar_google():
@@ -339,29 +140,8 @@ def baixar_drive(drive, meta):
 
 
 def carregar_chaves_sheet(ws):
-    """Uma leitura por execução, não uma consulta Google por cada O.S./medição."""
-    valores = ws.get_all_values()
-    chaves = set()
-    for row in valores[1:]:
-        if len(row) >= 6:
-            try:
-                chaves.add(chave_medicao(row))
-            except (ValueError, TypeError):
-                continue
-    return chaves
-
-
-def novos_sem_duplicacao(linhas, chaves):
-    novos = []
-    repetidos = 0
-    for row in linhas:
-        chave = chave_medicao(row)
-        if chave not in chaves:
-            novos.append(row)
-            chaves.add(chave)
-        else:
-            repetidos += 1
-    return novos, repetidos
+    """Uma leitura do Sheets para identificar medições já registradas."""
+    return IndiceDuplicidades(ws.get_all_values()[1:])
 
 
 def executar_sincronizacao():
@@ -399,24 +179,10 @@ def executar_sincronizacao():
             else:
                 if chaves is None:
                     chaves = carregar_chaves_sheet(ws)
-                # Novos sem duplicação em relação à planilha oficial (inclusive dados manuais).
-                # Somente acrescenta chaves à memória após confirmar a gravação do lote.
-                novos = []
-                repetidos = 0
-                repetidos_planilha = 0
-                repetidos_arquivo = 0
-                chaves_novas = set()
-                for row in resultado.linhas:
-                    ck = chave_medicao(row)
-                    if ck in chaves:
-                        repetidos += 1
-                        repetidos_planilha += 1
-                    elif ck in chaves_novas:
-                        repetidos += 1
-                        repetidos_arquivo += 1
-                    else:
-                        novos.append(row)
-                        chaves_novas.add(ck)
+                # Usa a mesma regra de duplicidade do upload do Módulo 1.
+                novos, repetidos, correspondencias_legadas = chaves.selecionar(resultado.linhas)
+                repetidos_planilha = repetidos
+                repetidos_arquivo = 0  # Incluídos no total de repetidos nesta versão.
                 if dry_run:
                     print(
                         f'SAI: SIMULAÇÃO (SEM GRAVAÇÃO) | arquivo={meta["name"]} '
@@ -425,13 +191,16 @@ def executar_sincronizacao():
                         f'| ja_na_planilha={repetidos_planilha} '
                         f'| repetidos_no_arquivo={repetidos_arquivo} '
                         f'| novos={len(novos)} '
+                        f'| sem_pressao_numerica={resultado.sem_pressao_numerica} '
+                        f'| sem_coordenadas={resultado.sem_coordenadas} '
+                        f'| sem_data={resultado.sem_data} '
                         f'| descartados={resultado.origem-len(resultado.linhas)}'
                     )
                     continue
                 for inicio in range(0, len(novos), 200):
                     lote = novos[inicio:inicio+200]
                     ws.append_rows(lote, value_input_option='RAW')
-                    chaves.update(chave_medicao(r) for r in lote)
+                    # O índice já foi atualizado ao selecionar o lote.
                 novos_qtd = len(novos)
                 status = 'IMPORTADO' if novos_qtd else 'SEM_NOVOS'
             if dry_run:
