@@ -39,6 +39,9 @@ from farol_graficos_temporarios import chave_logger, filtrar_loggers, rotulo_log
 # Mesma abrangência operacional padrão do Módulo 3 (independente do raio
 # usado para formar as concentrações ou associar medições do Módulo 1).
 RAIO_OPERACIONAL_EVIDENCIAS = 750
+RAIO_CONCENTRACOES_M = 750
+RAIO_MEDICOES_M = 750
+MINIMO_OS_CONCENTRACAO = 3
 RI_BP_COLUNA_PROTOCOLO = "Cod_Protocolo"
 FUSO_LOGGERS = ZoneInfo("America/Fortaleza")
 ABA_GRAFICOS_DIA = "FAROL_GRAFICOS_DIA"
@@ -1626,12 +1629,12 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
         P("MONITORAMENTO DE BAIXA PRESSÃO — COI", titulo),
         P(nota_periodo, normal), Spacer(1, 10)])
 
-    def cartao(rotulo, valor, nota):
+    def cartao(rotulo, valor):
         estilo = ParagraphStyle(
             "ri_bp_kpi_" + re.sub(r"\W+", "_", rotulo), parent=normal,
             fontSize=16, leading=19, textColor=colors.HexColor("#193c65"))
-        c = Table([[P(rotulo, pequeno_bp)], [P(valor, estilo)],
-                   [P(nota, pequeno_bp)]], colWidths=[6.25*cm])
+        c = Table([[P(rotulo, pequeno_bp)], [P(valor, estilo)]],
+                  colWidths=[6.25*cm])
         c.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5fa")),
             ("BOX", (0, 0), (-1, -1), .6, colors.HexColor("#dce5ef")),
@@ -1644,11 +1647,10 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
 
     criticos = int(medidas.le(5).sum())
     cards = Table([[
-        cartao("MEDIÇÕES", str(len(base)), "aferições filtradas"),
-        cartao("BAIRROS", str(len(bairros)), "monitorados no filtro"),
-        cartao("MÉDIA", f"{medidas.mean():.2f} mca", "média amostral"),
-        cartao("ATÉ 5 MCA", f"{criticos} ({100*criticos/len(base):.0f}%)",
-               "inclui leituras de 0 mca"),
+        cartao("MEDIÇÕES", str(len(base))),
+        cartao("BAIRROS", str(len(bairros))),
+        cartao("MÉDIA", f"{medidas.mean():.2f} mca"),
+        cartao("ATÉ 5 MCA", f"{criticos} ({100*criticos/len(base):.0f}%)"),
     ]], colWidths=[6.55*cm]*4, hAlign="LEFT")
     cards.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -1674,16 +1676,10 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
         historia.append(P(
             "Não há pontos com coordenadas válidas para os filtros selecionados.",
             normal))
-    historia.append(Spacer(1, 5))
-    historia.append(P(
-        "Mapa: vermelho (0 mca), laranja (>0–5 mca), amarelo (>5–10 mca), "
-        "rosa (>10–15 mca) e roxo (>15 mca).", pequeno_bp))
     historia.append(PageBreak())
 
     historia.extend([
-        P("DASHBOARD DE PRESSÃO — REGISTROS FILTRADOS", titulo),
-        P("Distribuição das medições e média das aferições por bairro "
-          "(somente registros selecionados).", pequeno_bp), Spacer(1, 10)])
+        P("DASHBOARD DE PRESSÃO", titulo), Spacer(1, 10)])
     graficos = Table([[
         _chart_faixas_vetorial(base, fonte),
         _chart_bairros_vetorial(bairros, fonte),
@@ -1708,10 +1704,6 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
             f"({int(r['Até 5 mca'])} de {int(r['Medições'])} medições até 5 mca)"
             for _, r in lideres.iterrows()) + "."
         historia.extend([P(resumo, normal), Spacer(1, 7)])
-    if (bairros["Medições"] == 1).any():
-        historia.extend([P(
-            "Bairros com uma única aferição: a média representa somente "
-            "aquele ponto de medição.", pequeno_bp), Spacer(1, 5)])
 
     linhas = []
     for _, r in bairros.iterrows():
@@ -1728,16 +1720,11 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
              "Média", "Máx.", "≤5 mca", "% ≤5"],
             linhas[inicio_lote:inicio_lote + 12],
             [9.6*cm, 1.4*cm, 2.2*cm, 2*cm, 2*cm, 2*cm, 3*cm, 2.8*cm]))
-    historia.extend([Spacer(1, 9), P(
-        "As médias refletem somente os registros filtrados, não a pressão "
-        "de toda a rede ou de todas as residências do bairro.", pequeno_bp)])
 
     # Última seção, idêntica ao Módulo 1. Não depende da checkbox Sanear.
     historia.append(PageBreak())
     historia.extend([
         P("MEDIÇÕES EM ÁREAS DE INTERVENÇÃO SANEAR", titulo),
-        P("Cruzamento geográfico entre as coordenadas das medições e "
-          "os polígonos oficiais carregados de sanear.kml.", pequeno_bp),
         Spacer(1, 6)])
     try:
         arquivo = ri_bp_encontrar_kml_sanear()
@@ -1777,9 +1764,6 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                             pequeno_bp))
                     historia.append(Image(io.BytesIO(imagem_sanear),
                                          width=26.1*cm, height=10.7*cm))
-                    historia.extend([Spacer(1, 5), P(
-                        "Relação das medições geograficamente contidas "
-                        "nas áreas Sanear.", pequeno_bp)])
                     linhas_sanear = []
                     for _, r in dentro.sort_values(
                             ["_bairro", "_data", "Matricula"],
@@ -1799,12 +1783,6 @@ def montar_secao_baixa_pressao(historia, pressao, inicio, fim, normal, pequeno,
                             ["MATRÍCULA", "CÓD. PROTOCOLO", "BAIRRO", "MEDIÇÃO"],
                             linhas_sanear[inicio_lote:inicio_lote + 12],
                             [5.5*cm, 6.1*cm, 10.2*cm, 4.4*cm]))
-                    if any(linha[1] == "Não informado" for linha in linhas_sanear):
-                        historia.extend([Spacer(1, 5), P(
-                            "Nota: o código de protocolo não está presente em "
-                            "todos os registros recebidos pelo Módulo 1. "
-                            "O identificador SAI_ATIVIDADE não é utilizado como "
-                            "substituto do protocolo.", pequeno_bp)])
     except (ET.ParseError, OSError, ValueError, TypeError,
             KeyError, IndexError) as erro:
         historia.append(P(
@@ -1951,7 +1929,6 @@ def kpis_panorama_farol(n_os, n_concentracoes, n_medicoes, n_com_medicao, raio, 
         bloco = Table([
             [Paragraph(xml_escape(nome), rotulo)],
             [Paragraph(xml_escape(str(valor)), destaque)],
-            [Paragraph(xml_escape(detalhe), legenda)],
         ], colWidths=[6.19*cm], hAlign="LEFT")
         bloco.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), cinza),
@@ -1967,7 +1944,7 @@ def kpis_panorama_farol(n_os, n_concentracoes, n_medicoes, n_com_medicao, raio, 
         cartao("O.S. NO PERÍODO", n_os, "Registros da seleção"),
         cartao("CONCENTRAÇÕES", n_concentracoes, "Agrupamentos identificados"),
         cartao("MEDIÇÕES NO PERÍODO", n_medicoes, "Aferições de pressão"),
-        cartao("COM MEDIÇÃO PRÓXIMA", n_com_medicao, f"Concentrações · até {raio} m"),
+        cartao(f"COM MEDIÇÃO PRÓXIMA (≤{raio} m)", n_com_medicao, ""),
     ]], colWidths=[6.65*cm]*4, hAlign="LEFT")
     painel.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -1980,7 +1957,7 @@ def kpis_panorama_farol(n_os, n_concentracoes, n_medicoes, n_com_medicao, raio, 
 
 
 def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, n_os, n_bp,
-                  concentracoes=None, grupos=None, raio_cluster=500, contexto=None, pressao=None,
+                  concentracoes=None, grupos=None, raio_cluster=RAIO_CONCENTRACOES_M, contexto=None, pressao=None,
                   pontos_todos=None, indice_graficos=None, raio_operacional_loggers=RAIO_OPERACIONAL_EVIDENCIAS):
     """Relatório do Farol: panorama + fichas com mapa e O.S. ao lado.
 
@@ -2056,11 +2033,10 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
     imagem=imagem_folium(mapa,1280,585)
     medicao_proxima=(int((resumo["Medições próximas"] > 0).sum())
                      if resumo is not None and not resumo.empty else 0)
-    subtitulo=(f"Concentrações: {len(concentracoes)} · {n_os} O.S. e equipamentos operacionais.")
     historia.append(KeepTogether([
         P("Panorama territorial das concentrações",titulo),
         Image(io.BytesIO(imagem),width=26*cm,height=(26*585/1280)*cm),
-        Spacer(1,3), P(subtitulo), Spacer(1,7),
+        Spacer(1,6),
         kpis_panorama_farol(n_os, len(concentracoes), n_bp,
                            medicao_proxima, raio, normal, pequeno),
     ]))
@@ -2096,8 +2072,6 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                     xml_escape(f"{nome} ({len(linhas)})") + "</b>",pequeno)])
                 if linhas and qtd:
                     blocos.append(tabela_os(linhas[:qtd]))
-                elif not linhas:
-                    blocos.append(P("Nenhuma O.S. nesta categoria."))
             return blocos
         # Reserva exatamente o espaço do painel lateral usado pelo Farol.
         limite_h=9.08*cm-12
@@ -2154,8 +2128,8 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
         # painel de O.S. Não criar quadros extras que alterem o layout original.
         # Somente os dados da ficha são usados no PDF. Não consultar o histórico.
         acompanhamento, _, _ = ficha_acompanhamento(c, grupo, contexto, incluir_movimentacoes=False)
-        historia.append(P("ACOMPANHAMENTO OPERACIONAL",secao))
         if acompanhamento:
+            historia.append(P("ACOMPANHAMENTO OPERACIONAL",secao))
             historia.append(tabela(["Status / Finalizado","Município / Regional","Reclamações / Unidade"],[[
                 f"{acompanhamento.get('status','')} · {acompanhamento.get('finalizado','')}",
                 f"{acompanhamento.get('municipio','')} · {acompanhamento.get('regional','')}",
@@ -2166,9 +2140,10 @@ def pdf_relatorio(resumo, associados, territoriais, achados, inicio, fim, raio, 
                 acompanhamento.get("arcgis",""),acompanhamento.get("sia",""),
                 acompanhamento.get("loggers",""),acompanhamento.get("retorno_operacao","")]],
                 [6.0*cm,6.0*cm,6.0*cm,8.0*cm]),
-                P("Descrição da ocorrência",secao),P(acompanhamento.get("descricao",""),normal)])
-        else:
-            historia.append(P("Nenhum acompanhamento operacional iniciado para esta concentração."))
+            ])
+            if str(acompanhamento.get("descricao", "") or "").strip():
+                historia.extend([P("Descrição da ocorrência", secao),
+                                 P(acompanhamento["descricao"], normal)])
         # Evidências do dia atual, idênticas às usadas pelo Módulo 3: não
         # criar título, espaço reservado ou página para logger sem imagem.
         loggers_da_ficha = loggers_proximos_da_concentracao(
@@ -2194,15 +2169,15 @@ if st.button("← Voltar ao Hub Central",key="retornar_hub_ri"):
 hoje=date.today()
 with st.form("parametros"):
     unidade_sel=st.radio("Unidade do relatório",["THE — Teresina", "API — Piauí", "TIM — Timon"],horizontal=True)
-    a,b,c,d=st.columns(4)
+    a,b,c=st.columns([1,1,1.3])
     with a: inicio=st.date_input("Data inicial",value=hoje-timedelta(days=7),format="DD/MM/YYYY")
     with b: fim=st.date_input("Data final",value=hoje,format="DD/MM/YYYY")
-    with c: raio_cluster=st.number_input("Raio das concentrações (m)",min_value=100,max_value=3000,value=500,step=100)
-    with d: minimo=st.number_input("Mínimo de O.S.",min_value=2,max_value=30,value=2)
-    e,f=st.columns(2)
-    with e: raio_relacao=st.number_input("Raio da medição até alguma O.S. (m)",min_value=50,max_value=3000,value=500,step=50)
-    with f: municipio_sel=st.text_input("Município (opcional)",placeholder="Todos os municípios")
+    with c: municipio_sel=st.text_input("Município (opcional)",placeholder="Todos os municípios")
     executar=st.form_submit_button("Gerar diagnóstico integrado",type="primary",use_container_width=True)
+# Regras fixas do Farol, aplicadas tanto à análise quanto ao relatório.
+raio_cluster=RAIO_CONCENTRACOES_M
+raio_relacao=RAIO_MEDICOES_M
+minimo=MINIMO_OS_CONCENTRACAO
 if executar:
     # Descarta resultados antigos antes de uma nova consulta, evitando exibir diagnósticos desatualizados.
     st.session_state.pop("relatorio_coi_integrado", None)
@@ -2240,7 +2215,7 @@ if executar:
                 resumo,associados,territoriais=pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
                 achados=["Nenhuma concentração atende aos critérios selecionados."]
                 pressao_sem_conc=bp.iloc[:0].copy()
-            st.session_state["relatorio_coi_integrado"]={"versao_esquema":11,"resumo":resumo,"associados":associados,"territoriais":territoriais,
+            st.session_state["relatorio_coi_integrado"]={"versao_esquema":12,"resumo":resumo,"associados":associados,"territoriais":territoriais,
              "concentracoes":concs,"achados":achados,"pressao_sem_conc":pressao_sem_conc,
              "inicio":inicio,"fim":fim,"raio":int(raio_relacao),"n_os":len(os_df),"n_bp":len(bp),"grupos":grupos,"raio_cluster":int(raio_cluster),"contexto":contexto,"pressao_mapa":bp,"unidade":unidade,"os_base":os_df,"resumo_bp":resumo_bp,"contagem_origem":contagem_origem}
     except gspread.exceptions.APIError as ex:
@@ -2261,7 +2236,7 @@ _chaves_necessarias = {
 }
 if r is not None and (
     not isinstance(r, dict)
-    or r.get("versao_esquema") != 11
+    or r.get("versao_esquema") != 12
     or not _chaves_necessarias.issubset(r)
 ):
     st.session_state.pop("relatorio_coi_integrado", None)
