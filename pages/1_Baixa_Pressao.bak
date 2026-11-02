@@ -114,6 +114,10 @@ COLUNAS_PADRAO = [
     "Matricula"
 ]
 
+# Campo adicional de leitura: quando existir na planilha, o protocolo é mostrado
+# no relatório Sanear. NÃO muda A:I nem o sincronizador de nove colunas.
+BP_COLUNA_PROTOCOLO = "Cod_Protocolo"
+
 
 # Marcador técnico da atividade: indispensável à deduplicação, mas não é
 # uma observação operacional. Nunca altere o valor bruto no Google Sheets.
@@ -475,13 +479,30 @@ def normalizar_coluna(nome: str) -> str:
         "matricula": "Matricula",
         "matrícula": "Matricula",
         "matrícula ": "Matricula",
-        "mat": "Matricula"
+        "mat": "Matricula",
+
+        "cod_protocolo": BP_COLUNA_PROTOCOLO,
+        "codigo_protocolo": BP_COLUNA_PROTOCOLO,
+        "código protocolo": BP_COLUNA_PROTOCOLO,
+        "código do protocolo": BP_COLUNA_PROTOCOLO,
+        "cod. protocolo": BP_COLUNA_PROTOCOLO,
+        "cód. protocolo": BP_COLUNA_PROTOCOLO,
+        "cód. protocolo origem": BP_COLUNA_PROTOCOLO,
+        "cod. protocolo origem": BP_COLUNA_PROTOCOLO,
+        "cód. protocolo de origem": BP_COLUNA_PROTOCOLO,
     }
 
-    return mapeamento.get(
-        nome,
-        nome.title()
-    )
+    if nome in mapeamento:
+        return mapeamento[nome]
+    # Nomes aceitos de campos opcionais de origem, sem alterar as nove colunas.
+    sem_pontuacao = re.sub(r"[._-]+", " ", nome)
+    if ("protocolo" in sem_pontuacao and
+            (sem_pontuacao.startswith("cod ") or
+             sem_pontuacao.startswith("cód ") or
+             sem_pontuacao.startswith("codigo ") or
+             sem_pontuacao.startswith("código "))):
+        return BP_COLUNA_PROTOCOLO
+    return nome.title()
 
 
 def normalizar_texto_local(
@@ -723,7 +744,7 @@ def carregar_dados() -> pd.DataFrame:
         registros
     )
 
-    for col in COLUNAS_PADRAO:
+    for col in COLUNAS_PADRAO + [BP_COLUNA_PROTOCOLO]:
 
         if col not in df.columns:
             df[col] = ""
@@ -823,8 +844,14 @@ def carregar_dados() -> pd.DataFrame:
         != ""
     ]
 
+    # Campo opcional J (ou nome equivalente) é apenas lido e não é escrito.
+    df[BP_COLUNA_PROTOCOLO] = (
+        df[BP_COLUNA_PROTOCOLO].fillna("").astype(str).str.strip()
+        .replace({"nan": "", "None": ""})
+    )
+
     return df[
-        COLUNAS_PADRAO
+        COLUNAS_PADRAO + [BP_COLUNA_PROTOCOLO]
     ].reset_index(
         drop=True
     )
@@ -1402,6 +1429,203 @@ def bp_rel_mapa_fallback(base, largura=1280, altura=650):
     return buffer_img.getvalue()
 
 
+
+# ============================================================
+# RELATÓRIO — ASSOCIAÇÃO ESPACIAL DAS MEDIÇÕES AOS POLÍGONOS SANEAR
+# ============================================================
+def bp_rel_ponto_no_anel(lon, lat, anel):
+    """Ray casting lon/lat; bordas do anel são consideradas incluídas."""
+    dentro = False
+    for i in range(len(anel) - 1):
+        ax, ay = anel[i][0], anel[i][1]
+        bx, by = anel[i+1][0], anel[i+1][1]
+        dx, dy = bx - ax, by - ay
+        cruz = (lon - ax) * dy - (lat - ay) * dx
+        if (abs(cruz) <= 1e-11 and
+                min(ax,bx)-1e-11 <= lon <= max(ax,bx)+1e-11 and
+                min(ay,by)-1e-11 <= lat <= max(ay,by)+1e-11):
+            return True
+        if (ay > lat) != (by > lat):
+            intercepto = ax + (lat-ay) * dx / dy
+            if lon < intercepto:
+                dentro = not dentro
+    return dentro
+
+
+def bp_rel_ponto_na_geometria(lon, lat, geometria):
+    """Polígonos com furos e multipolígonos; sem buffers ou inferências por bairro."""
+    tipo = geometria.get("type", "")
+    conjuntos = geometria.get("coordinates", [])
+    if tipo == "Polygon":
+        conjuntos = [conjuntos]
+    elif tipo != "MultiPolygon":
+        return False
+    for aneis in conjuntos:
+        if not aneis or not bp_rel_ponto_no_anel(lon, lat, aneis[0]):
+            continue
+        if not any(bp_rel_ponto_no_anel(lon, lat, furo) for furo in aneis[1:]):
+            return True
+    return False
+
+
+def bp_rel_selecionar_sanear(base, geojson):
+    """Retorna pontos no Sanear e índices das feições correspondentes.
+
+    Um registro será listado uma única vez mesmo ao interceptar polígonos
+    sobrepostos; todas as áreas correspondentes são desenhadas no mapa.
+    """
+    feicoes = geojson.get("features", [])
+    limites = []
+    for feat in feicoes:
+        geom = feat.get("geometry", {})
+        coords = geom.get("coordinates", [])
+        if geom.get("type") == "Polygon":
+            exteriores = [coords[0]] if coords else []
+        elif geom.get("type") == "MultiPolygon":
+            exteriores = [pol[0] for pol in coords if pol]
+        else:
+            exteriores = []
+        pontos = [p for anel in exteriores for p in anel]
+        if not pontos:
+            limites.append(None)
+            continue
+        limites.append((min(p[0] for p in pontos), min(p[1] for p in pontos),
+                        max(p[0] for p in pontos), max(p[1] for p in pontos)))
+    selecionados = []
+    feicoes_usadas = set()
+    for idx, registro in base.iterrows():
+        try:
+            lat = float(registro["Latitude"])
+            lon = float(registro["Longitude"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if not math.isfinite(lat) or not math.isfinite(lon):
+            continue
+        acertos = []
+        for pos, (feat, lim) in enumerate(zip(feicoes, limites)):
+            if lim is None or not (lim[0] <= lon <= lim[2] and lim[1] <= lat <= lim[3]):
+                continue
+            if bp_rel_ponto_na_geometria(lon, lat, feat.get("geometry", {})):
+                acertos.append(pos)
+        if acertos:
+            selecionados.append(idx)
+            feicoes_usadas.update(acertos)
+    # Índices preservados até o recorte; nunca multiplica o número de medições.
+    return base.loc[selecionados].copy(), sorted(feicoes_usadas)
+
+
+def bp_rel_mapa_sanear(pontos, geojson, indices):
+    """Mapa do anexo Sanear: feições reais + posições das medições associadas."""
+    feicoes = [geojson["features"][i] for i in indices]
+    coords = []
+    for feat in feicoes:
+        geom = feat["geometry"]
+        rings = ([geom["coordinates"]] if geom["type"] == "Polygon"
+                 else geom["coordinates"] if geom["type"] == "MultiPolygon" else [])
+        for pol in rings:
+            for lon, lat, *resto in pol[0]:
+                coords.append((lat, lon))
+    for _, r in pontos.iterrows():
+        coords.append((float(r["Latitude"]), float(r["Longitude"])))
+    if not coords:
+        return None
+    mapa = folium.Map(location=[sum(p[0] for p in coords)/len(coords),
+                                 sum(p[1] for p in coords)/len(coords)],
+                       tiles="OpenStreetMap", zoom_start=13,
+                       control_scale=True, zoom_control=False)
+    folium.GeoJson({"type": "FeatureCollection", "features": feicoes},
+        name="Polígonos Sanear com medições",
+        style_function=lambda _: {"color": "#087e73", "weight": 3,
+                                  "fillColor": "#2DD4BF", "fillOpacity": 0.22},
+        tooltip=folium.GeoJsonTooltip(fields=["Área", "Bacia"],
+                    aliases=["Área Sanear:", "Bacia:"])).add_to(mapa)
+    for _, r in pontos.iterrows():
+        press = float(r["_pressao"])
+        cor = ("#e64e62" if press == 0 else "#f3a53a" if press <= 5
+               else "#e6bc34" if press <= 10 else "#cf71a9"
+               if press <= 15 else "#8554b8")
+        protocolo = str(r.get(BP_COLUNA_PROTOCOLO, "") or "").strip() or "Não informado"
+        msg = (f"<b>{escape(str(r.get('Bairro','')))}</b><br>"
+               f"Matrícula: {escape(str(r.get('Matricula','')))}<br>"
+               f"Cód. protocolo: {escape(protocolo)}<br>"
+               f"Medição: {press:g} mca")
+        folium.CircleMarker([float(r["Latitude"]), float(r["Longitude"])],
+             radius=7, color="white", weight=1.6, fill=True,
+             fill_color=cor, fill_opacity=1,
+             popup=folium.Popup(msg, max_width=320),
+             tooltip=f"{press:g} mca").add_to(mapa)
+    if len(coords) > 1:
+        mapa.fit_bounds([[min(p[0] for p in coords), min(p[1] for p in coords)],
+                         [max(p[0] for p in coords), max(p[1] for p in coords)]],
+                         padding=(38, 38), max_zoom=15)
+    mapa.get_root().html.add_child(Element(
+        '<div style="position:fixed;bottom:12px;left:12px;z-index:9999;'
+        'background:#fff;padding:8px 11px;border:1px solid #ccd5e0;'
+        'border-radius:5px;font:12px Arial;color:#24364b">'
+        '<b>Sanear — medições nas áreas</b><br>'
+        '<span style="color:#087e73">▰</span> Polígono Sanear &nbsp; '
+        '<span style="color:#e64e62">●</span> 0 mca &nbsp; '
+        '<span style="color:#f3a53a">●</span> &gt;0–5 &nbsp; '
+        '<span style="color:#e6bc34">●</span> &gt;5–10 &nbsp; '
+        '<span style="color:#cf71a9">●</span> &gt;10–15 &nbsp; '
+        '<span style="color:#8554b8">●</span> &gt;15 mca</div>'))
+    return mapa
+
+
+def bp_rel_fallback_sanear(pontos, geojson, indices, largura=1280, altura=650):
+    """Alternativa sem mapa-base, com poligonais e pontos em coordenadas reais."""
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+    imagem = PILImage.new("RGB", (largura, altura), "#eef3f8")
+    pincel = ImageDraw.Draw(imagem)
+    try:
+        fonte = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        negrito = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 19)
+    except OSError:
+        fonte = ImageFont.load_default()
+        negrito = fonte
+    pincel.text((35, 18), "SANEAR — LOCALIZAÇÃO DAS MEDIÇÕES", font=negrito, fill="#193c65")
+    pincel.text((35, 49), "Mapa geográfico esquemático, sem ruas; posições e limites reais", font=fonte, fill="#60748b")
+    shapes = []
+    poligonos = [geojson["features"][i]["geometry"] for i in indices]
+    for geom in poligonos:
+        coords = geom.get("coordinates", [])
+        shapes.extend([coords] if geom.get("type") == "Polygon" else coords if geom.get("type") == "MultiPolygon" else [])
+    vertices = [(lon, lat) for pol in shapes for anel in pol for lon, lat, *rest in anel]
+    vertices.extend((float(r["Longitude"]),float(r["Latitude"])) for _, r in pontos.iterrows())
+    if vertices:
+        lat_c = sum(lat for _, lat in vertices)/len(vertices)
+        escala_x = max(0.2, math.cos(math.radians(lat_c)))
+        valores_x = [x*escala_x for x,y in vertices]
+        valores_y = [y for x,y in vertices]
+        minx,maxx,miny,maxy = min(valores_x),max(valores_x),min(valores_y),max(valores_y)
+        mx,my = (minx+maxx)/2, (miny+maxy)/2
+        x0,y0,x1,y1 = 60, 95, largura-60, altura-92
+        extensao = max((maxx-minx)/(x1-x0), (maxy-miny)/(y1-y0), 1e-8)*1.15
+        def pixel(lon,lat):
+            return (round((x0+x1)/2+(lon*escala_x-mx)/extensao),
+                    round((y0+y1)/2-(lat-my)/extensao))
+        pincel.rectangle((x0,y0,x1,y1),outline="#c2d1df",fill="white",width=2)
+        for pol in shapes:
+            if not pol:
+                continue
+            pincel.polygon([pixel(*pt[:2]) for pt in pol[0]],
+                          fill="#bceae5", outline="#087e73", width=3)
+            for furo in pol[1:]:
+                pincel.polygon([pixel(*pt[:2]) for pt in furo],
+                              fill="#ffffff", outline="#087e73", width=2)
+        for _, r in pontos.iterrows():
+            x,y=pixel(float(r["Longitude"]),float(r["Latitude"]))
+            press=float(r["_pressao"])
+            cor=("#e64e62" if press==0 else "#f3a53a" if press<=5
+                 else "#e6bc34" if press<=10 else "#cf71a9" if press<=15 else "#8554b8")
+            pincel.ellipse((x-8,y-8,x+8,y+8),fill=cor,outline="white",width=3)
+    pincel.text((42, altura-58), "Polígonos Sanear: verde-água  |  Marcadores: medições (cores por faixa de pressão)",
+                 font=fonte,fill="#193c65")
+    buf=io.BytesIO()
+    imagem.save(buf,format="PNG")
+    return buf.getvalue()
+
+
 def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
     """PDF gerado EXCLUSIVAMENTE a partir dos registros visíveis após TODOS os filtros."""
     base=bp_rel_preparar(df_filtrado)
@@ -1521,18 +1745,82 @@ def bp_rel_pdf(df_filtrado,inicio,fim,municipio,bairro,matricula,faixas):
          2*bp_rel_cm,2*bp_rel_cm,3*bp_rel_cm,2.8*bp_rel_cm]))
     historia.extend([BP_REL_Spacer(1,9),paragrafo(
         "As médias refletem somente os registros filtrados, não a pressão de toda a rede ou de todas as residências do bairro.",pequeno)])
+    # O anexo SANEAR é independente do checkbox de visualização do mapa.
+    # Usa exatamente os pontos que passaram pelos filtros do PDF.
     historia.append(BP_REL_PageBreak())
-    historia.extend([paragrafo("REGISTROS INDIVIDUAIS DE PRESSÃO",titulo),
-       paragrafo(f"{len(base)} medições que passaram por TODOS os filtros da tela.",pequeno),
-       BP_REL_Spacer(1,8)])
-    detalhe=[]
-    for _,r in base.sort_values(["_municipio","_bairro","_data","Matricula"],na_position="last").iterrows():
-        obs=bp_observacao_visivel(r.get("Observacao", ""))
-        if len(obs)>320:obs=obs[:317]+"…"
-        detalhe.append([str(r.get("Data","")),f"{r.get('Bairro','')} / {r.get('Municipio','')}",
-            str(r.get("Matricula","") or ""),f"{float(r['_pressao']):g}",obs])
-    historia.append(tabela(["Data","Bairro / Município","Matrícula","mca","Observação"],
-        detalhe,[2.65*bp_rel_cm,8.5*bp_rel_cm,3.1*bp_rel_cm,1.8*bp_rel_cm,10.15*bp_rel_cm]))
+    historia.extend([paragrafo("MEDIÇÕES EM ÁREAS DE INTERVENÇÃO SANEAR", titulo),
+        paragrafo("Cruzamento geográfico entre as coordenadas das medições e "
+                   "os polígonos oficiais carregados de sanear.kml.", pequeno),
+        BP_REL_Spacer(1, 6)])
+    try:
+        arquivo_sanear = bp_encontrar_kml_sanear()
+        if not arquivo_sanear.is_file():
+            historia.append(paragrafo(
+                "Camada Sanear indisponível no repositório: "
+                "geodados/areas_influencia/sanear.kml. "
+                "Nenhum cruzamento foi executado.", corpo))
+        else:
+            geometrias = bp_carregar_poligonos_sanear(
+                str(arquivo_sanear), arquivo_sanear.stat().st_mtime_ns)
+            if not geometrias.get("features"):
+                historia.append(paragrafo(
+                    "A camada Sanear não contém polígonos válidos. "
+                    "Nenhum cruzamento foi executado.", corpo))
+            else:
+                dentro, indices_sanear = bp_rel_selecionar_sanear(base, geometrias)
+                historia.append(paragrafo(
+                    f"Medições dentro ou sobre o limite dos polígonos: {len(dentro)} "
+                    f"de {len(base)} registros filtrados. "
+                    f"Áreas intersectadas: {len(indices_sanear)}.", corpo))
+                if dentro.empty:
+                    historia.append(BP_REL_Spacer(1, 9))
+                    historia.append(paragrafo(
+                        "Não foram encontradas medições nas áreas Sanear "
+                        "para o período e os filtros selecionados.", pequeno))
+                else:
+                    historia.append(BP_REL_Spacer(1, 6))
+                    mapa_sanear = bp_rel_mapa_sanear(
+                        dentro, geometrias, indices_sanear)
+                    try:
+                        imagem_sanear = bp_rel_imagem_mapa(mapa_sanear)
+                    except Exception:
+                        imagem_sanear = bp_rel_fallback_sanear(
+                            dentro, geometrias, indices_sanear)
+                        historia.append(paragrafo(
+                            "Mapa-base indisponível: a imagem mantém as "
+                            "geometrias Sanear e as coordenadas reais, sem ruas.", pequeno))
+                    historia.append(BP_REL_Image(io.BytesIO(imagem_sanear),
+                            width=26.1*bp_rel_cm, height=10.7*bp_rel_cm))
+                    historia.append(BP_REL_Spacer(1, 5))
+                    historia.append(paragrafo(
+                        "Relação das medições geograficamente contidas nas áreas Sanear.", pequeno))
+                    linhas_sanear=[]
+                    for _, r in dentro.sort_values(
+                            ["_bairro", "_data", "Matricula"],
+                            na_position="last").iterrows():
+                        protocolo = str(r.get(BP_COLUNA_PROTOCOLO, "") or "").strip()
+                        if protocolo.lower() in ("nan", "none", "nat"):
+                            protocolo = ""
+                        linhas_sanear.append([
+                            str(r.get("Matricula", "") or "") or "—",
+                            protocolo or "Não informado",
+                            str(r.get("Bairro", "") or "") or "—",
+                            f"{float(r['_pressao']):g} mca"])
+                    historia.append(tabela(
+                        ["MATRÍCULA", "CÓD. PROTOCOLO", "BAIRRO", "MEDIÇÃO"],
+                        linhas_sanear,
+                        [5.5*bp_rel_cm, 6.1*bp_rel_cm, 10.2*bp_rel_cm, 4.4*bp_rel_cm]))
+                    if any(linha[1] == "Não informado" for linha in linhas_sanear):
+                        historia.append(BP_REL_Spacer(1, 5))
+                        historia.append(paragrafo(
+                            "Nota: o código de protocolo não está presente em todos os "
+                            "registros recebidos pelo Módulo 1. O identificador "
+                            "SAI_ATIVIDADE não é utilizado como substituto do protocolo.",
+                            pequeno))
+    except (ET.ParseError, OSError, ValueError, TypeError, KeyError, IndexError) as erro_sanear:
+        historia.append(paragrafo(
+            "Não foi possível realizar o cruzamento com a camada Sanear: "
+            + str(erro_sanear), pequeno))
     doc.build(historia)
     return buffer.getvalue()
 
@@ -2684,7 +2972,7 @@ if relatorio_pdf_placeholder is not None:
             # Descarta arquivo previamente gerado se algum filtro ou registro mudou.
             assinatura_dados = bp_rel_hashlib.sha256(
                 pd.util.hash_pandas_object(
-                    df_filtrado[COLUNAS_PADRAO].reset_index(drop=True),
+                    df_filtrado[COLUNAS_PADRAO + [BP_COLUNA_PROTOCOLO]].reset_index(drop=True),
                     index=False
                 ).values.tobytes()
             ).hexdigest()
