@@ -190,6 +190,11 @@ def aplicar_estilo_sai(modo_escuro=False):
         .sai-migracao-descricao {
             color:var(--sai-muted);font-size:13px;line-height:1.55;margin-bottom:9px;
         }
+        .sai-migracao-prazo {
+            color:var(--sai-text);font-size:13px;font-weight:760;
+            background:var(--sai-surface-2);border:1px solid #e2ad4e;
+            border-radius:10px;padding:10px 12px;margin:9px 0 10px;
+        }
         [class*="st-key-sai_aviso_migracao"] .stLinkButton > a {
             background:#164e77 !important;
             border:1px solid #164e77 !important;
@@ -265,6 +270,9 @@ def exibir_aviso_migracao():
         st.markdown(
             '<div class="sai-migracao-etiqueta">Novidade · Transição de plataforma</div>'
             '<div class="sai-migracao-titulo">O SAI está migrando para o PRISMA</div>'
+            '<div class="sai-migracao-prazo">'
+            '⚠️ O SAI será descontinuado a partir de <strong>07/11/2026</strong>.'
+            '</div>'
             '<div class="sai-migracao-descricao">'
             'O novo ambiente utiliza contas individuais e permissões de acesso. '
             'Acesse o PRISMA, selecione <strong>Criar conta</strong>, informe seu '
@@ -279,7 +287,7 @@ def exibir_aviso_migracao():
             type="primary",
             use_container_width=False,
         )
-        st.caption("O SAI permanece disponível durante a transição.")
+        st.caption("Faça seu cadastro no PRISMA antes de 07/11/2026 para evitar interrupções no acesso.")
 
 
 # ============================================================
