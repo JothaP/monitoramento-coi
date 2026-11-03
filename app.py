@@ -170,6 +170,36 @@ def aplicar_estilo_sai(modo_escuro=False):
         [class*="st-key-sai_login_card"] .stFormSubmitButton button p {color:white !important;}
         .sai-login-small {text-align:center;color:var(--sai-muted);font-size:12px;margin-top:12px;}
         .sai-logout .stButton button {border:1px solid var(--sai-border);}
+        /* Convite ao PRISMA em ambas as telas do SAI. */
+        [class*="st-key-sai_aviso_migracao"] {
+            border:1px solid rgba(26,117,162,.24) !important;
+            border-left:4px solid #18b3b1 !important;
+            background:var(--sai-surface) !important;
+            border-radius:15px !important;
+            padding:12px 18px 14px !important;
+            box-shadow:var(--sai-shadow);
+            margin-bottom:18px !important;
+        }
+        .sai-migracao-etiqueta {
+            font-size:11px;letter-spacing:1.3px;font-weight:800;
+            color:var(--sai-chip-text);text-transform:uppercase;margin-bottom:5px;
+        }
+        .sai-migracao-titulo {
+            color:var(--sai-text);font-size:19px;font-weight:760;margin-bottom:6px;
+        }
+        .sai-migracao-descricao {
+            color:var(--sai-muted);font-size:13px;line-height:1.55;margin-bottom:9px;
+        }
+        [class*="st-key-sai_aviso_migracao"] .stLinkButton > a {
+            background:#164e77 !important;
+            border:1px solid #164e77 !important;
+            color:#fff !important;border-radius:10px !important;
+            font-weight:700 !important;
+        }
+        [class*="st-key-sai_aviso_migracao"] .stLinkButton > a:hover {
+            background:#107b85 !important;border-color:#107b85 !important;
+        }
+        [class*="st-key-sai_aviso_migracao"] .stLinkButton > a * {color:#fff !important;}
         @media(max-width:760px) {
             .block-container {padding:1.5rem 1rem 2rem;}
             .sai-hero {padding:23px 20px;border-radius:18px;}
@@ -223,6 +253,36 @@ def exibir_cabecalho_sai(*, login=False):
 
 
 # ============================================================
+# AVISO DE MIGRAÇÃO SAI → PRISMA
+# Não interfere nas permissões e senhas do SAI.
+# ============================================================
+PRISMA_URL = "https://prisma-coi.streamlit.app"
+
+
+def exibir_aviso_migracao():
+    """Convida ao cadastro no PRISMA, mantendo o SAI em funcionamento."""
+    with st.container(border=True, key="sai_aviso_migracao"):
+        st.markdown(
+            '<div class="sai-migracao-etiqueta">Novidade · Transição de plataforma</div>'
+            '<div class="sai-migracao-titulo">O SAI está migrando para o PRISMA</div>'
+            '<div class="sai-migracao-descricao">'
+            'O novo ambiente utiliza contas individuais e permissões de acesso. '
+            'Acesse o PRISMA, selecione <strong>Criar conta</strong>, informe seu '
+            'e-mail corporativo e confirme o código recebido. '
+            'O acesso aos módulos será liberado após aprovação do administrador.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.link_button(
+            "🔗 Acessar PRISMA e solicitar cadastro",
+            PRISMA_URL,
+            type="primary",
+            use_container_width=False,
+        )
+        st.caption("O SAI permanece disponível durante a transição.")
+
+
+# ============================================================
 # CREDENCIAIS E SESSÃO — REGRAS ORIGINAIS PRESERVADAS
 # ============================================================
 SENHA_ADMIN = st.secrets.get("SENHA_ADMIN")
@@ -254,6 +314,7 @@ if "modulos" not in st.session_state:
 if not st.session_state.get("autenticado", False):
     aplicar_estilo_sai()
     exibir_cabecalho_sai(login=True)
+    exibir_aviso_migracao()
 
     esq, centro, dir_ = st.columns([1, 1.25, 1], gap="large")
     with centro:
@@ -315,6 +376,7 @@ if "modo_escuro_hub" not in st.session_state:
 modo_escuro_hub = st.session_state.modo_escuro_hub
 aplicar_estilo_sai(modo_escuro_hub)
 exibir_cabecalho_sai()
+exibir_aviso_migracao()
 
 perfil_interno = str(st.session_state.get("perfil", "")).strip().lower()
 perfil_consulta = perfil_interno == "operador"
